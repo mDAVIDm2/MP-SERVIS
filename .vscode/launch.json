@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "autohub_client2 (dart-define-from-file)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "cwd": "${workspaceFolder}/autohub_client2",
+      "toolArgs": ["--dart-define-from-file=config/firebase_define.json"]
+    }
+  ]
+}

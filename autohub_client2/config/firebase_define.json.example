@@ -1,0 +1,7 @@
+{
+  "FIREBASE_API_KEY": "заполните вручную или: dart run tool/google_services_to_dart_define.dart android/app/google-services.json (пакет Android берётся из android/app/build.gradle.kts → applicationId)",
+  "FIREBASE_APP_ID": "1:000000000000:android:xxxxxxxxxxxxxxxx",
+  "FIREBASE_SENDER_ID": "000000000000",
+  "FIREBASE_PROJECT_ID": "your-project-id",
+  "FIREBASE_STORAGE_BUCKET": "your-project-id.appspot.com"
+}

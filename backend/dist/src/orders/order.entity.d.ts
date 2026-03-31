@@ -1,0 +1,35 @@
+import { Organization } from '../organizations/organization.entity';
+import { StaffMember } from '../organizations/staff-member.entity';
+import { OrderItem } from './order-item.entity';
+export type OrderStatus = 'pending_confirmation' | 'confirmed' | 'in_progress' | 'pending_approval' | 'completed' | 'done' | 'cancelled';
+export declare class Order {
+    id: string;
+    orderNumber: string;
+    carId: string;
+    carInfo: string;
+    vin: string | null;
+    licensePlate: string | null;
+    bodyType: string | null;
+    color: string | null;
+    mileage: number | null;
+    engineType: string | null;
+    clientName: string | null;
+    clientPhone: string | null;
+    status: OrderStatus;
+    previousStatus: string | null;
+    firstConfirmedAt: Date | null;
+    dateTime: Date;
+    plannedStartTime: Date | null;
+    plannedEndTime: Date | null;
+    actualStartTime: Date | null;
+    actualEndTime: Date | null;
+    comment: string | null;
+    masterId: string | null;
+    bayId: string | null;
+    organizationId: string;
+    createdAt: Date;
+    updatedAt: Date;
+    organization: Organization;
+    master: StaffMember | null;
+    items: OrderItem[];
+}

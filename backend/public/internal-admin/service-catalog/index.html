@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AutoHub — заявки в справочник услуг</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- Login -->
+      <section id="view-login" class="view view-login" hidden>
+        <div class="login-bg" aria-hidden="true"></div>
+        <div class="login-card card-elevated">
+          <div class="login-brand">
+            <span class="logo-mark">AH</span>
+            <div>
+              <h1>AutoHub Internal</h1>
+              <p class="muted">Модерация заявок на услуги в общем справочнике</p>
+            </div>
+          </div>
+          <form id="form-login" class="login-form">
+            <label class="field">
+              <span>Email</span>
+              <input type="email" name="email" autocomplete="username" required placeholder="operator@autohub.local" />
+            </label>
+            <label class="field">
+              <span>Пароль</span>
+              <input type="password" name="password" autocomplete="current-password" required />
+            </label>
+            <p id="login-error" class="error-text" role="alert" hidden></p>
+            <button type="submit" class="btn btn-primary btn-block" id="btn-login">Войти</button>
+          </form>
+        </div>
+      </section>
+
+      <!-- App shell -->
+      <section id="view-app" class="view view-app" hidden>
+        <aside class="sidebar">
+          <div class="sidebar-brand">
+            <span class="logo-mark sm">AH</span>
+            <div>
+              <strong>AutoHub</strong>
+              <span class="muted small">Internal</span>
+            </div>
+          </div>
+          <nav class="sidebar-nav">
+            <a class="nav-item active" href="#" data-nav="suggestions">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+                <line x1="8" y1="13" x2="16" y2="13" />
+                <line x1="8" y1="17" x2="12" y2="17" />
+              </svg>
+              Справочник услуг
+            </a>
+          </nav>
+          <div class="sidebar-footer">
+            <div class="user-pill">
+              <span class="avatar" id="user-initial">?</span>
+              <div>
+                <div id="user-name" class="small truncate">—</div>
+                <div id="user-email" class="muted tiny truncate">—</div>
+              </div>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm" id="btn-logout">Выйти</button>
+          </div>
+        </aside>
+
+        <main class="main">
+          <header class="main-header">
+            <div>
+              <h2>Заявки СТО</h2>
+              <p class="muted subtitle">Новые формулировки для единого списка услуг AutoHub</p>
+            </div>
+            <div class="header-actions">
+              <button type="button" class="btn btn-secondary" id="btn-refresh" title="Обновить">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M23 4v6h-6" />
+                  <path d="M1 20v-6h6" />
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                </svg>
+                Обновить
+              </button>
+            </div>
+          </header>
+
+          <div class="stats-row" id="stats-row">
+            <article class="stat-card stat-pending">
+              <span class="stat-label">В ожидании</span>
+              <span class="stat-value" id="stat-pending">—</span>
+            </article>
+            <article class="stat-card stat-done">
+              <span class="stat-label">Рассмотрено</span>
+              <span class="stat-value" id="stat-reviewed">—</span>
+            </article>
+            <article class="stat-card stat-total">
+              <span class="stat-label">Всего заявок</span>
+              <span class="stat-value" id="stat-total">—</span>
+            </article>
+          </div>
+
+          <div class="toolbar card-flat">
+            <div class="filters" id="filters">
+              <button type="button" class="chip active" data-status="all">Все</button>
+              <button type="button" class="chip" data-status="pending">В ожидании</button>
+              <button type="button" class="chip" data-status="reviewed">Рассмотрено</button>
+            </div>
+            <div class="search-wrap">
+              <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+              <input type="search" id="input-search" class="search-input" placeholder="Поиск: СТО, услуга, комментарий…" autocomplete="off" />
+            </div>
+          </div>
+
+          <div id="list-loading" class="state-msg" hidden>Загрузка…</div>
+          <div id="list-empty" class="state-msg state-empty" hidden>
+            <div class="empty-illu" aria-hidden="true"></div>
+            <p><strong>Нет заявок</strong></p>
+            <p class="muted small">Измените фильтр или поиск — или дождитесь новых запросов от СТО.</p>
+          </div>
+          <div id="list-grid" class="cards-grid"></div>
+
+          <footer class="pagination" id="pagination" hidden>
+            <span class="muted small" id="page-info"></span>
+            <div class="pager-btns">
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-prev">Назад</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-next">Вперёд</button>
+            </div>
+          </footer>
+        </main>
+      </section>
+    </div>
+
+    <!-- Drawer -->
+    <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+    <aside id="drawer" class="drawer" hidden aria-hidden="true">
+      <div class="drawer-header">
+        <h3 id="drawer-title">Заявка</h3>
+        <button type="button" class="icon-btn" id="drawer-close" aria-label="Закрыть">×</button>
+      </div>
+      <div class="drawer-body" id="drawer-body"></div>
+      <div class="drawer-footer">
+        <label class="field">
+          <span>Внутренняя заметка <span class="muted tiny">(не видна СТО)</span></span>
+          <textarea id="drawer-review-note" rows="3" placeholder="Например: добавить в seed как «Замена ремня ГРМ» в категории Двигатель…"></textarea>
+        </label>
+        <div class="drawer-actions">
+          <button type="button" class="btn btn-secondary" id="drawer-pending">В ожидание</button>
+          <button type="button" class="btn btn-primary" id="drawer-reviewed">Рассмотрено</button>
+        </div>
+      </div>
+    </aside>
+
+    <div id="toast-host" class="toast-host"></div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,87 @@
+name: autohub_client
+description: "AutoHub - платформа автосервисных услуг"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.8
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State Management
+  flutter_riverpod: ^2.6.1
+  riverpod_annotation: ^2.6.1
+
+  # Navigation
+  go_router: ^14.8.1
+
+  # Networking
+  dio: ^5.7.0
+  web_socket_channel: ^3.0.2
+
+  # Local Storage
+  shared_preferences: ^2.3.4
+  flutter_secure_storage: ^9.2.4
+  local_auth: ^2.3.0
+  crypto: ^3.0.6
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+
+  # UI Components
+  cupertino_icons: ^1.0.8
+  flutter_svg: ^2.0.17
+  cached_network_image: ^3.4.1
+  shimmer: ^3.0.0
+  smooth_page_indicator: ^1.2.0+3
+  flutter_slidable: ^3.1.1
+
+  # Карта: OpenStreetMap (бесплатно)
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
+
+  # Открытие ссылок и навигация
+  url_launcher: ^6.2.5
+  map_launcher: ^4.0.2
+  webview_flutter: ^4.10.0
+  geolocator: ^13.0.2
+
+  # Utils
+  intl: ^0.19.0
+  image_picker: ^1.0.7
+  uuid: ^4.5.1
+  pdf: ^3.11.1
+  printing: ^5.13.3
+  equatable: ^2.0.7
+  json_annotation: ^4.9.0
+  freezed_annotation: ^2.4.4
+  firebase_core: ^4.5.0
+  firebase_messaging: ^16.1.2
+  flutter_local_notifications: ^21.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  build_runner: ^2.4.14
+  json_serializable: ^6.9.3
+  freezed: ^2.5.8
+  riverpod_generator: ^2.6.3
+
+flutter:
+  uses-material-design: true
+
+  # Шрифт Inter будем добавлять позже
+  # Пока используется системный шрифт
+  # fonts:
+  #   - family: Inter
+  #     fonts:
+  #       - asset: assets/fonts/Inter-Regular.ttf
+  #         weight: 400
+  #       - asset: assets/fonts/Inter-Medium.ttf
+  #         weight: 500
+  #       - asset: assets/fonts/Inter-SemiBold.ttf
+  #         weight: 600
+  #       - asset: assets/fonts/Inter-Bold.ttf
+  #         weight: 700
