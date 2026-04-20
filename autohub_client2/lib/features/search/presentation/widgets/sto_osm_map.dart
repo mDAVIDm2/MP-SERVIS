@@ -22,6 +22,34 @@ double _distanceKm(double lat1, double lon1, double lat2, double lon2) {
   return R * c;
 }
 
+/// Категории непартнёрских точек — кластеры **не смешивают** мойки с автосервисами и т.д.
+enum _ExternalCategory {
+  wash,
+  tire,
+  autoservice,
+  other,
+}
+
+_ExternalCategory _categoryFromPoiTypes(List<String> types) {
+  if (types.any((t) => t.contains('Мойка'))) return _ExternalCategory.wash;
+  if (types.any((t) => t == 'Шиномонтаж')) return _ExternalCategory.tire;
+  if (types.any((t) => t == 'Автосервис')) return _ExternalCategory.autoservice;
+  return _ExternalCategory.other;
+}
+
+_ExternalMarkerPalette _paletteForCategory(_ExternalCategory c) {
+  switch (c) {
+    case _ExternalCategory.wash:
+      return const _ExternalMarkerPalette(fill: Color(0xFF1565C0), darkIcon: false);
+    case _ExternalCategory.tire:
+      return const _ExternalMarkerPalette(fill: Color(0xFF2E7D32), darkIcon: false);
+    case _ExternalCategory.autoservice:
+      return const _ExternalMarkerPalette(fill: Color(0xFFC62828), darkIcon: false);
+    case _ExternalCategory.other:
+      return const _ExternalMarkerPalette(fill: Color(0xFFF9A825), darkIcon: true);
+  }
+}
+
 /// Шаг сетки кластеризации (в градусах): при меньшем зуме ячейка крупнее — точки сливаются.
 double _externalClusterStepDegrees(double zoom) {
   const zRef = 11.0;
@@ -29,9 +57,10 @@ double _externalClusterStepDegrees(double zoom) {
   return base / math.pow(2, (zoom - zRef).clamp(-1.0, 11.0));
 }
 
-/// Одна непартнёрская точка или кластер (несколько POI в ячейке).
+/// Одна непартнёрская точка или кластер (несколько POI в ячейке **одной категории**).
 class _ClusteredExternalView {
   _ClusteredExternalView._({
+    required this.category,
     required this.isCluster,
     required this.lat,
     required this.lng,
@@ -41,7 +70,9 @@ class _ClusteredExternalView {
   });
 
   factory _ClusteredExternalView.single(ExternalPOI p) {
+    final cat = _categoryFromPoiTypes(p.types);
     return _ClusteredExternalView._(
+      category: cat,
       isCluster: false,
       lat: p.lat,
       lng: p.lng,
@@ -52,12 +83,14 @@ class _ClusteredExternalView {
   }
 
   factory _ClusteredExternalView.cluster({
+    required _ExternalCategory category,
     required double lat,
     required double lng,
     required int count,
     required String labelEntryId,
   }) {
     return _ClusteredExternalView._(
+      category: category,
       isCluster: true,
       lat: lat,
       lng: lng,
@@ -67,6 +100,7 @@ class _ClusteredExternalView {
     );
   }
 
+  final _ExternalCategory category;
   final bool isCluster;
   final double lat;
   final double lng;
@@ -77,6 +111,7 @@ class _ClusteredExternalView {
 
 List<_ClusteredExternalView> _clusterExternalEntries(
   List<_MapEntry> entries, {
+  required _ExternalCategory category,
   required double zoom,
   required double centerLat,
   required double centerLng,
@@ -84,10 +119,11 @@ List<_ClusteredExternalView> _clusterExternalEntries(
   if (entries.isEmpty) return [];
   final step = _externalClusterStepDegrees(zoom);
   final bins = <String, List<_MapEntry>>{};
+  final prefix = '${category.name}_';
   for (final e in entries) {
     final gx = (e.lat / step).floor();
     final gy = (e.lng / step).floor();
-    final key = '$gx|$gy';
+    final key = '$prefix$gx|$gy';
     bins.putIfAbsent(key, () => []).add(e);
   }
   final out = <_ClusteredExternalView>[];
@@ -104,6 +140,7 @@ List<_ClusteredExternalView> _clusterExternalEntries(
       }
       final n = list.length;
       out.add(_ClusteredExternalView.cluster(
+        category: category,
         lat: sl / n,
         lng: sn / n,
         count: n,
@@ -117,6 +154,45 @@ List<_ClusteredExternalView> _clusterExternalEntries(
     return da.compareTo(db);
   });
   return out;
+}
+
+/// Разбиваем точки по категориям и кластеризуем каждую группу отдельно.
+List<_ClusteredExternalView> _clusterAllExternalByCategory(
+  List<_MapEntry> allExternal, {
+  required double zoom,
+  required double centerLat,
+  required double centerLng,
+}) {
+  final byCat = <_ExternalCategory, List<_MapEntry>>{
+    for (final c in _ExternalCategory.values) c: <_MapEntry>[],
+  };
+  for (final e in allExternal) {
+    final poi = e.data as ExternalPOI;
+    byCat[_categoryFromPoiTypes(poi.types)]!.add(e);
+  }
+  const capPerCategory = 55;
+  final merged = <_ClusteredExternalView>[];
+  for (final c in _ExternalCategory.values) {
+    final list = byCat[c]!;
+    if (list.isEmpty) continue;
+    var part = _clusterExternalEntries(
+      list,
+      category: c,
+      zoom: zoom,
+      centerLat: centerLat,
+      centerLng: centerLng,
+    );
+    if (part.length > capPerCategory) {
+      part = part.sublist(0, capPerCategory);
+    }
+    merged.addAll(part);
+  }
+  merged.sort((a, b) {
+    final da = _distanceKm(centerLat, centerLng, a.lat, a.lng);
+    final db = _distanceKm(centerLat, centerLng, b.lat, b.lng);
+    return da.compareTo(db);
+  });
+  return merged;
 }
 
 /// Callback с границами видимой области: minLat, minLng, maxLat, maxLng.
@@ -165,11 +241,17 @@ class STOOSMMap extends StatefulWidget {
 
 class _STOOSMMapState extends State<STOOSMMap> {
   final MapController _mapController = MapController();
-  double _currentZoom = 14;
-  LatLng _center = const LatLng(45.0355, 38.9753);
+  /// Актуальная камера (для колбэков и загрузки POI по области).
+  double _liveZoom = 14;
+  LatLng _liveCenter = const LatLng(45.0355, 38.9753);
+  /// Задержанные центр/зум — только для отрисовки маркеров (после окончания жеста не «дёргаются»).
+  double _clusterZoom = 14;
+  LatLng _clusterCenter = const LatLng(45.0355, 38.9753);
   bool _ready = false;
   Timer? _boundsDebounce;
+  Timer? _markerClusterDebounce;
   static const Duration _boundsDebounceDuration = Duration(milliseconds: 900);
+  static const Duration _markerClusterDebounceDuration = Duration(milliseconds: 280);
   static const double _labelZoomThreshold = 15.0;
   static const int _maxLabels = 12;
   /// Партнёры и итоговые кластеры/точки (непартнёрские после кластеризации).
@@ -198,8 +280,10 @@ class _STOOSMMapState extends State<STOOSMMap> {
   @override
   void initState() {
     super.initState();
-    _center = widget.initialCenter;
-    _currentZoom = widget.initialZoom;
+    _liveCenter = widget.initialCenter;
+    _liveZoom = widget.initialZoom;
+    _clusterCenter = widget.initialCenter;
+    _clusterZoom = widget.initialZoom;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       setState(() => _ready = true);
@@ -212,6 +296,7 @@ class _STOOSMMapState extends State<STOOSMMap> {
   @override
   void dispose() {
     _boundsDebounce?.cancel();
+    _markerClusterDebounce?.cancel();
     super.dispose();
   }
 
@@ -219,14 +304,21 @@ class _STOOSMMapState extends State<STOOSMMap> {
     if (!mounted) return;
     final newCenter = position.center;
     final newZoom = position.zoom;
-    setState(() {
-      _center = newCenter;
-      if ((newZoom - _currentZoom).abs() > 0.2) _currentZoom = newZoom;
-    });
+    _liveCenter = newCenter;
+    _liveZoom = newZoom;
     widget.onCameraMove?.call(newZoom);
     widget.onCameraChanged?.call(newCenter, newZoom);
     _boundsDebounce?.cancel();
     _boundsDebounce = Timer(_boundsDebounceDuration, _notifyVisibleBounds);
+
+    _markerClusterDebounce?.cancel();
+    _markerClusterDebounce = Timer(_markerClusterDebounceDuration, () {
+      if (!mounted) return;
+      setState(() {
+        _clusterCenter = _liveCenter;
+        _clusterZoom = _liveZoom;
+      });
+    });
   }
 
   void _notifyVisibleBounds() {
@@ -234,9 +326,9 @@ class _STOOSMMapState extends State<STOOSMMap> {
     final cb = widget.onVisibleBoundsChanged;
     if (cb == null) return;
     try {
-      final zoom = _currentZoom;
-      final lat = _center.latitude;
-      final lng = _center.longitude;
+      final zoom = _liveZoom;
+      final lat = _liveCenter.latitude;
+      final lng = _liveCenter.longitude;
       final scale = 180 / (math.pow(2, zoom) * 256);
       final dLat = 0.5 * scale * 256;
       final dLng = scale * 256;
@@ -264,14 +356,14 @@ class _STOOSMMapState extends State<STOOSMMap> {
     final hasUser = widget.userLocation != null;
     final priceSig = _partnersPriceSignature();
     if (pl != _cachedPartnersLength || el != _cachedExternalsLength ||
-        _center.latitude != _cachedCenterLat || _center.longitude != _cachedCenterLng ||
-        _currentZoom != _cachedZoom || hasUser != _cachedHasUserLocation ||
+        _clusterCenter.latitude != _cachedCenterLat || _clusterCenter.longitude != _cachedCenterLng ||
+        _clusterZoom != _cachedZoom || hasUser != _cachedHasUserLocation ||
         priceSig != _cachedPriceSignature) {
       _cachedPartnersLength = pl;
       _cachedExternalsLength = el;
-      _cachedCenterLat = _center.latitude;
-      _cachedCenterLng = _center.longitude;
-      _cachedZoom = _currentZoom;
+      _cachedCenterLat = _clusterCenter.latitude;
+      _cachedCenterLng = _clusterCenter.longitude;
+      _cachedZoom = _clusterZoom;
       _cachedHasUserLocation = hasUser;
       _cachedPriceSignature = priceSig;
       return true;
@@ -282,9 +374,9 @@ class _STOOSMMapState extends State<STOOSMMap> {
   List<Marker> _buildMarkers() {
     if (!_shouldRebuildMarkers() && _cachedMarkers != null) return _cachedMarkers!;
     try {
-      final showLabels = _currentZoom >= _labelZoomThreshold;
-      final centerLat = _center.latitude;
-      final centerLng = _center.longitude;
+      final showLabels = _clusterZoom >= _labelZoomThreshold;
+      final centerLat = _clusterCenter.latitude;
+      final centerLng = _clusterCenter.longitude;
 
       final partnerEntries = widget.partners
           .where((s) => s.latitude != null && s.longitude != null)
@@ -306,9 +398,9 @@ class _STOOSMMapState extends State<STOOSMMap> {
       final partnerLimit = math.min(partnerEntries.length, _maxPartnerMarkers);
       final visiblePartners =
           partnerEntries.length > partnerLimit ? partnerEntries.sublist(0, partnerLimit) : partnerEntries;
-      var externalVisuals = _clusterExternalEntries(
+      var externalVisuals = _clusterAllExternalByCategory(
         externalEntries,
-        zoom: _currentZoom,
+        zoom: _clusterZoom,
         centerLat: centerLat,
         centerLng: centerLng,
       );
@@ -322,10 +414,11 @@ class _STOOSMMapState extends State<STOOSMMap> {
             ].take(_maxLabels).toSet()
           : <String>{};
 
-      final zf = _markerSizeFactor(_currentZoom);
+      final zf = _markerSizeFactor(_clusterZoom);
       final List<Marker> markers = [];
       for (final v in externalVisuals) {
         if (v.isCluster) {
+          final pal = _paletteForCategory(v.category);
           final ext = _ExternalClusterBubble.layoutExtent(
             count: v.count,
             sizeFactor: zf,
@@ -337,12 +430,14 @@ class _STOOSMMapState extends State<STOOSMMap> {
             alignment: Alignment.bottomCenter,
             child: GestureDetector(
               onTap: () {
-                final nextZoom = (_currentZoom + 1.35).clamp(4.0, 18.0);
+                final z = _mapController.camera.zoom;
+                final nextZoom = (z + 1.35).clamp(4.0, 18.0);
                 _mapController.move(LatLng(v.lat, v.lng), nextZoom);
               },
               child: _ExternalClusterBubble(
                 count: v.count,
                 sizeFactor: zf,
+                palette: pal,
               ),
             ),
           ));
@@ -415,9 +510,9 @@ class _STOOSMMapState extends State<STOOSMMap> {
       _cachedMarkers = [];
       _cachedPartnersLength = widget.partners.length;
       _cachedExternalsLength = widget.externals.length;
-      _cachedCenterLat = _center.latitude;
-      _cachedCenterLng = _center.longitude;
-      _cachedZoom = _currentZoom;
+      _cachedCenterLat = _clusterCenter.latitude;
+      _cachedCenterLng = _clusterCenter.longitude;
+      _cachedZoom = _clusterZoom;
       _cachedHasUserLocation = widget.userLocation != null;
       return _cachedMarkers!;
     }
@@ -490,14 +585,16 @@ _ExternalMarkerPalette _paletteForExternalTypes(List<String> types) {
   return const _ExternalMarkerPalette(fill: Color(0xFFF9A825), darkIcon: true);
 }
 
-/// Кластер непартнёрских точек: число в круге; тап — приблизить карту к группе.
+/// Кластер непартнёрских точек одной категории: цвет как у маркера; тап — приблизить карту.
 class _ExternalClusterBubble extends StatelessWidget {
   final int count;
   final double sizeFactor;
+  final _ExternalMarkerPalette palette;
 
   const _ExternalClusterBubble({
     required this.count,
     this.sizeFactor = 1.0,
+    required this.palette,
   });
 
   static _LayoutExtent layoutExtent({required int count, required double sizeFactor}) {
@@ -510,19 +607,20 @@ class _ExternalClusterBubble extends StatelessWidget {
     final s = (42 * sizeFactor).clamp(30.0, 46.0);
     final font = (13 * sizeFactor).clamp(10.0, 15.0);
     final txt = count > 99 ? '99+' : '$count';
+    final borderW = math.max(1.8, 2.2 * sizeFactor);
     return SizedBox(
       width: s,
       height: s,
       child: Material(
-        color: const Color(0xFFE65100),
-        shape: const CircleBorder(side: BorderSide(color: Colors.white, width: 2.2)),
-        elevation: 3,
-        shadowColor: Colors.black45,
+        color: palette.fill,
+        shape: CircleBorder(side: BorderSide(color: Colors.white, width: borderW)),
+        elevation: 4,
+        shadowColor: Colors.black38,
         child: Center(
           child: Text(
             txt,
             style: TextStyle(
-              color: Colors.white,
+              color: palette.darkIcon ? const Color(0xFF263238) : Colors.white,
               fontWeight: FontWeight.w800,
               fontSize: font,
             ),

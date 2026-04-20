@@ -35,8 +35,10 @@ class _MainShellState extends ConsumerState<MainShell> with WidgetsBindingObserv
   int _currentIndex = 0;
   bool _mileagePromptOpen = false;
 
+  /// Свайп между вкладками только если жест начался у края (~25% ширины).
+  /// [Listener] на pointer down синхронно переключает physics — центр экрана не листает вкладки, карты/списки не перекрываются.
+  bool _allowSwipeBetweenTabs = false;
   static const double _kTabSwipeEdgeFraction = 0.25;
-  static const double _kEdgeSwipeVelocity = 280;
 
   List<_NavItem> _navItems(BuildContext context) {
     final l10n = L10nScope.of(context);
@@ -102,65 +104,40 @@ class _MainShellState extends ConsumerState<MainShell> with WidgetsBindingObserv
     }
   }
 
-  /// Горизонтальный флик по краям экрана (≈25% ширины): переключение соседних вкладок.
-  /// Центральная область не перехватывается — карты и списки работают как обычно.
-  void _onEdgeHorizontalFlick(double? primaryVelocity) {
-    if (primaryVelocity == null) return;
-    if (primaryVelocity < -_kEdgeSwipeVelocity) {
-      _goToTab(_currentIndex + 1);
-    } else if (primaryVelocity > _kEdgeSwipeVelocity) {
-      _goToTab(_currentIndex - 1);
-    }
-  }
-
   Widget _buildTabPageView() {
     return LayoutBuilder(
       builder: (context, constraints) {
         final w = constraints.maxWidth;
-        final edge = w * _kTabSwipeEdgeFraction;
-        return Stack(
-          fit: StackFit.expand,
-          children: [
-            PageView(
-              controller: _pageController,
-              physics: const NeverScrollableScrollPhysics(),
-              onPageChanged: (i) {
-                if (!mounted) return;
-                if (i == _currentIndex) return;
-                HapticFeedback.selectionClick();
-                setState(() => _currentIndex = i);
-              },
-              children: const [
-                GarageScreen(),
-                ServicesScreen(),
-                SearchScreen(),
-                ChatsScreen(),
-                ProfileScreen(),
-              ],
-            ),
-            Positioned(
-              left: 0,
-              top: 0,
-              bottom: 0,
-              width: edge,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onHorizontalDragEnd: (d) => _onEdgeHorizontalFlick(d.primaryVelocity),
-                child: const SizedBox.expand(),
-              ),
-            ),
-            Positioned(
-              right: 0,
-              top: 0,
-              bottom: 0,
-              width: edge,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onHorizontalDragEnd: (d) => _onEdgeHorizontalFlick(d.primaryVelocity),
-                child: const SizedBox.expand(),
-              ),
-            ),
-          ],
+        return Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: (e) {
+            if (w <= 0) return;
+            final x = e.localPosition.dx.clamp(0.0, w);
+            final allow =
+                x <= w * _kTabSwipeEdgeFraction || x >= w * (1.0 - _kTabSwipeEdgeFraction);
+            if (allow != _allowSwipeBetweenTabs) {
+              setState(() => _allowSwipeBetweenTabs = allow);
+            }
+          },
+          child: PageView(
+            controller: _pageController,
+            physics: _allowSwipeBetweenTabs
+                ? const BouncingScrollPhysics()
+                : const NeverScrollableScrollPhysics(),
+            onPageChanged: (i) {
+              if (!mounted) return;
+              if (i == _currentIndex) return;
+              HapticFeedback.selectionClick();
+              setState(() => _currentIndex = i);
+            },
+            children: const [
+              GarageScreen(),
+              ServicesScreen(),
+              SearchScreen(),
+              ChatsScreen(),
+              ProfileScreen(),
+            ],
+          ),
         );
       },
     );
