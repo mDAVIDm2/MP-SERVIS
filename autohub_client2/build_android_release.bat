@@ -3,6 +3,8 @@ setlocal
 cd /d "%~dp0"
 
 set "ARGS=--dart-define=MP_SERVIS_API_BASE_URL=https://api.mp-servis.ru/api/v1"
+rem Опционально партнёр ОСАГО: добавьте к ARGS, например:
+rem   --dart-define=PARTNER_API_TOKEN=... --dart-define=PARTNER_OSAGO_PRODUCT_ID=123
 if exist "config\firebase_define.json" (
   set "ARGS=%ARGS% --dart-define-from-file=config/firebase_define.json"
 )

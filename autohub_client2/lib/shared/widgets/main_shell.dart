@@ -35,9 +35,8 @@ class _MainShellState extends ConsumerState<MainShell> with WidgetsBindingObserv
   int _currentIndex = 0;
   bool _mileagePromptOpen = false;
 
-  /// Свайп между вкладками разрешён только если жест начался у края (см. [_kTabSwipeEdgeFraction]).
-  bool _allowSwipeBetweenTabs = true;
   static const double _kTabSwipeEdgeFraction = 0.25;
+  static const double _kEdgeSwipeVelocity = 280;
 
   List<_NavItem> _navItems(BuildContext context) {
     final l10n = L10nScope.of(context);
@@ -77,48 +76,91 @@ class _MainShellState extends ConsumerState<MainShell> with WidgetsBindingObserv
     if (index < 0 || index >= _tabCount) return;
     if (index == _currentIndex) return;
     HapticFeedback.lightImpact();
+    final from = _pageController.hasClients ? (_pageController.page?.round() ?? _currentIndex) : _currentIndex;
     setState(() => _currentIndex = index);
-    _pageController.animateToPage(
-      index,
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeOutCubic,
-    );
+    void syncPage() {
+      if (!_pageController.hasClients) return;
+      final delta = (index - from).abs();
+      if (delta <= 1) {
+        _pageController.animateToPage(
+          index,
+          duration: const Duration(milliseconds: 320),
+          curve: Curves.easeOutCubic,
+        );
+      } else {
+        _pageController.jumpToPage(index);
+      }
+    }
+
+    if (_pageController.hasClients) {
+      syncPage();
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        syncPage();
+      });
+    }
+  }
+
+  /// Горизонтальный флик по краям экрана (≈25% ширины): переключение соседних вкладок.
+  /// Центральная область не перехватывается — карты и списки работают как обычно.
+  void _onEdgeHorizontalFlick(double? primaryVelocity) {
+    if (primaryVelocity == null) return;
+    if (primaryVelocity < -_kEdgeSwipeVelocity) {
+      _goToTab(_currentIndex + 1);
+    } else if (primaryVelocity > _kEdgeSwipeVelocity) {
+      _goToTab(_currentIndex - 1);
+    }
   }
 
   Widget _buildTabPageView() {
     return LayoutBuilder(
       builder: (context, constraints) {
         final w = constraints.maxWidth;
-        return Listener(
-          behavior: HitTestBehavior.translucent,
-          onPointerDown: (e) {
-            if (w <= 0) return;
-            final x = e.localPosition.dx.clamp(0.0, w);
-            final allow =
-                x <= w * _kTabSwipeEdgeFraction || x >= w * (1.0 - _kTabSwipeEdgeFraction);
-            if (allow != _allowSwipeBetweenTabs) {
-              setState(() => _allowSwipeBetweenTabs = allow);
-            }
-          },
-          child: PageView(
-            controller: _pageController,
-            physics: _allowSwipeBetweenTabs
-                ? const BouncingScrollPhysics()
-                : const NeverScrollableScrollPhysics(),
-            onPageChanged: (i) {
-              if (!mounted) return;
-              if (i == _currentIndex) return;
-              HapticFeedback.selectionClick();
-              setState(() => _currentIndex = i);
-            },
-            children: const [
-              GarageScreen(),
-              ServicesScreen(),
-              SearchScreen(),
-              ChatsScreen(),
-              ProfileScreen(),
-            ],
-          ),
+        final edge = w * _kTabSwipeEdgeFraction;
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            PageView(
+              controller: _pageController,
+              physics: const NeverScrollableScrollPhysics(),
+              onPageChanged: (i) {
+                if (!mounted) return;
+                if (i == _currentIndex) return;
+                HapticFeedback.selectionClick();
+                setState(() => _currentIndex = i);
+              },
+              children: const [
+                GarageScreen(),
+                ServicesScreen(),
+                SearchScreen(),
+                ChatsScreen(),
+                ProfileScreen(),
+              ],
+            ),
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: edge,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onHorizontalDragEnd: (d) => _onEdgeHorizontalFlick(d.primaryVelocity),
+                child: const SizedBox.expand(),
+              ),
+            ),
+            Positioned(
+              right: 0,
+              top: 0,
+              bottom: 0,
+              width: edge,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onHorizontalDragEnd: (d) => _onEdgeHorizontalFlick(d.primaryVelocity),
+                child: const SizedBox.expand(),
+              ),
+            ),
+          ],
         );
       },
     );
