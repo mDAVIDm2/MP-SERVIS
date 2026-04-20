@@ -33,6 +33,8 @@ class _MainShellState extends ConsumerState<MainShell> with WidgetsBindingObserv
 
   late final PageController _pageController;
   int _currentIndex = 0;
+  /// Пока не null — идёт animateToPage к этой вкладке; промежуточные onPageChanged не затирают подсветку.
+  int? _programmaticTabTarget;
   bool _mileagePromptOpen = false;
 
   /// Свайп между вкладками только если жест начался у края (~25% ширины).
@@ -79,19 +81,26 @@ class _MainShellState extends ConsumerState<MainShell> with WidgetsBindingObserv
     if (index == _currentIndex) return;
     HapticFeedback.lightImpact();
     final from = _pageController.hasClients ? (_pageController.page?.round() ?? _currentIndex) : _currentIndex;
+    _programmaticTabTarget = index;
     setState(() => _currentIndex = index);
+
     void syncPage() {
       if (!_pageController.hasClients) return;
       final delta = (index - from).abs();
-      if (delta <= 1) {
-        _pageController.animateToPage(
-          index,
-          duration: const Duration(milliseconds: 320),
-          curve: Curves.easeOutCubic,
-        );
-      } else {
-        _pageController.jumpToPage(index);
-      }
+      // Плавная анимация и для соседних вкладок, и для 1↔5: длительность растёт с шагом.
+      final durationMs = (300 + (delta - 1) * 95).clamp(300, 720);
+      _pageController
+          .animateToPage(
+        index,
+        duration: Duration(milliseconds: durationMs),
+        curve: Curves.easeOutCubic,
+      )
+          .whenComplete(() {
+        if (!mounted) return;
+        if (_programmaticTabTarget == index) {
+          setState(() => _programmaticTabTarget = null);
+        }
+      });
     }
 
     if (_pageController.hasClients) {
@@ -119,24 +128,40 @@ class _MainShellState extends ConsumerState<MainShell> with WidgetsBindingObserv
               setState(() => _allowSwipeBetweenTabs = allow);
             }
           },
-          child: PageView(
-            controller: _pageController,
-            physics: _allowSwipeBetweenTabs
-                ? const BouncingScrollPhysics()
-                : const NeverScrollableScrollPhysics(),
-            onPageChanged: (i) {
-              if (!mounted) return;
-              if (i == _currentIndex) return;
-              HapticFeedback.selectionClick();
-              setState(() => _currentIndex = i);
+          child: NotificationListener<ScrollNotification>(
+            onNotification: (n) {
+              if (n is UserScrollNotification) {
+                if (_programmaticTabTarget != null) {
+                  setState(() => _programmaticTabTarget = null);
+                }
+              }
+              return false;
             },
-            children: const [
-              GarageScreen(),
-              ServicesScreen(),
-              SearchScreen(),
-              ChatsScreen(),
-              ProfileScreen(),
-            ],
+            child: PageView(
+              controller: _pageController,
+              physics: _allowSwipeBetweenTabs
+                  ? const BouncingScrollPhysics()
+                  : const NeverScrollableScrollPhysics(),
+              onPageChanged: (i) {
+                if (!mounted) return;
+                if (_programmaticTabTarget != null && i != _programmaticTabTarget) {
+                  return;
+                }
+                if (i == _currentIndex && _programmaticTabTarget == null) return;
+                HapticFeedback.selectionClick();
+                setState(() {
+                  _currentIndex = i;
+                  _programmaticTabTarget = null;
+                });
+              },
+              children: const [
+                GarageScreen(),
+                ServicesScreen(),
+                SearchScreen(),
+                ChatsScreen(),
+                ProfileScreen(),
+              ],
+            ),
           ),
         );
       },
