@@ -22,6 +22,103 @@ double _distanceKm(double lat1, double lon1, double lat2, double lon2) {
   return R * c;
 }
 
+/// Шаг сетки кластеризации (в градусах): при меньшем зуме ячейка крупнее — точки сливаются.
+double _externalClusterStepDegrees(double zoom) {
+  const zRef = 11.0;
+  const base = 0.052;
+  return base / math.pow(2, (zoom - zRef).clamp(-1.0, 11.0));
+}
+
+/// Одна непартнёрская точка или кластер (несколько POI в ячейке).
+class _ClusteredExternalView {
+  _ClusteredExternalView._({
+    required this.isCluster,
+    required this.lat,
+    required this.lng,
+    required this.labelEntryId,
+    this.singlePoi,
+    required this.count,
+  });
+
+  factory _ClusteredExternalView.single(ExternalPOI p) {
+    return _ClusteredExternalView._(
+      isCluster: false,
+      lat: p.lat,
+      lng: p.lng,
+      labelEntryId: p.id,
+      singlePoi: p,
+      count: 1,
+    );
+  }
+
+  factory _ClusteredExternalView.cluster({
+    required double lat,
+    required double lng,
+    required int count,
+    required String labelEntryId,
+  }) {
+    return _ClusteredExternalView._(
+      isCluster: true,
+      lat: lat,
+      lng: lng,
+      labelEntryId: labelEntryId,
+      singlePoi: null,
+      count: count,
+    );
+  }
+
+  final bool isCluster;
+  final double lat;
+  final double lng;
+  final String labelEntryId;
+  final ExternalPOI? singlePoi;
+  final int count;
+}
+
+List<_ClusteredExternalView> _clusterExternalEntries(
+  List<_MapEntry> entries, {
+  required double zoom,
+  required double centerLat,
+  required double centerLng,
+}) {
+  if (entries.isEmpty) return [];
+  final step = _externalClusterStepDegrees(zoom);
+  final bins = <String, List<_MapEntry>>{};
+  for (final e in entries) {
+    final gx = (e.lat / step).floor();
+    final gy = (e.lng / step).floor();
+    final key = '$gx|$gy';
+    bins.putIfAbsent(key, () => []).add(e);
+  }
+  final out = <_ClusteredExternalView>[];
+  for (final bin in bins.entries) {
+    final list = bin.value;
+    if (list.length == 1) {
+      out.add(_ClusteredExternalView.single(list.first.data as ExternalPOI));
+    } else {
+      var sl = 0.0;
+      var sn = 0.0;
+      for (final x in list) {
+        sl += x.lat;
+        sn += x.lng;
+      }
+      final n = list.length;
+      out.add(_ClusteredExternalView.cluster(
+        lat: sl / n,
+        lng: sn / n,
+        count: n,
+        labelEntryId: 'cl_${bin.key}',
+      ));
+    }
+  }
+  out.sort((a, b) {
+    final da = _distanceKm(centerLat, centerLng, a.lat, a.lng);
+    final db = _distanceKm(centerLat, centerLng, b.lat, b.lng);
+    return da.compareTo(db);
+  });
+  return out;
+}
+
 /// Callback с границами видимой области: minLat, minLng, maxLat, maxLng.
 typedef VisibleBoundsCallback = void Function(double minLat, double minLng, double maxLat, double maxLng);
 
@@ -75,8 +172,9 @@ class _STOOSMMapState extends State<STOOSMMap> {
   static const Duration _boundsDebounceDuration = Duration(milliseconds: 900);
   static const double _labelZoomThreshold = 15.0;
   static const int _maxLabels = 12;
-  /// Ограничение числа маркеров на карте (точки при отдалении дешёвые в отрисовке).
-  static const int _maxVisibleMarkers = 220;
+  /// Партнёры и итоговые кластеры/точки (непартнёрские после кластеризации).
+  static const int _maxPartnerMarkers = 130;
+  static const int _maxExternalVisuals = 200;
 
   /// При отдалении маркеры остаются маленькими точками (экранный размер), иначе «закрывают» карту.
   static double _markerSizeFactor(double zoom) {
@@ -205,37 +303,64 @@ class _STOOSMMapState extends State<STOOSMMap> {
         final dB = _distanceKm(centerLat, centerLng, b.lat, b.lng);
         return dA.compareTo(dB);
       });
-      // Партнёры не должны съедать весь лимит маркеров, иначе слой «непартнёрские» пустой при 120+ точках API.
-      const minExternalSlots = 64;
-      final partnerLimit = widget.externals.isEmpty
-          ? partnerEntries.length
-          : math.min(partnerEntries.length, _maxVisibleMarkers - minExternalSlots);
+      final partnerLimit = math.min(partnerEntries.length, _maxPartnerMarkers);
       final visiblePartners =
           partnerEntries.length > partnerLimit ? partnerEntries.sublist(0, partnerLimit) : partnerEntries;
-      final maxExternal = _maxVisibleMarkers - visiblePartners.length;
-      final visibleExternal = maxExternal <= 0
-          ? <_MapEntry>[]
-          : (externalEntries.length > maxExternal ? externalEntries.sublist(0, maxExternal) : externalEntries);
+      var externalVisuals = _clusterExternalEntries(
+        externalEntries,
+        zoom: _currentZoom,
+        centerLat: centerLat,
+        centerLng: centerLng,
+      );
+      if (externalVisuals.length > _maxExternalVisuals) {
+        externalVisuals = externalVisuals.sublist(0, _maxExternalVisuals);
+      }
       final withLabelIds = showLabels
-          ? [...visiblePartners.take(_maxLabels), ...visibleExternal.take(_maxLabels)].take(_maxLabels).map((e) => e.id).toSet()
+          ? [
+              ...visiblePartners.take(_maxLabels).map((e) => e.id),
+              ...externalVisuals.take(_maxLabels).map((v) => v.labelEntryId),
+            ].take(_maxLabels).toSet()
           : <String>{};
 
       final zf = _markerSizeFactor(_currentZoom);
       final List<Marker> markers = [];
-      for (final entry in visibleExternal) {
-        final poi = entry.data as ExternalPOI;
-        final showLabel = withLabelIds.contains(poi.id);
-        final ext = _TeardropPinWidget.layoutExtent(showLabel: showLabel, name: poi.name, sizeFactor: zf);
-        markers.add(Marker(
-          point: LatLng(poi.lat, poi.lng),
-          width: ext.width,
-          height: ext.height,
-          alignment: Alignment.bottomCenter,
-          child: GestureDetector(
-            onTap: () => widget.onExternalTap(poi),
-            child: _TeardropPinWidget(showLabel: showLabel, name: poi.name, types: poi.types, sizeFactor: zf),
-          ),
-        ));
+      for (final v in externalVisuals) {
+        if (v.isCluster) {
+          final ext = _ExternalClusterBubble.layoutExtent(
+            count: v.count,
+            sizeFactor: zf,
+          );
+          markers.add(Marker(
+            point: LatLng(v.lat, v.lng),
+            width: ext.width,
+            height: ext.height,
+            alignment: Alignment.bottomCenter,
+            child: GestureDetector(
+              onTap: () {
+                final nextZoom = (_currentZoom + 1.35).clamp(4.0, 18.0);
+                _mapController.move(LatLng(v.lat, v.lng), nextZoom);
+              },
+              child: _ExternalClusterBubble(
+                count: v.count,
+                sizeFactor: zf,
+              ),
+            ),
+          ));
+        } else {
+          final poi = v.singlePoi!;
+          final showLabel = withLabelIds.contains(poi.id);
+          final ext = _TeardropPinWidget.layoutExtent(showLabel: showLabel, name: poi.name, sizeFactor: zf);
+          markers.add(Marker(
+            point: LatLng(poi.lat, poi.lng),
+            width: ext.width,
+            height: ext.height,
+            alignment: Alignment.bottomCenter,
+            child: GestureDetector(
+              onTap: () => widget.onExternalTap(poi),
+              child: _TeardropPinWidget(showLabel: showLabel, name: poi.name, types: poi.types, sizeFactor: zf),
+            ),
+          ));
+        }
       }
       for (final entry in visiblePartners) {
           final sto = entry.data as STO;
@@ -363,6 +488,49 @@ _ExternalMarkerPalette _paletteForExternalTypes(List<String> types) {
     return const _ExternalMarkerPalette(fill: Color(0xFFC62828), darkIcon: false);
   }
   return const _ExternalMarkerPalette(fill: Color(0xFFF9A825), darkIcon: true);
+}
+
+/// Кластер непартнёрских точек: число в круге; тап — приблизить карту к группе.
+class _ExternalClusterBubble extends StatelessWidget {
+  final int count;
+  final double sizeFactor;
+
+  const _ExternalClusterBubble({
+    required this.count,
+    this.sizeFactor = 1.0,
+  });
+
+  static _LayoutExtent layoutExtent({required int count, required double sizeFactor}) {
+    final bubble = (42 * sizeFactor).clamp(30.0, 46.0);
+    return _LayoutExtent(bubble, bubble);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = (42 * sizeFactor).clamp(30.0, 46.0);
+    final font = (13 * sizeFactor).clamp(10.0, 15.0);
+    final txt = count > 99 ? '99+' : '$count';
+    return SizedBox(
+      width: s,
+      height: s,
+      child: Material(
+        color: const Color(0xFFE65100),
+        shape: const CircleBorder(side: BorderSide(color: Colors.white, width: 2.2)),
+        elevation: 3,
+        shadowColor: Colors.black45,
+        child: Center(
+          child: Text(
+            txt,
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+              fontSize: font,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Непартнёрские точки: округлая «шапка» + сужение к острию (не «глаз»), остриё на координате ([Marker.alignment] = bottomCenter).

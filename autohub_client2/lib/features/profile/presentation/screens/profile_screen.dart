@@ -15,6 +15,9 @@ import '../../../../core/auth/auth_provider.dart';
 import '../../../../core/auth/app_lock_provider.dart';
 import '../../../../core/config/app_config.dart';
 import '../../../../shared/widgets/garage_car_photo_image.dart';
+import '../../../../core/utils/car_document_detail_validation.dart';
+import '../../../../core/utils/car_document_expiry.dart';
+import '../../../../core/utils/vin_validation.dart';
 import '../../../../shared/models/car_document_model.dart' show CarDocument, kCarDocumentTypes;
 import '../../../../shared/models/car_model.dart' show Car;
 import '../../../../shared/models/order_model.dart' show Order;
@@ -34,19 +37,8 @@ import '../../../chats/presentation/screens/chat_detail_screen.dart';
 
 /// По строке срока («до 15 марта 2026») возвращает статус и цвет для ОСАГО/техосмотра.
 (String, Color)? _documentStatusFromExpiry(String expiry) {
-  final match = RegExp(r'до\s+(\d{1,2})\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)\s+(\d{4})').firstMatch(expiry.trim());
-  if (match == null) return null;
-  const months = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
-  final day = int.tryParse(match.group(1) ?? '') ?? 0;
-  final month = months.indexWhere((m) => m == match.group(2)) + 1;
-  final year = int.tryParse(match.group(3) ?? '') ?? 0;
-  if (month < 1 || day < 1 || day > 31) return null;
-  DateTime expiryDate;
-  try {
-    expiryDate = DateTime(year, month, day);
-  } catch (_) {
-    return null;
-  }
+  final expiryDate = parseCarDocumentExpiryDate(expiry);
+  if (expiryDate == null) return null;
   final now = DateTime.now();
   final today = DateTime(now.year, now.month, now.day);
   final expiryOnly = DateTime(expiryDate.year, expiryDate.month, expiryDate.day);
@@ -58,6 +50,21 @@ import '../../../chats/presentation/screens/chat_detail_screen.dart';
     return ('Истекает', SemanticColors.warning);
   }
   return ('Активен', SemanticColors.success);
+}
+
+/// Кнопка «Оформить ОСАГО»: нет полиса, нет срока, до окончания ≤14 дней или полис уже истёк.
+bool _shouldShowOsagoCta(List<CarDocument> docsForCar) {
+  CarDocument? osago;
+  for (final d in docsForCar) {
+    if (d.type == 'ОСАГО') {
+      osago = d;
+      break;
+    }
+  }
+  if (osago == null) return true;
+  final days = daysUntilExpiryFromString(osago.expiry);
+  if (days == null) return true;
+  return days <= 14;
 }
 
 
@@ -251,6 +258,8 @@ class ProfileScreen extends ConsumerWidget {
     }
     final hasCarVin = selectedCar?.vin != null && selectedCar!.vin!.isNotEmpty;
     final isEmpty = docs.isEmpty && !hasCarVin;
+    final showOsagoCta = carId != null && _shouldShowOsagoCta(docs);
+    final osagoCtaHint = showOsagoCta ? _osagoCtaHintLine(docs) : null;
     return _SectionGroup(
       title: carName != null ? 'Документы · $carName' : 'Документы',
       children: isEmpty
@@ -274,6 +283,13 @@ class ProfileScreen extends ConsumerWidget {
                           foregroundColor: context.palette.primary,
                           side: BorderSide(color: context.palette.primary),
                         ),
+                      ),
+                    ],
+                    if (showOsagoCta) ...[
+                      SizedBox(height: 16),
+                      _OsagoRegistrationBlock(
+                        hint: osagoCtaHint,
+                        onPressed: () => _onOsagoRegisterTap(context),
                       ),
                     ],
                   ],
@@ -319,7 +335,41 @@ class ProfileScreen extends ConsumerWidget {
                     ),
                   ),
                 ),
+              if (showOsagoCta)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: _OsagoRegistrationBlock(
+                    hint: osagoCtaHint,
+                    onPressed: () => _onOsagoRegisterTap(context),
+                  ),
+                ),
             ],
+    );
+  }
+
+  /// Пояснение под кнопкой «Оформить ОСАГО».
+  String? _osagoCtaHintLine(List<CarDocument> docsForCar) {
+    CarDocument? osago;
+    for (final d in docsForCar) {
+      if (d.type == 'ОСАГО') {
+        osago = d;
+        break;
+      }
+    }
+    if (osago == null) return 'Полис ОСАГО ещё не добавлен в список документов.';
+    final days = daysUntilExpiryFromString(osago.expiry);
+    if (days == null) return 'Укажите дату окончания полиса в карточке ОСАГО или оформите новый.';
+    if (days < 0) return 'Срок действия полиса истёк.';
+    if (days <= 14) return 'До окончания полиса осталось меньше 14 дней — пора оформить новый.';
+    return null;
+  }
+
+  void _onOsagoRegisterTap(BuildContext context) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Оформление ОСАГО: подключение партнёрского сервиса в разработке.'),
+        backgroundColor: context.palette.info,
+      ),
     );
   }
 
@@ -355,12 +405,20 @@ class ProfileScreen extends ConsumerWidget {
                   controller: detailController,
                   decoration: InputDecoration(
                     labelText: selectedType == 'VIN' ? 'VIN (17 символов)' : 'Номер / данные',
-                    hintText: selectedType == 'ОСАГО' ? 'XXX 1234567890' : (selectedType == 'VIN' ? 'WBA...' : ''),
+                    hintText: carDocumentDetailHint(selectedType).isEmpty
+                        ? null
+                        : carDocumentDetailHint(selectedType),
+                    hintStyle: TextStyle(color: context.palette.textTertiary),
                     border: OutlineInputBorder(),
                     labelStyle: TextStyle(color: context.palette.textSecondary),
                   ),
                   style: TextStyle(color: context.palette.textPrimary),
                   maxLines: selectedType == 'VIN' ? 1 : 2,
+                  maxLength: selectedType == 'VIN' ? 17 : (selectedType == 'Другое' ? 200 : null),
+                  buildCounter: selectedType == 'VIN' || selectedType == 'Другое'
+                      ? (_, {required currentLength, required isFocused, maxLength}) => null
+                      : null,
+                  inputFormatters: selectedType == 'VIN' ? [VinUpperCaseTextInputFormatter()] : null,
                 ),
                 if (selectedType == 'ОСАГО' || selectedType == 'Техосмотр') ...[
                   SizedBox(height: 12),
@@ -382,7 +440,13 @@ class ProfileScreen extends ConsumerWidget {
             FilledButton(
               onPressed: () {
                 final detail = detailController.text.trim();
-                if (detail.isEmpty) return;
+                final err = validateCarDocumentDetail(selectedType, detail);
+                if (err != null) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(err), backgroundColor: context.palette.error),
+                  );
+                  return;
+                }
                 final doc = CarDocument(
                   carId: carId,
                   type: selectedType,
@@ -500,11 +564,18 @@ class ProfileScreen extends ConsumerWidget {
                 controller: detailController,
                 decoration: InputDecoration(
                   labelText: 'Данные (номер полиса, описание и т.д.)',
+                  hintText: carDocumentDetailHint(doc.type).isEmpty ? null : carDocumentDetailHint(doc.type),
+                  hintStyle: TextStyle(color: context.palette.textTertiary),
                   border: OutlineInputBorder(),
                   labelStyle: TextStyle(color: context.palette.textSecondary),
                 ),
                 style: TextStyle(color: context.palette.textPrimary),
-                maxLines: 2,
+                maxLines: doc.type == 'VIN' ? 1 : 2,
+                maxLength: doc.type == 'VIN' ? 17 : (doc.type == 'Другое' ? 200 : null),
+                buildCounter: doc.type == 'VIN' || doc.type == 'Другое'
+                    ? (_, {required currentLength, required isFocused, maxLength}) => null
+                    : null,
+                inputFormatters: doc.type == 'VIN' ? [VinUpperCaseTextInputFormatter()] : null,
               ),
               SizedBox(height: 12),
               TextField(
@@ -537,7 +608,13 @@ class ProfileScreen extends ConsumerWidget {
           FilledButton(
             onPressed: () {
               final detail = detailController.text.trim();
-              if (detail.isEmpty) return;
+              final err = validateCarDocumentDetail(doc.type, detail);
+              if (err != null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(err), backgroundColor: context.palette.error),
+                );
+                return;
+              }
               final status = statusController.text.trim();
               final expiry = expiryController.text.trim();
               final updated = CarDocument(
@@ -1020,6 +1097,40 @@ class ProfileScreen extends ConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Кнопка оформления ОСАГО внизу блока «Документы».
+class _OsagoRegistrationBlock extends StatelessWidget {
+  const _OsagoRegistrationBlock({this.hint, required this.onPressed});
+
+  final String? hint;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (hint != null && hint!.isNotEmpty) ...[
+          Text(
+            hint!,
+            style: TextStyle(fontSize: 13, height: 1.35, color: context.palette.textSecondary),
+          ),
+          SizedBox(height: 10),
+        ],
+        FilledButton.icon(
+          onPressed: onPressed,
+          icon: Icon(Icons.shield_outlined, size: 20),
+          label: Text('Оформить ОСАГО'),
+          style: FilledButton.styleFrom(
+            backgroundColor: context.palette.primary,
+            foregroundColor: context.palette.onAccent,
+            padding: const EdgeInsets.symmetric(vertical: 12),
+          ),
+        ),
+      ],
     );
   }
 }
