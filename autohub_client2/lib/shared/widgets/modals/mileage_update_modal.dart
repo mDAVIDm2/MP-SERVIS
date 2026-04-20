@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/client_palette.dart';
 import '../../../core/utils/formatters.dart';
 import '../../models/car_model.dart';
 import '../common_widgets.dart';
@@ -14,8 +14,8 @@ class MileageUpdateModal extends StatefulWidget {
     return showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: AppColors.cardBg,
-      shape: const RoundedRectangleBorder(
+      backgroundColor: context.palette.cardBg,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (_) => MileageUpdateModal(car: car, onSave: onSave),
@@ -58,46 +58,46 @@ class _MileageUpdateModalState extends State<MileageUpdateModal> {
           Container(
             width: 36, height: 4,
             decoration: BoxDecoration(
-              color: AppColors.textTertiary, borderRadius: BorderRadius.circular(2)),
+              color: context.palette.textTertiary, borderRadius: BorderRadius.circular(2)),
           ),
-          const SizedBox(height: 20),
-          const Text('Обновить пробег', style: TextStyle(
-            fontSize: 20, fontWeight: FontWeight.w600, color: AppColors.textPrimary,
+          SizedBox(height: 20),
+          Text('Обновить пробег', style: TextStyle(
+            fontSize: 20, fontWeight: FontWeight.w600, color: context.palette.textPrimary,
           )),
-          const SizedBox(height: 4),
-          Text('${widget.car.brand} ${widget.car.model}', style: const TextStyle(
-            fontSize: 14, color: AppColors.textSecondary,
+          SizedBox(height: 4),
+          Text('${widget.car.brand} ${widget.car.model}', style: TextStyle(
+            fontSize: 14, color: context.palette.textSecondary,
           )),
-          const SizedBox(height: 8),
-          Text('Текущий: ${Formatters.mileage(widget.car.mileage)}', style: const TextStyle(
-            fontSize: 14, color: AppColors.textTertiary,
+          SizedBox(height: 8),
+          Text('Текущий: ${Formatters.mileage(widget.car.mileage)}', style: TextStyle(
+            fontSize: 14, color: context.palette.textTertiary,
           )),
-          const SizedBox(height: 24),
+          SizedBox(height: 24),
           Container(
             decoration: BoxDecoration(
-              color: AppColors.nestedBg,
+              color: context.palette.nestedBg,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppColors.border),
+              border: Border.all(color: context.palette.border),
             ),
             child: TextField(
               controller: _controller,
               keyboardType: TextInputType.number,
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 28, fontWeight: FontWeight.w700,
-                color: AppColors.textPrimary, fontFamily: 'monospace',
+                color: context.palette.textPrimary, fontFamily: 'monospace',
               ),
               textAlign: TextAlign.center,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 border: InputBorder.none,
                 contentPadding: EdgeInsets.symmetric(vertical: 16),
                 suffixText: 'км',
-                suffixStyle: TextStyle(fontSize: 16, color: AppColors.textSecondary),
+                suffixStyle: TextStyle(fontSize: 16, color: context.palette.textSecondary),
               ),
               autofocus: true,
             ),
           ),
-          const SizedBox(height: 24),
+          SizedBox(height: 24),
           GoldButton(
             text: 'Сохранить',
             onPressed: _isValid ? () {

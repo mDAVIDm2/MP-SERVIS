@@ -1,4 +1,15 @@
-import { Body, Controller, Get, NotFoundException, Param, Patch, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  NotFoundException,
+  Param,
+  Patch,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { InternalJwtAuthGuard } from './internal-jwt.guard';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { Organization } from '../organizations/organization.entity';
@@ -70,6 +81,21 @@ export class InternalOrganizationsController {
         : null,
       subscription_usage,
     };
+  }
+
+  /** Удалить одно фото по полному URL из списка или все фото точки (`?all=1`). */
+  @Delete(':id/photos')
+  async deletePhotos(@Param('id') id: string, @Query('all') all?: string, @Query('url') url?: string) {
+    if (all === '1' || all === 'true') {
+      await this.org.clearAllOrganizationPhotos(id);
+      return { ok: true };
+    }
+    const u = String(url || '').trim();
+    if (u.length > 0) {
+      const ok = await this.org.removePhoto(id, u);
+      return { ok };
+    }
+    throw new BadRequestException('Укажите query all=1 или url=<полный URL фото>');
   }
 
   @Patch(':id')

@@ -61,6 +61,14 @@ export class SeedService implements OnApplicationBootstrap {
   ) {}
 
   async onApplicationBootstrap() {
+    /** Однократное заполнение марок/моделей/поколений на проде без тестовых организаций и пользователей. */
+    const refOnly = process.env.SEED_REFERENCE_ONLY === '1' || process.env.SEED_REFERENCE_ONLY === 'true';
+    if (refOnly) {
+      await this.seedCarBrandsAndModels();
+      await this.seedCarGenerations();
+      console.log('[Seed] Справочник авто (SEED_REFERENCE_ONLY): проверка/загрузка выполнена.');
+      return;
+    }
     if (process.env.NODE_ENV === 'production' && !process.env.SEED_DEV) return;
     await this.run();
   }
@@ -121,34 +129,46 @@ export class SeedService implements OnApplicationBootstrap {
     }
 
     for (const s of STAFF_PHONES) {
-      let user = await this.userRepo.findOne({ where: { phone: s.phone } });
+      let user = await this.userRepo.findOne({ where: { phone: s.phone, accountRealm: 'business' } });
       if (!user) {
         user = this.userRepo.create({
           phone: s.phone,
           name: s.name,
           role: s.role,
           organizationId: org.id,
+          accountRealm: 'business',
         });
         await this.userRepo.save(user);
       } else {
         user.organizationId = org.id;
         user.role = s.role;
         user.name = s.name;
+        user.accountRealm = 'business';
         await this.userRepo.save(user);
       }
     }
 
     for (const c of CLIENT_PHONES) {
-      let user = await this.userRepo.findOne({ where: { phone: c.phone } });
+      let user = await this.userRepo.findOne({ where: { phone: c.phone, accountRealm: 'client' } });
       if (!user) {
-        user = this.userRepo.create({
-          phone: c.phone,
-          name: c.name,
-          role: 'solo',
-          organizationId: null,
-        });
-        await this.userRepo.save(user);
-      } else {
+        const legacy = await this.userRepo.findOne({ where: { phone: c.phone } });
+        if (legacy && legacy.accountRealm === 'business' && !legacy.organizationId) {
+          legacy.accountRealm = 'client';
+          legacy.name = c.name;
+          await this.userRepo.save(legacy);
+          user = legacy;
+        } else if (!legacy) {
+          user = this.userRepo.create({
+            phone: c.phone,
+            name: c.name,
+            role: 'solo',
+            organizationId: null,
+            accountRealm: 'client',
+          });
+          await this.userRepo.save(user);
+        }
+      }
+      if (user) {
         user.name = c.name;
         await this.userRepo.save(user);
       }
@@ -299,36 +319,40 @@ export class SeedService implements OnApplicationBootstrap {
       await this.settingsRepo.update(settingsMr.id, { data: settingsDataMr });
     }
     for (const s of AUTO_MR_OWNER_ADMIN) {
-      let userMr = await this.userRepo.findOne({ where: { phone: s.phone } });
+      let userMr = await this.userRepo.findOne({ where: { phone: s.phone, accountRealm: 'business' } });
       if (!userMr) {
         userMr = this.userRepo.create({
           phone: s.phone,
           name: s.name,
           role: s.role,
           organizationId: orgMr.id,
+          accountRealm: 'business',
         });
         await this.userRepo.save(userMr);
       } else {
         userMr.organizationId = orgMr.id;
         userMr.role = s.role;
         userMr.name = s.name;
+        userMr.accountRealm = 'business';
         await this.userRepo.save(userMr);
       }
     }
     for (const m of AUTO_MR_MASTERS) {
-      let userMr = await this.userRepo.findOne({ where: { phone: m.phone } });
+      let userMr = await this.userRepo.findOne({ where: { phone: m.phone, accountRealm: 'business' } });
       if (!userMr) {
         userMr = this.userRepo.create({
           phone: m.phone,
           name: m.name,
           role: 'master',
           organizationId: orgMr.id,
+          accountRealm: 'business',
         });
         await this.userRepo.save(userMr);
       } else {
         userMr.organizationId = orgMr.id;
         userMr.role = 'master';
         userMr.name = m.name;
+        userMr.accountRealm = 'business';
         await this.userRepo.save(userMr);
       }
     }

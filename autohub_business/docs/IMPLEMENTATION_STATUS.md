@@ -1,4 +1,4 @@
-# Статус реализации AutoHub Business
+# Статус реализации MP-Servis Business
 
 Сверка с промптами: `AUTOHUB_STO_PROMPT.md`, `AUTOHUB_BUSINESS_MASTER_PROMPT.md`.  
 Детальные пробелы и упрощения: **GAPS_AND_SIMPLIFICATIONS.md**.

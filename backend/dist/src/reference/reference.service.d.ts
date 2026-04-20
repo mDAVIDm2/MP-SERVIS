@@ -4,6 +4,7 @@ import { CarModel } from './car-model.entity';
 import { CarGeneration } from './car-generation.entity';
 import { PendingCarReference } from './pending-car-reference.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { ClientCar } from '../users/client-car.entity';
 export interface CarBrandDto {
     id: number;
     name: string;
@@ -23,8 +24,9 @@ export declare class ReferenceService {
     private modelRepo;
     private generationRepo;
     private pendingRepo;
+    private clientCarRepo;
     private notifications;
-    constructor(brandRepo: Repository<CarBrand>, modelRepo: Repository<CarModel>, generationRepo: Repository<CarGeneration>, pendingRepo: Repository<PendingCarReference>, notifications: NotificationsService);
+    constructor(brandRepo: Repository<CarBrand>, modelRepo: Repository<CarModel>, generationRepo: Repository<CarGeneration>, pendingRepo: Repository<PendingCarReference>, clientCarRepo: Repository<ClientCar>, notifications: NotificationsService);
     getCarBrands(): Promise<CarBrandDto[]>;
     getCarModels(brandId: number): Promise<CarModelDto[]>;
     getCarGenerations(modelId: number): Promise<CarGenerationDto[]>;
@@ -32,6 +34,8 @@ export declare class ReferenceService {
         pendingBrand?: string;
         pendingModel?: string;
         pendingGeneration?: string;
+        referenceBrandId?: number;
+        referenceModelId?: number;
     }): Promise<{
         id: string;
     }>;
@@ -44,6 +48,10 @@ export declare class ReferenceService {
         pendingGeneration: string | null;
         status: string;
         createdAt: Date;
+        carSnapshotBrand: string | null;
+        carSnapshotModel: string | null;
+        carBrandId: number | null;
+        carModelId: number | null;
     }[]>;
     createBrand(name: string): Promise<CarBrandDto>;
     createModel(brandId: number, name: string): Promise<CarModelDto>;

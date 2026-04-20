@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -21,10 +22,10 @@ final sharedPreferencesOrgProvider = FutureProvider<SharedPreferences>((ref) => 
 /// Репозиторий организации: загрузка с API (GET), сохранение через API (PATCH) + кэш в prefs.
 class OrganizationRepository extends StateNotifier<AsyncValue<OrganizationInfo>> {
   OrganizationRepository(this._api, this._prefs, this._ref) : super(const AsyncValue.loading()) {
-    final orgId = _ref.read(authProvider).user?.organizationId;
+    final orgId = _ref.read(authProvider).user?.effectiveOrganizationId;
     load(orgId);
     _ref.listen<AuthState>(authProvider, (prev, next) {
-      final nextId = next.user?.organizationId;
+      final nextId = next.user?.effectiveOrganizationId;
       if (nextId != _orgId) load(nextId);
     });
   }
@@ -36,7 +37,7 @@ class OrganizationRepository extends StateNotifier<AsyncValue<OrganizationInfo>>
 
   OrganizationInfo _loadFromPrefs(String? orgId) {
     if (orgId == null || orgId.isEmpty) {
-      return const OrganizationInfo(name: 'Мой автосервис', address: '', phone: '', workingHours: 'Пн–Пт 9:00–19:00, Сб 10:00–16:00');
+      return const OrganizationInfo(name: '', address: '', phone: '', workingHours: '');
     }
     return OrganizationInfo(
       name: _prefs.getString(_kOrgNamePrefix + orgId) ?? 'Мой автосервис',
@@ -90,6 +91,35 @@ class OrganizationRepository extends StateNotifier<AsyncValue<OrganizationInfo>>
     return result;
   }
 
+  /// Загрузка из байтов (надёжнее с галереей на части Android-устройств).
+  Future<Result<String>> addPhotoBytes(String? orgId, Uint8List bytes, String filename) async {
+    if (orgId == null || orgId.isEmpty) {
+      return Result.failure(const ApiException(code: ApiErrorCode.internal, message: 'Нет организации'));
+    }
+    final result = await _api.addPhotoBytes(orgId, bytes, filename);
+    final url = result.dataOrNull;
+    if (url != null) {
+      await load(orgId);
+    }
+    return result;
+  }
+
+  /// Удалить фото точки ([photoUrl] — строка из `photo_urls` в модели организации).
+  Future<Result<bool>> deletePhoto(String? orgId, String photoUrl) async {
+    if (orgId == null || orgId.isEmpty) {
+      return Result.failure(const ApiException(code: ApiErrorCode.internal, message: 'Нет организации'));
+    }
+    final trimmed = photoUrl.trim();
+    if (trimmed.isEmpty) {
+      return Result.failure(const ApiException(code: ApiErrorCode.internal, message: 'Не указан адрес фото'));
+    }
+    final result = await _api.deletePhoto(orgId, trimmed);
+    if (result.dataOrNull == true) {
+      await load(orgId);
+    }
+    return result;
+  }
+
   /// Обновить организацию: PATCH API, затем обновить state и prefs.
   Future<Result<OrganizationInfo>> update(OrganizationInfo org) async {
     final orgId = _orgId;
@@ -97,8 +127,12 @@ class OrganizationRepository extends StateNotifier<AsyncValue<OrganizationInfo>>
       final result = await _api.update(orgId, org);
       final updated = result.dataOrNull;
       if (updated != null) {
-        // Бэкенд PATCH не возвращает photo_urls — сохраняем текущие
-        final merged = updated.copyWith(photoUrls: state.valueOrNull?.photoUrls ?? updated.photoUrls);
+        final prev = state.valueOrNull;
+        // PATCH может не возвращать photo_urls и раньше не возвращал subscription_usage
+        final merged = updated.copyWith(
+          photoUrls: prev?.photoUrls ?? updated.photoUrls,
+          subscriptionUsage: updated.subscriptionUsage ?? prev?.subscriptionUsage,
+        );
         state = AsyncValue.data(merged);
         await _saveToPrefs(merged);
         return Result.success(merged);

@@ -30,6 +30,17 @@ let ChatsController = class ChatsController {
         const chat = await this.chats.getOrCreateSupportChat(phone);
         return this.chats.getChatById(chat.id, null, phone, true);
     }
+    async openOrganizationChat(req, body) {
+        if (!(0, request_app_util_1.isClientAppRequest)(req)) {
+            throw new common_1.ForbiddenException('Доступно только из клиентского приложения');
+        }
+        const orgId = body?.organization_id?.trim();
+        if (!orgId)
+            throw new common_1.BadRequestException('Укажите organization_id');
+        const user = req.user;
+        const phone = user?.phone != null ? String(user.phone) : '';
+        return this.chats.openOrganizationChatForClient(orgId, phone);
+    }
     async list(req) {
         const user = req.user;
         const phone = user?.phone != null ? String(user.phone).replace(/\D/g, '') : '';
@@ -142,6 +153,14 @@ __decorate([
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
 ], ChatsController.prototype, "openSupport", null);
+__decorate([
+    (0, common_1.Post)('open-organization'),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:returntype", Promise)
+], ChatsController.prototype, "openOrganizationChat", null);
 __decorate([
     (0, common_1.Get)(),
     __param(0, (0, common_1.Req)()),

@@ -34,9 +34,26 @@ final _categoryToType = <String, String>{
   'электрик': 'Электрика',
   'электро': 'Электрика',
   'диагностик': 'Диагностика',
+  'автозвук': 'Автозвук',
+  'акустик': 'Автозвук',
+  'сигнализац': 'Автозвук',
 };
 
-List<String> _mapYandexCategoriesToTypes(List<dynamic>? categories) {
+/// Делит «Мойка» на подтипы по названию (Яндекс редко отдаёт отдельные категории).
+void _refineWashSubtype(String poiName, List<String> types) {
+  if (!types.contains('Мойка')) return;
+  types.remove('Мойка');
+  final n = poiName.toLowerCase();
+  if (n.contains('само') || n.contains('self')) {
+    types.add('Мойка (самообслуживание)');
+  } else if (n.contains('робот') || n.contains('портал') || n.contains('tunnel') || n.contains('конвейер')) {
+    types.add('Мойка (робот)');
+  } else {
+    types.add('Мойка (классическая)');
+  }
+}
+
+List<String> _mapYandexCategoriesToTypes(List<dynamic>? categories, String poiName) {
   if (categories == null || categories.isEmpty) return ['Автосервис'];
   final types = <String>{};
   for (final c in categories) {
@@ -47,7 +64,9 @@ List<String> _mapYandexCategoriesToTypes(List<dynamic>? categories) {
       if (name.contains(e.key) || cls.contains(e.key)) types.add(e.value);
     }
   }
-  return types.isEmpty ? ['Автосервис'] : types.toList();
+  var list = types.isEmpty ? <String>['Автосервис'] : types.toList();
+  _refineWashSubtype(poiName, list);
+  return list;
 }
 
 /// Сервис поиска организаций в видимой области карты через Yandex Geosearch API.
@@ -173,9 +192,9 @@ class YandexGeosearchService {
         if (name.isEmpty) continue;
 
         final company = props['CompanyMetaData'] as Map<String, dynamic>?;
-        final id = company?['id']?.toString() ?? '${lat}_${lon}';
+        final id = company?['id']?.toString() ?? '${lat}_$lon';
         final categories = company?['Categories'] as List<dynamic>?;
-        final types = _mapYandexCategoriesToTypes(categories);
+        final types = _mapYandexCategoriesToTypes(categories, name);
 
         final addrMap = company?['Address'] as Map<String, dynamic>?;
         String? address = (addrMap?['formatted'] as String?)?.trim();

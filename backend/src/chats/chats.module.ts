@@ -12,6 +12,7 @@ import { Organization } from '../organizations/organization.entity';
 import { MediaModule } from '../media/media.module';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 import { ChatMessageAttachment } from './chat-message-attachment.entity';
+import { UsersModule } from '../users/users.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { ChatMessageAttachment } from './chat-message-attachment.entity';
     forwardRef(() => NotificationsModule),
     MediaModule,
     SubscriptionsModule,
+    UsersModule,
   ],
   controllers: [ChatsController],
   providers: [ChatsService],

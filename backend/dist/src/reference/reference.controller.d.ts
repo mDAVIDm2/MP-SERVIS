@@ -14,6 +14,7 @@ export declare class ReferenceController {
     }, body: Record<string, unknown>): Promise<{
         id: string;
     }>;
+    private static optPositiveInt;
     listPending(): Promise<{
         id: string;
         userId: string;
@@ -23,6 +24,10 @@ export declare class ReferenceController {
         pendingGeneration: string | null;
         status: string;
         createdAt: Date;
+        carSnapshotBrand: string | null;
+        carSnapshotModel: string | null;
+        carBrandId: number | null;
+        carModelId: number | null;
     }[]>;
     getServiceCatalog(organizationId?: string, businessKind?: string, req?: {
         user?: {

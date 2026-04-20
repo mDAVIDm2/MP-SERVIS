@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'app_colors_desktop.dart';
 
-/// Единая дизайн-система для desktop UI autohub_business.
+/// Единая дизайн-система для desktop UI MP-Servis Business (проект autohub_business).
 /// Spacing, радиусы, тени, типографика — один стиль для всех экранов.
 class DesktopDesignSystem {
   DesktopDesignSystem._();

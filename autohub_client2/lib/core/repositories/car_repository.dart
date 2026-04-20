@@ -1,4 +1,5 @@
 import '../../shared/models/car_model.dart';
+import '../../shared/models/order_model.dart';
 import '../api/api_exceptions.dart';
 
 /// Абстрактный репозиторий автомобилей.
@@ -28,6 +29,10 @@ abstract class CarRepository {
     String? drivetrain,
     String? bodyType,
     String? color,
+    /// Если задан — используется как [Car.id] (API и синхронизация с заказами).
+    String? preferredId,
+    /// Только API: пометка «восстановлено из заказов».
+    bool mergedFromOrders = false,
   });
 
   /// Обновить авто
@@ -50,6 +55,18 @@ abstract class CarRepository {
     required String generationName,
   });
 
+  /// Обновить марку/модель/поколение (и при необходимости никнейм) — после отклонения заявки или для исправления данных.
+  Future<Result<Car>> patchCarGarageReference(
+    String id, {
+    required String brand,
+    required String model,
+    String? generation,
+    int? brandId,
+    int? modelId,
+    int? generationId,
+    String? nickname,
+  });
+
   /// Обновить пробег
   Future<Result<Car>> updateMileage(String carId, int newMileage);
 
@@ -64,4 +81,12 @@ abstract class CarRepository {
 
   /// Скрыть напоминание
   Future<Result<void>> dismissReminder(String carId, String reminderId);
+
+  /// Подмешать машины из истории заказов (после переустановки приложения и т.п.).
+  /// Возвращает число добавленных или обновлённых записей.
+  /// [skipCarIds] — не создавать заново (пользователь удалил авто из гаража).
+  Future<Result<int>> mergeCarsFromOrders(
+    Iterable<Order> orders, {
+    Set<String> skipCarIds = const {},
+  });
 }

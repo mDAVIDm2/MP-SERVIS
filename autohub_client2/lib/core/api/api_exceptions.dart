@@ -1,5 +1,7 @@
 import 'package:dio/dio.dart';
 
+import '../config/app_config.dart';
+
 /// Коды ошибок API (из промта: ERROR HANDLING)
 enum ApiErrorCode {
   validation('ERR_VALIDATION', 'Ошибка валидации'),
@@ -41,6 +43,11 @@ class ApiException implements Exception {
 
   /// Создать из DioException
   factory ApiException.fromDioError(DioException error) {
+    final nested = error.error;
+    if (nested is ApiException) {
+      return nested;
+    }
+
     switch (error.type) {
       case DioExceptionType.connectionTimeout:
       case DioExceptionType.sendTimeout:
@@ -51,18 +58,55 @@ class ApiException implements Exception {
         );
 
       case DioExceptionType.connectionError:
-        return const ApiException(
+        return ApiException(
           code: ApiErrorCode.network,
-          message: 'Не удаётся подключиться к серверу. Проверьте, что бэкенд запущен и устройство в той же сети (в api_endpoints.dart указан IP сервера).',
+          message:
+              'Не удаётся подключиться к ${AppConfig.baseUrl}. Проверьте Nest на ПК, порт ${AppConfig.apiPort}, брандмауэр и что телефон в той же Wi‑Fi сети.',
         );
 
       case DioExceptionType.badResponse:
         return _fromResponse(error.response);
 
-      default:
+      case DioExceptionType.cancel:
+        return const ApiException(
+          code: ApiErrorCode.unknown,
+          message: 'Запрос отменён',
+        );
+
+      case DioExceptionType.badCertificate:
         return ApiException(
           code: ApiErrorCode.unknown,
-          message: error.message ?? 'Что-то пошло не так',
+          message:
+              'Проблема с сертификатом HTTPS (${error.message ?? 'недоверенный или просроченный'}). Для разработки используйте HTTP к API или корректный сертификат.',
+        );
+
+      case DioExceptionType.unknown:
+        final res = error.response;
+        if (res != null) {
+          return _fromResponse(res);
+        }
+        final dioMsg = (error.message ?? '').trim();
+        final typeName = error.type.name;
+        final under = (error.error?.toString().trim() ?? '');
+        final underPart = under.isNotEmpty && under != 'null' ? ' ($under)' : '';
+        final api = AppConfig.baseUrl;
+        if (dioMsg.isNotEmpty) {
+          return ApiException(
+            code: ApiErrorCode.unknown,
+            message: 'Сбой запроса ($typeName): $dioMsg$underPart. API: $api',
+          );
+        }
+        if (underPart.isNotEmpty) {
+          return ApiException(
+            code: ApiErrorCode.unknown,
+            message:
+                'Сбой сети ($typeName)$underPart. Проверьте $api, Nest на 0.0.0.0:${AppConfig.apiPort} и брандмауэр Windows.',
+          );
+        }
+        return ApiException(
+          code: ApiErrorCode.unknown,
+          message:
+              'Сбой запроса ($typeName). Проверьте $api, сеть и что сервер слушает 0.0.0.0:${AppConfig.apiPort}.',
         );
     }
   }

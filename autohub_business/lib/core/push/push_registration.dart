@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -10,33 +12,153 @@ import '../auth/auth_provider.dart';
 import '../config/platform_utils.dart';
 import '../repositories/organization_repository.dart';
 import '../router/app_router_provider.dart';
+import '../router/root_navigator_key.dart';
+import '../../features/chats/presentation/screens/chat_detail_screen.dart';
+import '../../features/orders/presentation/screens/order_detail_screen.dart';
 
-const _androidChannelId = 'autohub_business';
+const _androidChannelId = 'mp_servis_business';
 
-bool _organizationInviteDeepLinksAttached = false;
+/// Ref из [PushRegistrationListener] — для колбэков FCM / локальных уведомлений вне виджета.
+WidgetRef? _businessPushRef;
 
-/// Открытие экрана приглашений по тапу на push (data.type = organization_invite).
+FlutterLocalNotificationsPlugin? _businessLocalNotifications;
+bool _businessLocalNotificationsInitialized = false;
+
+bool _businessPushDeepLinksAttached = false;
+
+/// Тап по push: приглашение в организацию, заказ (клиент подтвердил/перенёс время и т.п.).
 void attachOrganizationInviteDeepLinks(WidgetRef ref) {
+  attachBusinessPushDeepLinks(ref);
+}
+
+void attachBusinessPushDeepLinks(WidgetRef ref) {
   if (!_isMobileNative) return;
-  if (_organizationInviteDeepLinksAttached) return;
-  _organizationInviteDeepLinksAttached = true;
+  _businessPushRef = ref;
+  if (_businessPushDeepLinksAttached) return;
+  _businessPushDeepLinksAttached = true;
 
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-    _navigateToInvitesIfNeeded(ref, message.data);
+    _handleNotificationTap(ref, message.data);
   });
   FirebaseMessaging.instance.getInitialMessage().then((message) {
     if (message == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _navigateToInvitesIfNeeded(ref, message.data);
+      _handleNotificationTap(ref, message.data);
     });
+  });
+
+  // Android: в foreground системная шторка часто не показывается — дублируем заказным пушем локальным уведомлением.
+  FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    if (message.data['type']?.toString() != 'order') return;
+    _showAndroidForegroundOrderNotification(message);
   });
 }
 
-void _navigateToInvitesIfNeeded(WidgetRef ref, Map<String, dynamic> data) {
+/// Открытие экрана после тапа (FCM, локальное уведомление). [ref] должен быть актуальным [WidgetRef].
+void _handleNotificationTap(WidgetRef ref, Map<String, dynamic> data) {
   final t = data['type']?.toString() ?? '';
-  if (t != 'organization_invite') return;
-  final router = ref.read(appRouterProvider);
-  router.go('/invitations');
+  if (t == 'organization_invite') {
+    final router = ref.read(appRouterProvider);
+    router.go('/invitations');
+    return;
+  }
+  if (t == 'order') {
+    final cid = data['chat_id']?.toString().trim() ?? '';
+    final oid = data['order_id']?.toString().trim() ?? '';
+    if (cid.isEmpty && oid.isEmpty) return;
+    final router = ref.read(appRouterProvider);
+    router.go('/app');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _pushOrderOrChatFromNotification(ref, chatId: cid, orderId: oid);
+      });
+    });
+    return;
+  }
+}
+
+Future<void> _pushOrderOrChatFromNotification(
+  WidgetRef ref, {
+  required String chatId,
+  required String orderId,
+}) async {
+  final nav = appRootNavigatorKey.currentState;
+  if (nav == null) return;
+
+  if (chatId.isNotEmpty) {
+    await ensureChatDataLoaded(ref, chatId);
+    if (!nav.mounted) return;
+    await nav.push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ChatDetailScreen(
+          chatId: chatId,
+          currentOrderId: orderId.isNotEmpty ? orderId : null,
+        ),
+      ),
+    );
+    return;
+  }
+
+  if (orderId.isNotEmpty) {
+    await nav.push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => OrderDetailScreen(orderId: orderId),
+      ),
+    );
+  }
+}
+
+Future<void> _showAndroidForegroundOrderNotification(RemoteMessage message) async {
+  final ref = _businessPushRef;
+  if (ref == null) return;
+  await _ensureBusinessLocalNotifications(ref);
+  final plugin = _businessLocalNotifications;
+  if (plugin == null) return;
+
+  final n = message.notification;
+  var title = (n?.title ?? message.data['title']?.toString() ?? '').trim();
+  if (title.isEmpty) title = 'Заказ';
+  final body = (n?.body ?? message.data['body']?.toString() ?? '').trim();
+  String payload;
+  try {
+    payload = jsonEncode(message.data);
+  } catch (_) {
+    payload = jsonEncode(<String, String>{
+      'type': message.data['type']?.toString() ?? 'order',
+      'order_id': message.data['order_id']?.toString() ?? '',
+      'chat_id': message.data['chat_id']?.toString() ?? '',
+    });
+  }
+
+  const androidDetails = AndroidNotificationDetails(
+    _androidChannelId,
+    'Бизнес: уведомления',
+    channelDescription: 'Сообщения клиентов, заказы',
+    importance: Importance.high,
+    priority: Priority.high,
+    playSound: true,
+    enableVibration: true,
+  );
+
+  final id = _foregroundNotificationId(message);
+  await plugin.show(
+    id: id,
+    title: title,
+    body: body.isNotEmpty ? body : 'Обновление по записи',
+    notificationDetails: const NotificationDetails(android: androidDetails),
+    payload: payload,
+  );
+}
+
+int _foregroundNotificationId(RemoteMessage message) {
+  final mid = message.messageId;
+  if (mid != null && mid.isNotEmpty) {
+    return mid.hashCode.abs() % 0x7fffffff;
+  }
+  final oid = message.data['order_id']?.toString() ?? '';
+  if (oid.isNotEmpty) return oid.hashCode.abs() % 0x7fffffff;
+  return DateTime.now().millisecondsSinceEpoch % 0x7fffffff;
 }
 
 bool get _isMobileNative =>
@@ -56,15 +178,30 @@ String _platform() {
   }
 }
 
-Future<void> _ensureAndroidNotificationChannel() async {
+Future<void> _ensureBusinessLocalNotifications(WidgetRef ref) async {
+  _businessPushRef = ref;
   if (defaultTargetPlatform != TargetPlatform.android) return;
+  if (_businessLocalNotificationsInitialized && _businessLocalNotifications != null) return;
+
   final plugin = FlutterLocalNotificationsPlugin();
   const android = AndroidInitializationSettings('@mipmap/ic_launcher');
   const ios = DarwinInitializationSettings();
   await plugin.initialize(
     settings: const InitializationSettings(android: android, iOS: ios),
-    onDidReceiveNotificationResponse: (_) {},
+    onDidReceiveNotificationResponse: (NotificationResponse response) {
+      final r = _businessPushRef;
+      if (r == null) return;
+      final p = response.payload;
+      if (p == null || p.isEmpty) return;
+      try {
+        final decoded = jsonDecode(p);
+        if (decoded is Map<String, dynamic>) {
+          _handleNotificationTap(r, decoded);
+        }
+      } catch (_) {}
+    },
   );
+  _businessLocalNotifications = plugin;
   final androidImpl = plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
   await androidImpl?.createNotificationChannel(
     const AndroidNotificationChannel(
@@ -77,6 +214,7 @@ Future<void> _ensureAndroidNotificationChannel() async {
     ),
   );
   await androidImpl?.requestNotificationsPermission();
+  _businessLocalNotificationsInitialized = true;
 }
 
 bool _refStillValid(bool Function()? refValid) => refValid == null || refValid();
@@ -88,7 +226,7 @@ Future<void> registerBusinessFcmIfNeeded(
 }) async {
   if (!_isMobileNative) return;
 
-  await _ensureAndroidNotificationChannel();
+  await _ensureBusinessLocalNotifications(ref);
   if (!_refStillValid(refValid)) return;
 
   await FirebaseMessaging.instance.requestPermission(alert: true, badge: true, sound: true);

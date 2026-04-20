@@ -56,7 +56,11 @@ let AuthOtpService = class AuthOtpService {
         const n = phone.replace(/\D/g, '');
         if (n.length < 10)
             throw new common_1.BadRequestException('Некорректный номер телефона');
-        return n.length === 10 ? `7${n}` : n;
+        if (n.length === 11 && n.startsWith('8'))
+            return '7' + n.slice(1);
+        if (n.length === 10 && !n.startsWith('7'))
+            return '7' + n;
+        return n;
     }
     resolveRecipient(params) {
         const hasEmail = params.email != null && String(params.email).trim() !== '';
@@ -120,11 +124,16 @@ let AuthOtpService = class AuthOtpService {
             recipientKind,
             requestedChannel,
         });
-        return {
+        const base = {
             challenge_id: row.id,
             expires_in: Math.floor(ttlMs / 1000),
             resend_after: Math.floor(RESEND_COOLDOWN_MS / 1000),
         };
+        const debugFlag = (this.config.get('OTP_DEBUG_RETURN_CODE') || '').trim().toLowerCase();
+        if (debugFlag === '1' || debugFlag === 'true' || debugFlag === 'yes') {
+            return { ...base, debug_otp: code };
+        }
+        return base;
     }
     async verifyChallenge(challengeId, code, expectedRecipient, expectedKind) {
         const row = await this.repo.findOne({ where: { id: challengeId } });

@@ -10,8 +10,8 @@ class PinVault {
       : _s = storage ?? const FlutterSecureStorage(aOptions: AndroidOptions(encryptedSharedPreferences: true));
 
   final FlutterSecureStorage _s;
-  static const _kSalt = 'autohub_pin_salt';
-  static const _kHash = 'autohub_pin_hash_b64';
+  static const _kSalt = 'mp_servis_pin_salt';
+  static const _kHash = 'mp_servis_pin_hash_b64';
 
   Future<bool> hasPin() async {
     final h = await _s.read(key: _kHash);

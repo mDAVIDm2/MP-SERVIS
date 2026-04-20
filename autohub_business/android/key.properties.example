@@ -1,0 +1,14 @@
+# Скопируйте в android/key.properties и заполните. Файл key.properties не коммитьте.
+# Положите JKS в android/app/ (имя как в storeFile ниже).
+#
+# Пример создания keystore (один раз):
+# Тот же JKS, что у клиента (или свой), alias mp_servis_release:
+# keytool -genkeypair -v -keystore app/mp_servis_release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias mp_servis_release
+#
+# В консоли Firebase добавьте приложение Android с package name: ru.mpservis.business
+# и скачайте google-services.json в android/app/
+
+storePassword=ЗАМЕНИТЕ
+keyPassword=ЗАМЕНИТЕ
+keyAlias=mp_servis_release
+storeFile=mp_servis_release.jks

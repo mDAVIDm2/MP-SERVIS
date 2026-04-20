@@ -28,7 +28,7 @@ class DashboardScreen extends ConsumerWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'Добро пожаловать в AutoHub Control Center. Выберите раздел для управления.',
+            'Добро пожаловать в MP-Servis Control Center. Выберите раздел для управления.',
             style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                   color: AppColors.textSecondary,
                 ),

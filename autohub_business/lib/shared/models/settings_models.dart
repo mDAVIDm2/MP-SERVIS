@@ -36,7 +36,7 @@ class ServiceItem {
   /// Требуемый навык мастера: MAINTENANCE, ENGINE, ELECTRICAL, DIAGNOSTICS, SUSPENSION, TIRES, BODY.
   final String? requiredSkill;
 
-  /// Id позиции из единого справочника AutoHub (`GET /reference/service-catalog`).
+  /// Id позиции из единого справочника MP-Servis (`GET /reference/service-catalog`).
   final String? catalogItemId;
 
   /// Включить отдельные цену/длительность по типу кузова.
@@ -84,8 +84,9 @@ class ServiceItem {
   }
 
   ServiceBodyTypePricing? pricingForBodyType(String? bodyType) {
-    if (!useBodyTypePricing || bodyType == null || bodyType.trim().isEmpty)
+    if (!useBodyTypePricing || bodyType == null || bodyType.trim().isEmpty) {
       return null;
+    }
     final normalized = bodyType.trim().toLowerCase();
     for (final p in bodyTypePricing) {
       if (p.bodyType.trim().toLowerCase() == normalized) return p;
@@ -179,14 +180,19 @@ class ServicePackageAddon {
   /// Наценка за услугу при выборе в пакете (может быть 0).
   final int extraPriceKopecks;
 
+  /// Доп. время при добавлении к комплексу; `0` — взять длительность из карточки услуги.
+  final int extraDurationMinutes;
+
   const ServicePackageAddon({
     required this.serviceId,
     this.extraPriceKopecks = 0,
+    this.extraDurationMinutes = 0,
   });
 
   Map<String, dynamic> toJson() => {
     'service_id': serviceId,
     'extra_price_kopecks': extraPriceKopecks,
+    if (extraDurationMinutes > 0) 'extra_duration_minutes': extraDurationMinutes,
   };
 
   factory ServicePackageAddon.fromJson(Map<String, dynamic> j) {
@@ -195,6 +201,10 @@ class ServicePackageAddon {
       extraPriceKopecks:
           j['extra_price_kopecks'] as int? ??
           j['extraPriceKopecks'] as int? ??
+          0,
+      extraDurationMinutes:
+          j['extra_duration_minutes'] as int? ??
+          j['extraDurationMinutes'] as int? ??
           0,
     );
   }
@@ -208,6 +218,9 @@ class ServicePackage {
   final List<String> includedServiceIds;
   final List<ServicePackageAddon> addons;
 
+  /// Длительность комплекса в минутах. `0` — в интерфейсе считается как сумма длительностей входящих услуг.
+  final int packageDurationMinutes;
+
   const ServicePackage({
     required this.id,
     required this.name,
@@ -215,6 +228,7 @@ class ServicePackage {
     required this.packagePriceKopecks,
     this.includedServiceIds = const [],
     this.addons = const [],
+    this.packageDurationMinutes = 0,
   });
 
   ServicePackage copyWith({
@@ -224,6 +238,7 @@ class ServicePackage {
     int? packagePriceKopecks,
     List<String>? includedServiceIds,
     List<ServicePackageAddon>? addons,
+    int? packageDurationMinutes,
   }) {
     return ServicePackage(
       id: id ?? this.id,
@@ -232,6 +247,7 @@ class ServicePackage {
       packagePriceKopecks: packagePriceKopecks ?? this.packagePriceKopecks,
       includedServiceIds: includedServiceIds ?? this.includedServiceIds,
       addons: addons ?? this.addons,
+      packageDurationMinutes: packageDurationMinutes ?? this.packageDurationMinutes,
     );
   }
 
@@ -242,6 +258,7 @@ class ServicePackage {
     'package_price_kopecks': packagePriceKopecks,
     'included_service_ids': includedServiceIds,
     'addons': addons.map((e) => e.toJson()).toList(),
+    if (packageDurationMinutes > 0) 'package_duration_minutes': packageDurationMinutes,
   };
 
   factory ServicePackage.fromJson(Map<String, dynamic> j) {
@@ -265,6 +282,10 @@ class ServicePackage {
           .whereType<Map<String, dynamic>>()
           .map(ServicePackageAddon.fromJson)
           .toList(),
+      packageDurationMinutes:
+          j['package_duration_minutes'] as int? ??
+          j['packageDurationMinutes'] as int? ??
+          0,
     );
   }
 }

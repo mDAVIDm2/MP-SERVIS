@@ -189,7 +189,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                     ),
                     const SizedBox(height: 28),
                     Text(
-                      'AutoHub Business',
+                      'MP-Servis Business',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: desktop ? 30 : 26,
@@ -357,6 +357,7 @@ class _EmailInputScreenState extends ConsumerState<EmailInputScreen> {
             email: email,
             challengeId: send.challengeId,
             resendAfterSec: send.resendAfter,
+            accountExists: send.accountExists,
           )),
         );
       },
@@ -510,12 +511,15 @@ class EmailOtpVerifyScreen extends ConsumerStatefulWidget {
   final String email;
   final String challengeId;
   final int resendAfterSec;
+  /// Уже есть пользователь с этим email — только код, без имени и телефона.
+  final bool accountExists;
 
   const EmailOtpVerifyScreen({
     super.key,
     required this.email,
     required this.challengeId,
     this.resendAfterSec = 60,
+    this.accountExists = false,
   });
 
   @override
@@ -531,13 +535,18 @@ class _EmailOtpVerifyScreenState extends ConsumerState<EmailOtpVerifyScreen> {
   bool _resendBusy = false;
   late String _challengeId;
   late int _resendSeconds;
+  /// Актуально после повторной отправки кода (флаг с сервера может измениться).
+  late bool _accountExists;
   Timer? _timer;
 
   @override
   void initState() {
     super.initState();
     _challengeId = widget.challengeId;
-    _phoneOpt.text = '+7 ';
+    _accountExists = widget.accountExists;
+    if (!_accountExists) {
+      _phoneOpt.text = '+7 ';
+    }
     _startResendCountdown(widget.resendAfterSec.clamp(1, 600), rebuild: false);
   }
 
@@ -579,8 +588,8 @@ class _EmailOtpVerifyScreenState extends ConsumerState<EmailOtpVerifyScreen> {
           widget.email,
           _challengeId,
           code,
-          phoneUnverified: _optionalPhoneUnverified(_phoneOpt.text),
-          name: _nameOpt.text.trim().isEmpty ? null : _nameOpt.text.trim(),
+          phoneUnverified: _accountExists ? null : _optionalPhoneUnverified(_phoneOpt.text),
+          name: _accountExists ? null : (_nameOpt.text.trim().isEmpty ? null : _nameOpt.text.trim()),
         );
     if (!mounted) return;
     setState(() => _busy = false);
@@ -604,7 +613,10 @@ class _EmailOtpVerifyScreenState extends ConsumerState<EmailOtpVerifyScreen> {
     setState(() => _resendBusy = false);
     result.when(
       success: (send) {
-        setState(() => _challengeId = send.challengeId);
+        setState(() {
+          _challengeId = send.challengeId;
+          _accountExists = send.accountExists;
+        });
         _codeController.clear();
         _startResendCountdown(send.resendAfter.clamp(1, 600), rebuild: true);
         ScaffoldMessenger.of(context).showSnackBar(
@@ -658,7 +670,7 @@ class _EmailOtpVerifyScreenState extends ConsumerState<EmailOtpVerifyScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Код из письма',
+                      _accountExists ? 'Вход в аккаунт' : 'Регистрация',
                       style: TextStyle(
                         fontSize: desktop ? 24 : 22,
                         fontWeight: FontWeight.w700,
@@ -667,7 +679,9 @@ class _EmailOtpVerifyScreenState extends ConsumerState<EmailOtpVerifyScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Введите 6 цифр для $masked. Номер телефона ниже сохранится без подтверждения.',
+                      _accountExists
+                          ? 'Введите 6 цифр из письма для $masked. Дополнительные данные не нужны.'
+                          : 'Введите 6 цифр для $masked. При первой регистрации можно указать имя и телефон — номер сохранится без подтверждения.',
                       style: TextStyle(
                         fontSize: desktop ? 14 : 13,
                         height: 1.4,
@@ -698,11 +712,15 @@ class _EmailOtpVerifyScreenState extends ConsumerState<EmailOtpVerifyScreen> {
                           maxLength: 6,
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            fontSize: 28,
+                            fontSize: 26,
                             fontWeight: FontWeight.w700,
-                            letterSpacing: 10,
+                            letterSpacing: 8,
                             color: p.textPrimary,
+                            height: 1.2,
                           ),
+                          cursorColor: p.primary,
+                          cursorHeight: 26,
+                          cursorWidth: 2,
                           decoration: InputDecoration(
                             counterText: '',
                             hintText: '••••••',
@@ -712,6 +730,8 @@ class _EmailOtpVerifyScreenState extends ConsumerState<EmailOtpVerifyScreen> {
                             ),
                             errorText: _error,
                             border: InputBorder.none,
+                            isDense: true,
+                            contentPadding: const EdgeInsets.symmetric(vertical: 10),
                           ),
                           inputFormatters: [
                             FilteringTextInputFormatter.digitsOnly,
@@ -721,58 +741,61 @@ class _EmailOtpVerifyScreenState extends ConsumerState<EmailOtpVerifyScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 20),
-                    Text(
-                      'Имя (необязательно)',
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: p.textSecondary),
-                    ),
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: _nameOpt,
-                      textCapitalization: TextCapitalization.words,
-                      style: TextStyle(fontSize: 16, color: p.textPrimary),
-                      decoration: InputDecoration(
-                        hintText: 'Как к вам обращаться',
-                        hintStyle: TextStyle(color: p.textSecondary.withValues(alpha: 0.55)),
-                        filled: true,
-                        fillColor: p.surface,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(desktop ? DesktopDesignSystem.radiusCard : 14),
-                          borderSide: BorderSide(color: p.border),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(desktop ? DesktopDesignSystem.radiusCard : 14),
-                          borderSide: BorderSide(color: p.border),
+                    if (!_accountExists) ...[
+                      const SizedBox(height: 20),
+                      Text(
+                        'Имя (необязательно)',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: p.textSecondary),
+                      ),
+                      const SizedBox(height: 6),
+                      TextField(
+                        controller: _nameOpt,
+                        textCapitalization: TextCapitalization.words,
+                        style: TextStyle(fontSize: 16, color: p.textPrimary),
+                        decoration: InputDecoration(
+                          hintText: 'Как к вам обращаться',
+                          hintStyle: TextStyle(color: p.textSecondary.withValues(alpha: 0.55)),
+                          filled: true,
+                          fillColor: p.surface,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(desktop ? DesktopDesignSystem.radiusCard : 14),
+                            borderSide: BorderSide(color: p.border),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(desktop ? DesktopDesignSystem.radiusCard : 14),
+                            borderSide: BorderSide(color: p.border),
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 14),
-                    Text(
-                      'Телефон (необязательно, без подтверждения)',
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: p.textSecondary),
-                    ),
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: _phoneOpt,
-                      keyboardType: TextInputType.phone,
-                      style: TextStyle(fontSize: 16, color: p.textPrimary),
-                      inputFormatters: [_RuPhoneInputFormatter()],
-                      decoration: InputDecoration(
-                        hintText: '+7 (999) 123-45-67',
-                        hintStyle: TextStyle(color: p.textSecondary.withValues(alpha: 0.55)),
-                        filled: true,
-                        fillColor: p.surface,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(desktop ? DesktopDesignSystem.radiusCard : 14),
-                          borderSide: BorderSide(color: p.border),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(desktop ? DesktopDesignSystem.radiusCard : 14),
-                          borderSide: BorderSide(color: p.border),
+                      const SizedBox(height: 14),
+                      Text(
+                        'Телефон (необязательно, без подтверждения)',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: p.textSecondary),
+                      ),
+                      const SizedBox(height: 6),
+                      TextField(
+                        controller: _phoneOpt,
+                        keyboardType: TextInputType.phone,
+                        style: TextStyle(fontSize: 16, color: p.textPrimary),
+                        inputFormatters: [_RuPhoneInputFormatter()],
+                        decoration: InputDecoration(
+                          hintText: '+7 (999) 123-45-67',
+                          hintStyle: TextStyle(color: p.textSecondary.withValues(alpha: 0.55)),
+                          filled: true,
+                          fillColor: p.surface,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(desktop ? DesktopDesignSystem.radiusCard : 14),
+                            borderSide: BorderSide(color: p.border),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(desktop ? DesktopDesignSystem.radiusCard : 14),
+                            borderSide: BorderSide(color: p.border),
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 16),
+                      const SizedBox(height: 16),
+                    ] else
+                      const SizedBox(height: 8),
                     Align(
                       alignment: Alignment.center,
                       child: _resendSeconds > 0

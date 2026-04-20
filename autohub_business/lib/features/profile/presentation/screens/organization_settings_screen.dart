@@ -1,18 +1,31 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import '../../../../core/config/app_config.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/app_colors_desktop.dart';
+import '../../../../core/theme/desktop_design_system.dart';
+import '../../../../core/theme/desktop_light_theme.dart';
 import '../../../../core/auth/auth_provider.dart';
 import '../../../../core/repositories/organization_repository.dart';
 import 'package:latlong2/latlong.dart';
 import '../../../../shared/models/organization_model.dart';
 import '../../../../shared/models/organization_business_kind.dart';
 import 'map_picker_screen.dart';
+import '../widgets/create_organization_flow.dart';
 
 class OrganizationSettingsScreen extends ConsumerStatefulWidget {
-  const OrganizationSettingsScreen({super.key});
+  const OrganizationSettingsScreen({
+    super.key,
+    this.desktopChrome = false,
+    this.desktopEmbedInWorkspace = false,
+  });
+
+  /// Светлая центрированная вёрстка для вкладки «Мой сервис» на desktop.
+  final bool desktopChrome;
+
+  /// В единой карточке [OrganizationDesktopWorkspace]: без AppBar и без вложенной узкой колонки.
+  final bool desktopEmbedInWorkspace;
 
   @override
   ConsumerState<OrganizationSettingsScreen> createState() => _OrganizationSettingsScreenState();
@@ -23,8 +36,11 @@ class _OrganizationSettingsScreenState extends ConsumerState<OrganizationSetting
   late TextEditingController _addressController;
   late TextEditingController _phoneController;
   late TextEditingController _hoursController;
+  late final PageController _photoPageController;
   bool _initialized = false;
   bool _uploadingPhoto = false;
+  bool _deletingPhoto = false;
+  int _photoIndex = 0;
   double? _latitude;
   double? _longitude;
   String _businessKindCode = OrganizationBusinessKindCodes.sto;
@@ -36,10 +52,12 @@ class _OrganizationSettingsScreenState extends ConsumerState<OrganizationSetting
     _addressController = TextEditingController();
     _phoneController = TextEditingController();
     _hoursController = TextEditingController();
+    _photoPageController = PageController(viewportFraction: 0.88);
   }
 
   @override
   void dispose() {
+    _photoPageController.dispose();
     _nameController.dispose();
     _addressController.dispose();
     _phoneController.dispose();
@@ -50,11 +68,17 @@ class _OrganizationSettingsScreenState extends ConsumerState<OrganizationSetting
   Future<void> _pickAndUploadPhoto(String? orgId) async {
     if (orgId == null || orgId.isEmpty || _uploadingPhoto) return;
     final picker = ImagePicker();
-    final xFile = await picker.pickImage(source: ImageSource.gallery, maxWidth: 1920, imageQuality: 85);
+    final xFile = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 1920,
+      imageQuality: 85,
+      requestFullMetadata: false,
+    );
     if (xFile == null || !mounted) return;
     setState(() => _uploadingPhoto = true);
-    final file = File(xFile.path);
-    final result = await ref.read(organizationRepositoryProvider.notifier).addPhoto(orgId, file);
+    final bytes = await xFile.readAsBytes();
+    final name = xFile.name.trim().isNotEmpty ? xFile.name.trim() : 'service_photo.jpg';
+    final result = await ref.read(organizationRepositoryProvider.notifier).addPhotoBytes(orgId, bytes, name);
     if (!mounted) return;
     setState(() => _uploadingPhoto = false);
     result.when(
@@ -67,34 +91,278 @@ class _OrganizationSettingsScreenState extends ConsumerState<OrganizationSetting
     );
   }
 
-  Widget _buildPhotosSection(OrganizationInfo org) {
+  List<String> _rawPhotoUrls(OrganizationInfo org) {
+    return org.photoUrls.where((u) => u.isNotEmpty).toList();
+  }
+
+  String _displayPhotoUrl(String raw) => AppConfig.resolveApiMediaUrl(raw) ?? raw;
+
+  Future<void> _saveOrganizationData(BuildContext context) async {
+    final d = widget.desktopChrome;
+    final messenger = ScaffoldMessenger.of(context);
+    final currentOrg = ref.read(organizationProvider).valueOrNull;
+    final authUser = ref.read(authProvider).user;
+    final orgIdForSave = authUser?.effectiveOrganizationId;
+    final canEditOrg = authUser?.effectiveCanManageOrgSettings ?? false;
+    if (!canEditOrg ||
+        currentOrg == null ||
+        orgIdForSave == null ||
+        orgIdForSave.isEmpty) {
+      return;
+    }
+    final org = currentOrg.copyWith(
+      name: _nameController.text.trim(),
+      address: _addressController.text.trim(),
+      phone: _phoneController.text.trim(),
+      workingHours: _hoursController.text.trim(),
+      businessKind: _businessKindCode,
+      latitude: _latitude,
+      longitude: _longitude,
+    );
+    final result = await ref.read(organizationRepositoryProvider.notifier).update(org);
+    if (!context.mounted) return;
+    result.when(
+      success: (_) => messenger.showSnackBar(
+        SnackBar(
+          content: const Text('Сохранено'),
+          backgroundColor: d ? AppColorsDesktop.nestedBg : AppColors.cardBg,
+          behavior: SnackBarBehavior.floating,
+        ),
+      ),
+      failure: (e) => messenger.showSnackBar(
+        SnackBar(
+          content: Text(e.message),
+          backgroundColor: d ? AppColorsDesktop.error : AppColors.error,
+          behavior: SnackBarBehavior.floating,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmAndDeletePhoto(String? orgId, String rawUrl) async {
+    if (orgId == null || orgId.isEmpty || _deletingPhoto || _uploadingPhoto) return;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Удалить фото?'),
+        content: const Text('Снимок пропадёт из карточки точки у клиентов.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
+            child: const Text('Удалить'),
+          ),
+        ],
+      ),
+    );
+    if (go != true || !mounted) return;
+    setState(() => _deletingPhoto = true);
+    final result = await ref.read(organizationRepositoryProvider.notifier).deletePhoto(orgId, rawUrl);
+    if (!mounted) return;
+    setState(() => _deletingPhoto = false);
+    result.when(
+      success: (_) {
+        final org = ref.read(organizationRepositoryProvider).valueOrNull;
+        final n = org != null ? _rawPhotoUrls(org).length : 0;
+        if (!mounted) return;
+        setState(() {
+          if (n == 0) {
+            _photoIndex = 0;
+          } else if (_photoIndex >= n) {
+            _photoIndex = n - 1;
+          }
+        });
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          if (n > 0 && _photoPageController.hasClients) {
+            _photoPageController.jumpToPage(_photoIndex.clamp(0, n - 1));
+          }
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Фото удалено'), backgroundColor: AppColors.cardBg),
+        );
+      },
+      failure: (e) => ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message), backgroundColor: AppColors.error),
+      ),
+    );
+  }
+
+  Widget _buildPhotosCarouselDesktop(OrganizationInfo org, {required bool canEdit}) {
     final orgId = ref.read(authProvider).user?.organizationId;
-    final photos = org.photoUrls.where((u) => u.isNotEmpty).toList();
+    final raws = _rawPhotoUrls(org);
+    final errBg = AppColorsDesktop.nestedBg.withValues(alpha: 0.55);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          height: 268,
+          child: PageView.builder(
+            controller: _photoPageController,
+            itemCount: raws.isEmpty ? 1 : raws.length,
+            onPageChanged: (i) => setState(() => _photoIndex = i),
+            itemBuilder: (context, i) {
+              if (raws.isEmpty) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(20),
+                    child: Container(
+                      color: errBg,
+                      alignment: Alignment.center,
+                      child: Text(
+                        'Добавьте фотографии — они покажутся в карточке точки у клиентов',
+                        textAlign: TextAlign.center,
+                        style: DesktopDesignSystem.bodySecondary.copyWith(height: 1.4),
+                      ),
+                    ),
+                  ),
+                );
+              }
+              final raw = raws[i];
+              final url = _displayPhotoUrl(raw);
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(20),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Image.network(
+                        url,
+                        fit: BoxFit.cover,
+                        width: double.infinity,
+                        errorBuilder: (_, __, ___) => Container(
+                          color: errBg,
+                          alignment: Alignment.center,
+                          child: const Icon(Icons.broken_image_outlined, color: AppColorsDesktop.textTertiary, size: 40),
+                        ),
+                      ),
+                      if (canEdit)
+                        Positioned(
+                          top: 10,
+                          right: 10,
+                          child: Material(
+                            color: Colors.black.withValues(alpha: 0.45),
+                            shape: const CircleBorder(),
+                            clipBehavior: Clip.antiAlias,
+                            child: IconButton(
+                              tooltip: 'Удалить фото',
+                              icon: const Icon(Icons.delete_outline_rounded, color: Colors.white),
+                              onPressed: _uploadingPhoto || _deletingPhoto
+                                  ? null
+                                  : () => _confirmAndDeletePhoto(orgId, raw),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        if (raws.length > 1) ...[
+          const SizedBox(height: 14),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(
+              raws.length,
+              (i) => Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 3),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  width: _photoIndex == i ? 24 : 7,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(4),
+                    color: _photoIndex == i ? AppColorsDesktop.primary : AppColorsDesktop.border,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+        const SizedBox(height: 16),
+        Center(
+          child: OutlinedButton.icon(
+            onPressed: !canEdit || _uploadingPhoto || _deletingPhoto ? null : () => _pickAndUploadPhoto(orgId),
+            icon: _uploadingPhoto
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: AppColorsDesktop.primary),
+                  )
+                : const Icon(Icons.add_photo_alternate_outlined, size: 20),
+            label: Text(_uploadingPhoto ? 'Загрузка…' : 'Добавить фото'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColorsDesktop.primary,
+              side: BorderSide(color: AppColorsDesktop.primary.withValues(alpha: 0.4)),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPhotosSection(OrganizationInfo org, {required bool canEdit}) {
+    if (widget.desktopChrome) return _buildPhotosCarouselDesktop(org, canEdit: canEdit);
+    final orgId = ref.read(authProvider).user?.organizationId;
+    final raws = _rawPhotoUrls(org);
     return SizedBox(
       height: 120,
       child: ListView(
         scrollDirection: Axis.horizontal,
         children: [
-          ...photos.map((url) => Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.network(
-                url,
-                width: 120,
-                height: 120,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => Container(
-                  width: 120,
-                  height: 120,
-                  color: AppColors.cardBg,
-                  child: const Icon(Icons.broken_image_outlined, color: AppColors.textTertiary),
+          ...raws.map((raw) {
+            final url = _displayPhotoUrl(raw);
+            return Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Stack(
+                  children: [
+                    Image.network(
+                      url,
+                      width: 120,
+                      height: 120,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(
+                        width: 120,
+                        height: 120,
+                        color: AppColors.cardBg,
+                        child: const Icon(Icons.broken_image_outlined, color: AppColors.textTertiary),
+                      ),
+                    ),
+                    if (canEdit)
+                      Positioned(
+                        top: 4,
+                        right: 4,
+                        child: Material(
+                          color: Colors.black.withValues(alpha: 0.45),
+                          shape: const CircleBorder(),
+                          clipBehavior: Clip.antiAlias,
+                          child: InkWell(
+                            onTap: _uploadingPhoto || _deletingPhoto ? null : () => _confirmAndDeletePhoto(orgId, raw),
+                            customBorder: const CircleBorder(),
+                            child: const Padding(
+                              padding: EdgeInsets.all(6),
+                              child: Icon(Icons.delete_outline_rounded, color: Colors.white, size: 20),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ),
-            ),
-          )),
+            );
+          }),
+          if (canEdit)
           GestureDetector(
-            onTap: _uploadingPhoto ? null : () => _pickAndUploadPhoto(orgId),
+            onTap: _uploadingPhoto || _deletingPhoto ? null : () => _pickAndUploadPhoto(orgId),
             child: Container(
               width: 120,
               height: 120,
@@ -126,52 +394,91 @@ class _OrganizationSettingsScreenState extends ConsumerState<OrganizationSetting
     );
   }
 
+  Widget _buildSoloWithoutOrganizationScaffold(BuildContext context, bool d) {
+    final bg = d ? AppColorsDesktop.background : AppColors.background;
+    final textPri = d ? AppColorsDesktop.textPrimary : AppColors.textPrimary;
+    final textSec = d ? AppColorsDesktop.textSecondary : AppColors.textSecondary;
+
+    final body = Center(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: d ? 520 : 400),
+        child: Padding(
+          padding: EdgeInsets.all(d ? 32 : 24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.storefront_outlined,
+                size: d ? 72 : 64,
+                color: d ? AppColorsDesktop.primary.withValues(alpha: 0.85) : AppColors.primary.withValues(alpha: 0.85),
+              ),
+              const SizedBox(height: 24),
+              Text(
+                'Организация ещё не создана',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: d ? 22 : 20,
+                  fontWeight: FontWeight.w700,
+                  color: textPri,
+                  height: 1.25,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Создайте точку — ей присвоится ID, вы сможете указать адрес и отметить её на карте для клиентов, затем настроить услуги и расписание.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: d ? 15 : 14, height: 1.45, color: textSec),
+              ),
+              const SizedBox(height: 28),
+              FilledButton.icon(
+                onPressed: () => createOrganizationWithOptionalSoloOnboarding(context, ref, desktopChrome: d),
+                icon: const Icon(Icons.add_business_rounded),
+                label: const Text('Создать организацию'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: d ? AppColorsDesktop.primary : AppColors.primary,
+                  foregroundColor: Colors.white,
+                  padding: EdgeInsets.symmetric(horizontal: 24, vertical: d ? 16 : 14),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    final scaffold = Scaffold(
+      backgroundColor: bg,
+      appBar: AppBar(
+        centerTitle: d,
+        title: Text(d ? 'Данные организации' : 'Организация'),
+        backgroundColor: d ? AppColorsDesktop.surface : null,
+        foregroundColor: d ? AppColorsDesktop.textPrimary : null,
+        surfaceTintColor: d ? Colors.transparent : null,
+        elevation: d ? 0 : null,
+      ),
+      body: body,
+    );
+    return d ? themeDesktopLight(child: scaffold) : scaffold;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final orgAsync = ref.watch(organizationProvider);
+    final authUser = ref.watch(authProvider).user;
+    final d = widget.desktopChrome;
+    final soloWithoutOrg = authUser != null &&
+        authUser.role == BusinessRole.solo &&
+        authUser.effectiveOrganizationId == null;
 
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      appBar: AppBar(
-        title: const Text('Организация'),
-        actions: [
-          TextButton(
-            onPressed: orgAsync.valueOrNull == null
-                ? null
-                : () async {
-                    final messenger = ScaffoldMessenger.of(context);
-                    final currentOrg = orgAsync.valueOrNull;
-                    final org = (currentOrg ?? const OrganizationInfo()).copyWith(
-                      name: _nameController.text.trim(),
-                      address: _addressController.text.trim(),
-                      phone: _phoneController.text.trim(),
-                      workingHours: _hoursController.text.trim(),
-                      businessKind: _businessKindCode,
-                      latitude: _latitude,
-                      longitude: _longitude,
-                    );
-                    final result = await ref.read(organizationRepositoryProvider.notifier).update(org);
-                    if (!context.mounted) return;
-                    result.when(
-                      success: (_) => messenger.showSnackBar(
-                        const SnackBar(
-                          content: Text('Сохранено'),
-                          backgroundColor: AppColors.cardBg,
-                        ),
-                      ),
-                      failure: (e) => messenger.showSnackBar(
-                        SnackBar(
-                          content: Text(e.message),
-                          backgroundColor: AppColors.error,
-                        ),
-                      ),
-                    );
-                  },
-            child: const Text('Сохранить'),
-          ),
-        ],
-      ),
-      body: orgAsync.when(
+    if (soloWithoutOrg) {
+      return _buildSoloWithoutOrganizationScaffold(context, d);
+    }
+
+    final orgAsync = ref.watch(organizationProvider);
+    final orgIdForSave = authUser?.effectiveOrganizationId;
+    final canEditOrg = authUser?.effectiveCanManageOrgSettings ?? false;
+    final embed = d && widget.desktopEmbedInWorkspace;
+
+    final body = orgAsync.when(
         data: (org) {
           if (!_initialized) {
             _initialized = true;
@@ -183,32 +490,88 @@ class _OrganizationSettingsScreenState extends ConsumerState<OrganizationSetting
             _longitude = org.longitude;
             _businessKindCode = org.businessKind;
           }
-          return RefreshIndicator(
-            onRefresh: () async {
-              final orgId = ref.read(authProvider).user?.organizationId;
-              await ref.read(organizationRepositoryProvider.notifier).load(orgId);
-            },
-            child: ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-              const Text(
-                'Фотографии автосервиса',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary,
+          final listChildren = <Widget>[
+              if (embed && canEditOrg)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: orgAsync.valueOrNull == null ||
+                              orgIdForSave == null ||
+                              orgIdForSave.isEmpty
+                          ? null
+                          : () => _saveOrganizationData(context),
+                      child: Text(
+                        'Сохранить',
+                        style: TextStyle(
+                          color: AppColorsDesktop.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Отображаются в верхней части карточки точки у клиентов',
-                style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
-              ),
-              const SizedBox(height: 12),
-              _buildPhotosSection(org),
-              const SizedBox(height: 24),
+              if (!canEditOrg)
+                Padding(
+                  padding: EdgeInsets.only(bottom: d ? 16 : 12),
+                  child: Text(
+                    'Изменение данных организации недоступно для вашей роли.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.35,
+                      color: d ? AppColorsDesktop.textSecondary : AppColors.textSecondary,
+                    ),
+                  ),
+                ),
+              if (d && !embed) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'Фотографии точки',
+                  textAlign: TextAlign.center,
+                  style: DesktopDesignSystem.sectionTitle.copyWith(fontSize: 17),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Листайте галерею — фото показываются клиентам в карточке сервиса',
+                  textAlign: TextAlign.center,
+                  style: DesktopDesignSystem.bodySecondary.copyWith(height: 1.45),
+                ),
+                const SizedBox(height: 20),
+              ],
+              if (d && embed) ...[
+                Text(
+                  'Фотографии точки',
+                  style: DesktopDesignSystem.sectionTitle.copyWith(fontSize: 15),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Показываются клиентам в карточке сервиса',
+                  style: DesktopDesignSystem.bodySecondary.copyWith(fontSize: 12, height: 1.35),
+                ),
+                const SizedBox(height: 12),
+              ],
+              if (!d) ...[
+                const Text(
+                  'Фотографии автосервиса',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Отображаются в верхней части карточки точки у клиентов',
+                  style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                ),
+                const SizedBox(height: 12),
+              ],
+              _buildPhotosSection(org, canEdit: canEditOrg),
+              SizedBox(height: d ? 32 : 24),
               TextField(
                 controller: _nameController,
+                readOnly: !canEditOrg,
                 decoration: const InputDecoration(
                   labelText: 'Название',
                   hintText: 'Мой автосервис',
@@ -226,14 +589,17 @@ class _OrganizationSettingsScreenState extends ConsumerState<OrganizationSetting
                 items: OrganizationBusinessKindCodes.options
                     .map((e) => DropdownMenuItem<String>(value: e.$1, child: Text(e.$2)))
                     .toList(),
-                onChanged: (v) {
-                  if (v == null) return;
-                  setState(() => _businessKindCode = v);
-                },
+                onChanged: canEditOrg
+                    ? (v) {
+                        if (v == null) return;
+                        setState(() => _businessKindCode = v);
+                      }
+                    : null,
               ),
               const SizedBox(height: 16),
               TextField(
                 controller: _addressController,
+                readOnly: !canEditOrg,
                 decoration: const InputDecoration(
                   labelText: 'Адрес',
                   hintText: 'г. Москва, ул. Примерная, 1',
@@ -243,71 +609,134 @@ class _OrganizationSettingsScreenState extends ConsumerState<OrganizationSetting
               const SizedBox(height: 16),
               TextField(
                 controller: _phoneController,
+                readOnly: !canEditOrg,
                 decoration: const InputDecoration(
                   labelText: 'Телефон',
                   hintText: '+7 (999) 123-45-67',
                 ),
                 keyboardType: TextInputType.phone,
               ),
-              const SizedBox(height: 20),
-              const Text(
+              SizedBox(height: d ? 28 : 20),
+              Text(
                 'Точка на карте',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary,
-                ),
+                textAlign: d && !embed ? TextAlign.center : TextAlign.start,
+                style: d
+                    ? DesktopDesignSystem.sectionTitle.copyWith(fontSize: embed ? 15 : 17)
+                    : const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
               ),
               const SizedBox(height: 4),
-              const Text(
+              Text(
                 'Укажите местоположение точки для отображения на карте у клиентов',
-                style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                textAlign: d && !embed ? TextAlign.center : TextAlign.start,
+                style: d
+                    ? DesktopDesignSystem.bodySecondary.copyWith(
+                        height: 1.45,
+                        fontSize: embed ? 12 : null,
+                      )
+                    : const TextStyle(fontSize: 12, color: AppColors.textSecondary),
               ),
               const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
+              if (d)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
                       _latitude != null && _longitude != null
                           ? '${_latitude!.toStringAsFixed(5)}, ${_longitude!.toStringAsFixed(5)}'
                           : 'Не указана',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: AppColors.textSecondary,
+                      textAlign: embed ? TextAlign.start : TextAlign.center,
+                      style: DesktopDesignSystem.body.copyWith(
+                        color: AppColorsDesktop.textSecondary,
+                        fontWeight: FontWeight.w500,
+                        fontSize: embed ? 13 : null,
                       ),
                     ),
-                  ),
-                  FilledButton.icon(
-                    onPressed: () async {
-                      final result = await Navigator.of(context).push<dynamic>(
-                        MaterialPageRoute(
-                          builder: (context) => MapPickerScreen(
-                            initialLat: _latitude,
-                            initialLng: _longitude,
-                          ),
+                    const SizedBox(height: 14),
+                    Align(
+                      alignment: embed ? Alignment.centerLeft : Alignment.center,
+                      child: FilledButton.icon(
+                        onPressed: !canEditOrg
+                            ? null
+                            : () async {
+                          final result = await Navigator.of(context).push<dynamic>(
+                            MaterialPageRoute(
+                              builder: (context) => MapPickerScreen(
+                                initialLat: _latitude,
+                                initialLng: _longitude,
+                              ),
+                            ),
+                          );
+                          if (!mounted) return;
+                          if (result == null) {
+                            setState(() {
+                              _latitude = null;
+                              _longitude = null;
+                            });
+                          } else if (result is LatLng) {
+                            setState(() {
+                              _latitude = (result as LatLng).latitude;
+                              _longitude = (result as LatLng).longitude;
+                            });
+                          }
+                        },
+                        icon: const Icon(Icons.map_outlined, size: 20),
+                        label: const Text('Указать на карте'),
+                      ),
+                    ),
+                  ],
+                )
+              else
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _latitude != null && _longitude != null
+                            ? '${_latitude!.toStringAsFixed(5)}, ${_longitude!.toStringAsFixed(5)}'
+                            : 'Не указана',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: AppColors.textSecondary,
                         ),
-                      );
-                      if (!mounted) return;
-                      if (result == null) {
-                        setState(() {
-                          _latitude = null;
-                          _longitude = null;
-                        });
-                      } else if (result is LatLng) {
-                        setState(() {
-                          _latitude = (result as LatLng).latitude;
-                          _longitude = (result as LatLng).longitude;
-                        });
-                      }
-                    },
-                    icon: const Icon(Icons.map_outlined, size: 20),
-                    label: const Text('Указать на карте'),
-                  ),
-                ],
-              ),
+                      ),
+                    ),
+                    FilledButton.icon(
+                      onPressed: !canEditOrg
+                          ? null
+                          : () async {
+                        final result = await Navigator.of(context).push<dynamic>(
+                          MaterialPageRoute(
+                            builder: (context) => MapPickerScreen(
+                              initialLat: _latitude,
+                              initialLng: _longitude,
+                            ),
+                          ),
+                        );
+                        if (!mounted) return;
+                        if (result == null) {
+                          setState(() {
+                            _latitude = null;
+                            _longitude = null;
+                          });
+                        } else if (result is LatLng) {
+                          setState(() {
+                            _latitude = (result as LatLng).latitude;
+                            _longitude = (result as LatLng).longitude;
+                          });
+                        }
+                      },
+                      icon: const Icon(Icons.map_outlined, size: 20),
+                      label: const Text('Указать на карте'),
+                    ),
+                  ],
+                ),
               const SizedBox(height: 16),
               TextField(
                 controller: _hoursController,
+                readOnly: !canEditOrg,
                 decoration: const InputDecoration(
                   labelText: 'Часы работы',
                   hintText: 'Пн–Пт 9:00–19:00',
@@ -322,85 +751,102 @@ class _OrganizationSettingsScreenState extends ConsumerState<OrganizationSetting
                   return Padding(
                     padding: const EdgeInsets.only(top: 28),
                     child: OutlinedButton.icon(
-                      onPressed: () async {
-                        final name = await showDialog<String>(
-                          context: context,
-                          builder: (ctx) => const _NewOrganizationDialog(),
-                        );
-                        if (name == null || name.isEmpty || !context.mounted) return;
-                        final messenger = ScaffoldMessenger.of(context);
-                        final r = await ref.read(authProvider.notifier).createAdditionalOrganization(name: name);
-                        if (!context.mounted) return;
-                        r.when(
-                          success: (_) {
-                            messenger.showSnackBar(
-                              const SnackBar(content: Text('Организация создана'), backgroundColor: AppColors.cardBg),
-                            );
-                            final newOrgId = ref.read(authProvider).user?.organizationId;
-                            ref.read(organizationRepositoryProvider.notifier).load(newOrgId);
-                          },
-                          failure: (e) => messenger.showSnackBar(
-                            SnackBar(content: Text(e.message), backgroundColor: AppColors.error),
-                          ),
-                        );
-                      },
+                      onPressed: () => createOrganizationWithOptionalSoloOnboarding(context, ref, desktopChrome: d),
                       icon: const Icon(Icons.add_business_outlined),
                       label: const Text('Добавить организацию'),
                     ),
                   );
                 },
               ),
-            ],
-            ),
+            ];
+          final listView = ListView(
+              padding: d
+                  ? (embed
+                      ? const EdgeInsets.fromLTRB(16, 8, 16, 28)
+                      : const EdgeInsets.fromLTRB(24, 20, 24, 28))
+                  : const EdgeInsets.all(16),
+              children: listChildren,
+            );
+          return RefreshIndicator(
+            color: d ? AppColorsDesktop.primary : AppColors.primary,
+            onRefresh: () async {
+              final orgId = ref.read(authProvider).user?.effectiveOrganizationId;
+              await ref.read(organizationRepositoryProvider.notifier).load(orgId);
+            },
+            child: d
+                ? (embed
+                    ? listView
+                    : Align(
+                        alignment: Alignment.topCenter,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 720),
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(20, 12, 20, 40),
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: AppColorsDesktop.surface,
+                                borderRadius: BorderRadius.circular(DesktopDesignSystem.radiusCard),
+                                border: Border.all(color: AppColorsDesktop.border),
+                                boxShadow: DesktopDesignSystem.shadowCard,
+                              ),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(DesktopDesignSystem.radiusCard),
+                                child: listView,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ))
+                : listView,
           );
         },
-        loading: () => const Center(child: CircularProgressIndicator(color: AppColors.primary)),
-        error: (e, _) => Center(child: Text('Ошибка: $e')),
-      ),
-    );
-  }
-}
-
-class _NewOrganizationDialog extends StatefulWidget {
-  const _NewOrganizationDialog();
-
-  @override
-  State<_NewOrganizationDialog> createState() => _NewOrganizationDialogState();
-}
-
-class _NewOrganizationDialogState extends State<_NewOrganizationDialog> {
-  late final TextEditingController _controller = TextEditingController();
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Новая организация'),
-      content: TextField(
-        controller: _controller,
-        decoration: const InputDecoration(
-          labelText: 'Название',
-          hintText: 'Например, Сервис на Юге',
+        loading: () => Center(
+          child: CircularProgressIndicator(
+            color: d ? AppColorsDesktop.primary : AppColors.primary,
+          ),
         ),
-        autofocus: true,
-        textCapitalization: TextCapitalization.words,
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')),
-        FilledButton(
-          onPressed: () {
-            final t = _controller.text.trim();
-            if (t.isEmpty) return;
-            Navigator.pop(context, t);
-          },
-          child: const Text('Создать'),
+        error: (e, _) => Center(
+          child: Text(
+            'Ошибка: $e',
+            style: TextStyle(color: d ? AppColorsDesktop.error : AppColors.error),
+          ),
         ),
-      ],
     );
+
+    if (embed) {
+      return themeDesktopLight(child: body);
+    }
+
+    final scaffold = Scaffold(
+      backgroundColor: d ? AppColorsDesktop.background : AppColors.background,
+      appBar: AppBar(
+        centerTitle: d,
+        title: Text(d ? 'Данные организации' : 'Организация'),
+        backgroundColor: d ? AppColorsDesktop.surface : null,
+        foregroundColor: d ? AppColorsDesktop.textPrimary : null,
+        surfaceTintColor: d ? Colors.transparent : null,
+        elevation: d ? 0 : null,
+        actions: [
+          TextButton(
+            onPressed: !canEditOrg ||
+                    orgAsync.valueOrNull == null ||
+                    orgIdForSave == null ||
+                    orgIdForSave.isEmpty
+                ? null
+                : () => _saveOrganizationData(context),
+            child: Text(
+              'Сохранить',
+              style: TextStyle(
+                color: d ? AppColorsDesktop.primary : null,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+      body: body,
+    );
+    if (d) return themeDesktopLight(child: scaffold);
+    return scaffold;
   }
 }

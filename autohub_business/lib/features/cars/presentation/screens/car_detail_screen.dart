@@ -6,11 +6,11 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_colors_desktop.dart';
 import '../../../../core/theme/desktop_design_system.dart';
 import '../../../../core/config/platform_utils.dart';
-import '../../../../core/repositories/order_repository.dart';
 import '../../../../core/auth/auth_provider.dart';
 import '../../../../shared/models/car_aggregate.dart';
 import '../../../../shared/models/order_model.dart';
 import '../../../../core/utils/formatters.dart';
+import '../../../../shared/widgets/authenticated_api_image.dart';
 import '../../../orders/presentation/screens/order_detail_screen.dart';
 import '../../../orders/presentation/widgets/order_detail_panel.dart';
 import '../providers/cars_providers.dart';
@@ -167,7 +167,7 @@ class CarDetailScreen extends ConsumerWidget {
   }
 }
 
-class _CarInfoCard extends StatelessWidget {
+class _CarInfoCard extends ConsumerWidget {
   const _CarInfoCard({required this.car, required this.canSeePrices, this.isDesktop = true});
 
   final CarView car;
@@ -175,13 +175,12 @@ class _CarInfoCard extends StatelessWidget {
   final bool isDesktop;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef _) {
     final surface = isDesktop ? AppColorsDesktop.surface : AppColors.cardBg;
     final border = isDesktop ? AppColorsDesktop.border : AppColors.border;
     final primary = isDesktop ? AppColorsDesktop.primary : AppColors.primary;
     final textPrimary = isDesktop ? AppColorsDesktop.textPrimary : AppColors.textPrimary;
     final textSecondary = isDesktop ? AppColorsDesktop.textSecondary : AppColors.textSecondary;
-    final textTertiary = isDesktop ? AppColorsDesktop.textTertiary : AppColors.textTertiary;
     final accentMoney = isDesktop ? AppColorsDesktop.accentMoney : AppColors.primary;
 
     return Container(
@@ -197,14 +196,24 @@ class _CarInfoCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Container(
+              SizedBox(
                 width: 56,
                 height: 56,
-                decoration: BoxDecoration(
-                  color: primary.withValues(alpha: isDesktop ? 0.1 : 0.2),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(Icons.directions_car_rounded, color: primary, size: 32),
+                child: car.carPhotoUrl != null && car.carPhotoUrl!.trim().isNotEmpty
+                    ? AuthenticatedApiImage(
+                        imageUrl: car.carPhotoUrl,
+                        width: 56,
+                        height: 56,
+                        borderRadius: 14,
+                      )
+                    : Container(
+                        decoration: BoxDecoration(
+                          color: primary.withValues(alpha: isDesktop ? 0.1 : 0.2),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        alignment: Alignment.center,
+                        child: Icon(Icons.directions_car_rounded, color: primary, size: 32),
+                      ),
               ),
               const SizedBox(width: 16),
               Expanded(

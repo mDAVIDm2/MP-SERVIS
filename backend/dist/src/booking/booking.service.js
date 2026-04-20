@@ -29,6 +29,51 @@ function parseTime(t) {
     const [h, m] = t.split(':').map(Number);
     return (h ?? 0) * 60 + (m ?? 0);
 }
+function tryResolvePackageBookingMinutes(serviceIds, services, packages) {
+    const incomingArr = [...new Set(serviceIds.filter((x) => x && String(x).trim()))];
+    if (incomingArr.length === 0 || !packages.length)
+        return null;
+    const incomingSet = new Set(incomingArr);
+    const svcById = new Map(services.map((s) => [s.id, s]));
+    const durationOf = (id) => {
+        const n = Number(svcById.get(id)?.duration_minutes);
+        return Number.isFinite(n) && n > 0 ? n : 60;
+    };
+    pkgLoop: for (const pkg of packages) {
+        const incl = (pkg.included_service_ids ?? []).filter((x) => x && String(x).trim());
+        const inclSet = new Set(incl);
+        const addonList = pkg.addons ?? [];
+        const addonBySvc = new Map();
+        for (const a of addonList) {
+            const sid = a.service_id?.trim();
+            if (sid)
+                addonBySvc.set(sid, a);
+        }
+        const allowedAddonIds = new Set(addonBySvc.keys());
+        const allowed = new Set([...inclSet, ...allowedAddonIds]);
+        const allIncomingAllowed = [...incomingSet].every((id) => allowed.has(id));
+        if (!allIncomingAllowed)
+            continue;
+        for (const id of inclSet) {
+            if (!incomingSet.has(id))
+                continue pkgLoop;
+        }
+        const extras = [...incomingSet].filter((id) => !inclSet.has(id));
+        if (!extras.every((id) => allowedAddonIds.has(id)))
+            continue;
+        const pkgDur = Number(pkg.package_duration_minutes);
+        const base = pkgDur > 0 ? pkgDur : incl.reduce((sum, id) => sum + durationOf(id), 0);
+        let total = base;
+        for (const aid of extras) {
+            const ad = addonBySvc.get(aid);
+            const extraRaw = ad != null ? Number(ad.extra_duration_minutes) : NaN;
+            const extra = Number.isFinite(extraRaw) && extraRaw > 0 ? extraRaw : durationOf(aid);
+            total += extra;
+        }
+        return total;
+    }
+    return null;
+}
 function addMinutes(date, minutes) {
     return new Date(date.getTime() + minutes * 60 * 1000);
 }
@@ -57,13 +102,28 @@ let BookingService = class BookingService {
         if (dto.service_ids?.length) {
             const servicesList = settings?.services ?? [];
             const services = Array.isArray(servicesList) ? servicesList : [];
-            for (const sid of dto.service_ids) {
-                const s = services.find((x) => x.id === sid);
-                if (s) {
-                    totalMinutes += Number(s.duration_minutes) ?? 60;
-                    const skill = s.required_skill;
-                    if (skill && !requiredSkills.includes(skill))
-                        requiredSkills.push(skill);
+            const packages = Array.isArray(settings?.service_packages) ? settings.service_packages : [];
+            const packageMinutes = tryResolvePackageBookingMinutes(dto.service_ids, services, packages);
+            if (packageMinutes != null) {
+                totalMinutes = packageMinutes;
+                for (const sid of dto.service_ids) {
+                    const s = services.find((x) => x.id === sid);
+                    if (s) {
+                        const skill = s.required_skill;
+                        if (skill && !requiredSkills.includes(skill))
+                            requiredSkills.push(skill);
+                    }
+                }
+            }
+            else {
+                for (const sid of dto.service_ids) {
+                    const s = services.find((x) => x.id === sid);
+                    if (s) {
+                        totalMinutes += Number(s.duration_minutes) ?? 60;
+                        const skill = s.required_skill;
+                        if (skill && !requiredSkills.includes(skill))
+                            requiredSkills.push(skill);
+                    }
                 }
             }
             if (requiredSkills.length === 0)
@@ -141,9 +201,11 @@ let BookingService = class BookingService {
             let start = parseTime(sch.startTime);
             let end = parseTime(sch.endTime);
             if (orgWorkStart != null && orgWorkEnd != null) {
-                start = Math.min(start, orgWorkStart);
-                end = Math.max(end, orgWorkEnd);
+                start = Math.max(start, orgWorkStart);
+                end = Math.min(end, orgWorkEnd);
             }
+            if (end <= start)
+                continue;
             const existing = scheduleByMaster.get(sch.masterId);
             if (!existing || start < existing.start)
                 scheduleByMaster.set(sch.masterId, { start, end });

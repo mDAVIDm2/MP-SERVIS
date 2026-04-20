@@ -1,9 +1,37 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/utils/formatters.dart';
+import '../../core/utils/client_avatar_from_chats.dart';
+import '../../core/repositories/chat_repository.dart';
 import '../models/order_model.dart';
-import '../models/organization_business_kind.dart';
+import '../../features/chats/presentation/widgets/authenticated_profile_avatar.dart';
 import '../../features/orders/presentation/screens/order_detail_screen.dart';
+
+Widget _mobileListServiceDot(bool completed, {double size = 16}) {
+  if (completed) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: AppColors.success.withValues(alpha: 0.14),
+        border: Border.all(color: AppColors.success.withValues(alpha: 0.45)),
+      ),
+      alignment: Alignment.center,
+      child: Icon(Icons.check_rounded, size: size * 0.56, color: AppColors.success),
+    );
+  }
+  return Container(
+    width: size,
+    height: size,
+    decoration: BoxDecoration(
+      shape: BoxShape.circle,
+      border: Border.all(color: AppColors.borderLight, width: 1.35),
+      color: AppColors.nestedBg,
+    ),
+  );
+}
 
 /// Группировка заказов по календарным дням (как на вкладке «Заказы»).
 List<MapEntry<DateTime, List<Order>>> groupOrdersByCalendarDay(
@@ -73,71 +101,78 @@ class MobileDayHeader extends StatelessWidget {
   }
 }
 
-class _OrderMiniItemRow extends StatelessWidget {
-  const _OrderMiniItemRow({required this.item, required this.canSeePrices});
+class _CarMetaChips extends StatelessWidget {
+  const _CarMetaChips({required this.order});
 
-  final OrderItem item;
-  final bool canSeePrices;
+  final Order order;
 
   @override
   Widget build(BuildContext context) {
+    final chips = <Widget>[];
+    void add(String text) {
+      if (text.trim().isEmpty) return;
+      chips.add(
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: AppColors.nestedBg,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppColors.border.withValues(alpha: 0.65)),
+          ),
+          child: Text(
+            text,
+            style: const TextStyle(fontSize: 11, color: AppColors.textSecondary, height: 1.2),
+          ),
+        ),
+      );
+    }
+
+    final plate = order.licensePlate?.trim();
+    if (plate != null && plate.isNotEmpty) add(plate);
+    final vin = order.vin?.trim();
+    if (vin != null && vin.isNotEmpty) add('VIN $vin');
+    if (order.mileage != null) add('${order.mileage} км');
+    if (order.bodyType != null && order.bodyType!.trim().isNotEmpty) add(order.bodyType!.trim());
+    if (order.engineType != null && order.engineType!.trim().isNotEmpty) add(order.engineType!.trim());
+
+    if (chips.isEmpty) return const SizedBox.shrink();
     return Padding(
-      padding: const EdgeInsets.only(bottom: 5),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(
-            item.isCompleted ? Icons.check_circle : Icons.radio_button_unchecked,
-            size: 18,
-            color: item.isCompleted ? AppColors.success : AppColors.textTertiary,
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              item.name,
-              style: TextStyle(
-                fontSize: 13,
-                color: AppColors.textPrimary,
-                decoration: item.isCompleted ? TextDecoration.lineThrough : null,
-                decorationColor: AppColors.textSecondary,
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          if (canSeePrices && item.priceKopecks != null) ...[
-            const SizedBox(width: 6),
-            Text(
-              formatMoney(item.priceKopecks!),
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: item.isCompleted ? AppColors.textTertiary : AppColors.textPrimary,
-              ),
-            ),
-          ],
-        ],
+      padding: const EdgeInsets.only(top: 8),
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 6,
+        children: chips,
       ),
     );
   }
 }
 
-/// Карточка заказа в мобильном списке (вкладка «Заказы», карточка клиента и т.п.).
-class MobileOrderCard extends StatelessWidget {
+/// Карточка заказа в мобильном списке.
+class MobileOrderCard extends ConsumerWidget {
   const MobileOrderCard({super.key, required this.order, required this.canSeePrices});
 
   final Order order;
   final bool canSeePrices;
 
   @override
-  Widget build(BuildContext context) {
-    final previewItems = order.itemsForDisplay.take(3).toList();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final chats = ref.watch(chatRepositoryProvider).chats;
+    final avatarUrl = resolvedClientAvatarUrl(
+      chats: chats,
+      orderClientAvatarUrl: order.clientAvatarUrl,
+      clientPhone: order.clientPhone,
+    );
+    final previewItems = order.itemsForDisplay.take(4).toList();
+    final clientLabel = order.clientName?.trim();
+    final phone = order.clientPhone?.trim();
+
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       elevation: 0,
+      color: AppColors.cardBg,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: AppColors.border.withValues(alpha: 0.9)),
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: AppColors.border.withValues(alpha: 0.85)),
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -148,120 +183,138 @@ class MobileOrderCard extends StatelessWidget {
           ),
         ),
         child: Padding(
-          padding: const EdgeInsets.all(14),
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: Text(
-                      order.displayNumber,
-                      style: const TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.textPrimary,
+                  if (clientLabel != null && clientLabel.isNotEmpty || phone != null && phone.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 10),
+                      child: AuthenticatedProfileAvatar(
+                        imageUrl: avatarUrl,
+                        fallbackLetter: (clientLabel != null && clientLabel.isNotEmpty)
+                            ? clientLabel[0].toUpperCase()
+                            : '?',
+                        size: 44,
                       ),
+                    ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          order.displayNumber,
+                          style: const TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.3,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        if (clientLabel != null && clientLabel.isNotEmpty)
+                          Text(
+                            clientLabel,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                              color: AppColors.textPrimary.withValues(alpha: 0.92),
+                            ),
+                          )
+                        else if (phone != null && phone.isNotEmpty)
+                          Text(
+                            phone,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                          ),
+                      ],
                     ),
                   ),
                   const SizedBox(width: 8),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 140),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: order.status.color.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: order.status.color.withValues(alpha: 0.35)),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: order.status.color.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      order.status.label,
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: order.status.color,
+                        height: 1.15,
                       ),
-                      child: Text(
-                        order.status.label,
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: order.status.color,
-                        ),
-                        maxLines: 2,
-                        textAlign: TextAlign.end,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
                     ),
                   ),
                 ],
               ),
-              if (OrganizationBusinessKindCodes.labelForOrderSnapshot(order.organizationBusinessKind).isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    OrganizationBusinessKindCodes.labelForOrderSnapshot(order.organizationBusinessKind),
-                    style: TextStyle(fontSize: 11, color: AppColors.textTertiary.withValues(alpha: 0.95)),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
               const SizedBox(height: 10),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                decoration: BoxDecoration(
-                  color: AppColors.nestedBg,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: AppColors.border.withValues(alpha: 0.5)),
+              Text(
+                order.carInfo.isNotEmpty ? order.carInfo : 'Авто не указано',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  height: 1.3,
+                  color: AppColors.textPrimary,
                 ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(
-                      Icons.directions_car_outlined,
-                      size: 18,
-                      color: AppColors.primary.withValues(alpha: 0.9),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            order.carInfo.isNotEmpty ? order.carInfo : 'Автомобиль не указан',
-                            style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textPrimary,
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          if (order.licensePlate != null && order.licensePlate!.trim().isNotEmpty)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 2),
-                              child: Text(
-                                order.licensePlate!.trim(),
-                                style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
+              _CarMetaChips(order: order),
               if (previewItems.isNotEmpty) ...[
                 const SizedBox(height: 10),
-                for (final item in previewItems)
-                  _OrderMiniItemRow(item: item, canSeePrices: canSeePrices),
-                if (order.itemsForDisplay.length > 3)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Text(
-                      'и ещё ${order.itemsForDisplay.length - 3}…',
-                      style: TextStyle(fontSize: 12, color: AppColors.textTertiary.withValues(alpha: 0.95)),
+                ...previewItems.map(
+                  (item) => Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        _mobileListServiceDot(item.isCompleted),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            item.name,
+                            style: TextStyle(
+                              fontSize: 13,
+                              height: 1.3,
+                              color: AppColors.textPrimary,
+                              decoration: item.isCompleted ? TextDecoration.lineThrough : null,
+                              decorationColor: AppColors.textSecondary,
+                            ),
+                            maxLines: 4,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (canSeePrices && item.priceKopecks != null) ...[
+                          const SizedBox(width: 6),
+                          Text(
+                            formatMoney(item.priceKopecks!),
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: item.isCompleted ? AppColors.textTertiary : AppColors.textPrimary,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
+                ),
+                if (order.itemsForDisplay.length > previewItems.length)
+                  Text(
+                    'ещё ${order.itemsForDisplay.length - previewItems.length}…',
+                    style: TextStyle(fontSize: 12, color: AppColors.textTertiary.withValues(alpha: 0.95)),
+                  ),
               ],
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
@@ -271,19 +324,12 @@ class MobileOrderCard extends StatelessWidget {
                       children: [
                         Text(
                           formatDateTimeOrNull(order.dateTime),
-                          style: const TextStyle(fontSize: 11, color: AppColors.textTertiary),
+                          style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
                         ),
                         if (order.masterName != null && order.masterName!.trim().isNotEmpty)
                           Text(
                             order.masterName!.trim(),
-                            style: const TextStyle(fontSize: 11, color: AppColors.textTertiary),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        if (order.bayName != null && order.bayName!.trim().isNotEmpty)
-                          Text(
-                            'Пост: ${order.bayName!.trim()}',
-                            style: const TextStyle(fontSize: 11, color: AppColors.textTertiary),
+                            style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -294,8 +340,8 @@ class MobileOrderCard extends StatelessWidget {
                     Text(
                       formatMoney(order.totalKopecksForDisplay),
                       style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
                         color: AppColors.primary,
                       ),
                     ),

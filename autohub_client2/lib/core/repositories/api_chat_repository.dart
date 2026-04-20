@@ -45,11 +45,15 @@ class ApiChatRepository implements ChatRepository {
         j['businessKind']?.toString() ??
         j['organization_kind']?.toString() ??
         j['organizationKind']?.toString();
+    final photoRaw = j['organization_photo_url']?.toString() ?? j['organizationPhotoUrl']?.toString() ?? '';
+    final phoneRaw = j['organization_phone']?.toString() ?? j['organizationPhone']?.toString() ?? '';
     return Chat(
       id: j['id']?.toString() ?? '',
       stoId: j['organization_id']?.toString() ?? '',
       stoName: j['organization_name']?.toString() ?? 'Сервис',
       organizationKind: (kindRaw != null && kindRaw.isNotEmpty) ? kindRaw : null,
+      stoLogoUrl: photoRaw.trim().isEmpty ? null : photoRaw.trim(),
+      stoPhone: phoneRaw.trim().isEmpty ? null : phoneRaw.trim(),
       orderId: j['order_id']?.toString() ?? '',
       orderNumber: j['order_number']?.toString() ?? '',
       carBrand: carBrand,
@@ -209,6 +213,18 @@ class ApiChatRepository implements ChatRepository {
       approvalCarId: approvalCarId,
       attachments: attachments,
     );
+  }
+
+  @override
+  Future<Result<Chat>> openOrganizationChat(String organizationId) async {
+    final result = await _api.openOrganizationChat(organizationId);
+    final data = result.dataOrNull;
+    if (data == null) return Result.failure(result.errorOrNull!);
+    final items = data['items'] as List<dynamic>?;
+    if (items == null || items.isEmpty) {
+      return Result.failure(const ApiException(code: ApiErrorCode.notFound, message: 'Не удалось открыть чат'));
+    }
+    return Result.success(_chatFromJson(items[0] as Map<String, dynamic>));
   }
 
   @override

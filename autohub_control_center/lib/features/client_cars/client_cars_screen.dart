@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../core/api/internal_data_providers.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/media_url_resolver.dart';
+import '../../shared/widgets/cc_auth_network_image.dart';
 import '../sections/section_scaffold.dart';
 import 'client_car_detail_view.dart';
 
@@ -72,7 +74,7 @@ class _ClientCarsScreenState extends ConsumerState<ClientCarsScreen> {
                 child: Padding(
                   padding: EdgeInsets.all(24),
                   child: Text(
-                    'Нет данных по заказам с привязкой к авто',
+                    'Нет автомобилей в гараже клиентов и в заказах',
                     style: TextStyle(color: AppColors.textSecondary),
                   ),
                 ),
@@ -118,6 +120,11 @@ class _ClientCarsScreenState extends ConsumerState<ClientCarsScreen> {
                             previewClientName: _selRow?['client_name']?.toString(),
                             previewOrdersCount: _selRow?['orders_count']?.toString(),
                             previewLastAt: _formatDt(_selRow?['last_order_at']),
+                            onAfterHardDeleteSuccess: () => setState(() {
+                              _selPhone = null;
+                              _selCarId = null;
+                              _selRow = null;
+                            }),
                           )
                         : _emptyDetail(),
                   ),
@@ -219,6 +226,17 @@ class _CarListCard extends StatelessWidget {
     final phone = row['client_phone']?.toString() ?? '';
     final count = row['orders_count'] ?? 0;
     final last = _formatDt(row['last_order_at']);
+    final rawPhoto = row['car_photo_url']?.toString();
+    final thumbUrl = internalClientCarPhotoImageUrl(rawPhoto);
+    final thumbPlaceholder = Container(
+      width: 48,
+      height: 48,
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: const Icon(Icons.directions_car_rounded, color: AppColors.primary, size: 26),
+    );
 
     return Material(
       color: selected ? AppColors.primary.withValues(alpha: 0.06) : AppColors.surface,
@@ -246,15 +264,17 @@ class _CarListCard extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.1),
+              if (thumbUrl != null)
+                CcAuthNetworkImage(
+                  url: thumbUrl,
+                  width: 48,
+                  height: 48,
+                  fit: BoxFit.cover,
                   borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(Icons.directions_car_rounded, color: AppColors.primary, size: 26),
-              ),
+                  placeholder: thumbPlaceholder,
+                )
+              else
+                thumbPlaceholder,
               const SizedBox(width: 14),
               Expanded(
                 child: Column(

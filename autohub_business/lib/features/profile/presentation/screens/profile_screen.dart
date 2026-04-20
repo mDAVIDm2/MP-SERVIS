@@ -1,18 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/config/platform_utils.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/auth/auth_provider.dart';
-import '../../../../core/repositories/organization_repository.dart';
-import '../../../../shared/widgets/organization_switch_sheet.dart';
-import 'organization_settings_screen.dart';
-import 'staff_screen.dart';
-import '../../../clients/presentation/screens/clients_screen.dart';
-import '../../../cars/presentation/screens/profile_cars_screen.dart';
-import '../../../settings/presentation/screens/settings_screen.dart';
-import '../../../chats/presentation/screens/chat_detail_screen.dart';
 import '../../../../core/repositories/chat_repository.dart';
-import 'incoming_invitations_screen.dart';
+import '../../../chats/presentation/screens/chat_detail_screen.dart';
+import 'account_settings_screen.dart';
+import '../widgets/invitation_count_badge.dart';
+import '../providers/pending_invitations_count_provider.dart';
+import '../widgets/organization_home_card.dart';
+import '../widgets/user_profile_avatar.dart';
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
 
@@ -32,18 +28,7 @@ class ProfileScreen extends ConsumerWidget {
             Center(
               child: Column(
                 children: [
-                  CircleAvatar(
-                    radius: 40,
-                    backgroundColor: AppColors.primary.withValues(alpha: 0.3),
-                    child: Text(
-                      user.initials,
-                      style: const TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.primary,
-                      ),
-                    ),
-                  ),
+                  const UserProfileAvatar(radius: 40),
                   const SizedBox(height: 12),
                   Text(
                     user.displayName,
@@ -61,92 +46,54 @@ class ProfileScreen extends ConsumerWidget {
                       color: AppColors.textSecondary,
                     ),
                   ),
+                  if (user.phone.trim().isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      user.phone,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.textPrimary,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
-            const SizedBox(height: 32),
+            const SizedBox(height: 24),
           ],
           Consumer(
             builder: (context, ref, _) {
-              final orgAsync = ref.watch(organizationProvider);
-              final orgName = orgAsync.valueOrNull?.name ?? 'Организация';
+              final pendingAsync = ref.watch(pendingInvitationsCountProvider);
+              final pending = pendingAsync.valueOrNull ?? 0;
               return ListTile(
-                leading: const Icon(Icons.business_rounded, color: AppColors.textSecondary),
-                title: const Text('Организация'),
-                subtitle: Text(orgName),
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const OrganizationSettingsScreen(),
-                  ),
+                leading: const Icon(Icons.manage_accounts_outlined, color: AppColors.textSecondary),
+                title: const Text('Настройки аккаунта'),
+                subtitle: const Text('Почта, телефон, организация, приглашения'),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    InvitationCountBadge(count: pending),
+                    const Icon(Icons.chevron_right_rounded, color: AppColors.textSecondary),
+                  ],
                 ),
+                onTap: () async {
+                  await Navigator.push<void>(
+                    context,
+                    MaterialPageRoute<void>(builder: (_) => const AccountSettingsScreen()),
+                  );
+                  ref.invalidate(pendingInvitationsCountProvider);
+                },
               );
             },
           ),
-          Consumer(
-            builder: (context, ref, _) {
-              final u = ref.watch(authProvider).user;
-              if (u == null || !u.hasMultipleOrganizations) return const SizedBox.shrink();
-              return ListTile(
-                leading: const Icon(Icons.swap_horiz_rounded, color: AppColors.textSecondary),
-                title: const Text('Сменить организацию'),
-                subtitle: const Text('Переключиться на другую точку'),
-                onTap: () => showOrganizationSwitchSheet(context, ref),
-              );
-            },
-          ),
-          Consumer(
-            builder: (context, ref, _) {
-              final canSeeClients = ref.watch(authProvider).user?.role.canSeeClients ?? false;
-              if (!canSeeClients) return const SizedBox.shrink();
-              return ListTile(
-                leading: const Icon(Icons.people_outline_rounded, color: AppColors.textSecondary),
-                title: const Text('Клиенты'),
-                subtitle: const Text('Список ваших клиентов'),
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const ClientsScreen()),
-                ),
-              );
-            },
-          ),
-          Consumer(
-            builder: (context, ref, _) {
-              final canSeeStaff = ref.watch(authProvider).user?.role.canSeeStaff ?? false;
-              if (!canSeeStaff) return const SizedBox.shrink();
-              return ListTile(
-                leading: const Icon(Icons.people_rounded, color: AppColors.textSecondary),
-                title: const Text('Персонал'),
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const StaffScreen()),
-                ),
-              );
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.mail_outline_rounded, color: AppColors.textSecondary),
-            title: const Text('Входящие приглашения'),
-            subtitle: const Text('Принять или отклонить приглашение в организацию'),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const IncomingInvitationsScreen()),
-            ),
-          ),
-          if (!isDesktopPlatform)
-            ListTile(
-              leading: const Icon(Icons.directions_car_rounded, color: AppColors.textSecondary),
-              title: const Text('Автомобили'),
-              subtitle: const Text('Список автомобилей по заказам'),
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const ProfileCarsScreen()),
-              ),
-            ),
+          const SizedBox(height: 8),
+          const OrganizationHomeCard(),
           ListTile(
             leading: const Icon(Icons.support_agent_rounded, color: AppColors.textSecondary),
             title: const Text('Написать в поддержку'),
-            subtitle: const Text('Чат с командой AutoHub'),
+            subtitle: const Text('Чат с командой MP-Servis'),
             onTap: () async {
               final r = await ref.read(chatRepositoryProvider.notifier).openSupportChat();
               if (!context.mounted) return;
@@ -154,9 +101,9 @@ class ProfileScreen extends ConsumerWidget {
               if (preview != null) {
                 await ensureChatDataLoaded(ref, preview.id, refValid: () => context.mounted);
                 if (!context.mounted) return;
-                Navigator.push(
+                Navigator.push<void>(
                   context,
-                  MaterialPageRoute(builder: (_) => ChatDetailScreen(chatId: preview.id)),
+                  MaterialPageRoute<void>(builder: (_) => ChatDetailScreen(chatId: preview.id)),
                 );
               } else {
                 final err = r.errorOrNull;
@@ -165,15 +112,6 @@ class ProfileScreen extends ConsumerWidget {
                 }
               }
             },
-          ),
-          ListTile(
-            leading: const Icon(Icons.settings_rounded, color: AppColors.textSecondary),
-            title: const Text('Настройки'),
-            subtitle: const Text('Услуги, цены, марки, слоты, уведомления, шаблоны'),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const SettingsScreen()),
-            ),
           ),
           const Divider(color: AppColors.border),
           ListTile(
@@ -184,7 +122,6 @@ class ProfileScreen extends ConsumerWidget {
             ),
             onTap: () async {
               await ref.read(authProvider.notifier).logout();
-              // Состояние auth изменится — main.dart покажет WelcomeScreen
             },
           ),
         ],

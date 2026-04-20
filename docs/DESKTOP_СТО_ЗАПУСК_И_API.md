@@ -22,24 +22,24 @@ flutter build windows
 По умолчанию приложение обращается к хосту из `AppConfig.apiHost` (см. `lib/core/config/app_config.dart`). Для локальной разработки, когда бэкенд и приложение на одном компьютере, задайте хост `localhost`:
 
 ```bash
-flutter run -d windows --dart-define=AUTOHUB_API_HOST=localhost
+flutter run -d windows --dart-define=MP_SERVIS_API_HOST=localhost
 ```
 
 Или для сборки:
 
 ```bash
-flutter build windows --dart-define=AUTOHUB_API_HOST=localhost
+flutter build windows --dart-define=MP_SERVIS_API_HOST=localhost
 ```
 
 Если бэкенд на другой машине в сети, укажите её IP:
 
 ```bash
-flutter run -d windows --dart-define=AUTOHUB_API_HOST=10.56.161.14
+flutter run -d windows --dart-define=MP_SERVIS_API_HOST=192.168.1.187
 ```
 
 - **API:** `http://<apiHost>:3000/api/v1`
 - **WebSocket (опционально):** `ws://<apiHost>:3000/ws`  
-  Включить: `--dart-define=AUTOHUB_ENABLE_WS=true`
+  Включить: `--dart-define=MP_SERVIS_ENABLE_WS=true`
 
 ## Порядок запуска для проверки связки
 
@@ -47,7 +47,7 @@ flutter run -d windows --dart-define=AUTOHUB_API_HOST=10.56.161.14
 2. Запустить десктопное приложение с нужным хостом:
    ```bash
    cd autohub_business
-   flutter run -d windows --dart-define=AUTOHUB_API_HOST=localhost
+   flutter run -d windows --dart-define=MP_SERVIS_API_HOST=localhost
    ```
 3. Войти по демо-коду (например `2222` — владелец, `1111` — мастер).
 

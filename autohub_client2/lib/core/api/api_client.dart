@@ -5,7 +5,32 @@ import 'api_exceptions.dart';
 const int _kMaxRetries = 2;
 const Duration _kRetryDelay = Duration(milliseconds: 500);
 
-/// Централизованный HTTP-клиент для работы с AutoHub API.
+/// Обрыв до HTTP-заголовков (часто мёртвый keep-alive у Dart HttpClient ↔ Node на LAN).
+bool _isRetryableTransportError(DioException err) {
+  if (err.type == DioExceptionType.connectionTimeout ||
+      err.type == DioExceptionType.sendTimeout ||
+      err.type == DioExceptionType.receiveTimeout ||
+      err.type == DioExceptionType.connectionError) {
+    return true;
+  }
+  if (err.type == DioExceptionType.unknown) {
+    final buf = StringBuffer()
+      ..write(err.message ?? '')
+      ..write(' ')
+      ..write(err.error ?? '');
+    final nested = err.error;
+    if (nested is ApiException) {
+      buf.write(' ${nested.message}');
+    }
+    final combined = buf.toString().toLowerCase();
+    return combined.contains('connection closed before full header') ||
+        combined.contains('connection reset by peer') ||
+        combined.contains('broken pipe');
+  }
+  return false;
+}
+
+/// Централизованный HTTP-клиент для работы с API MP-Servis.
 /// Поддерживает retry при сетевых ошибках и автоматический refresh при 401.
 class ApiClient {
   late final Dio _dio;
@@ -20,12 +45,16 @@ class ApiClient {
       connectTimeout: const Duration(seconds: 15),
       receiveTimeout: const Duration(seconds: 15),
       sendTimeout: const Duration(seconds: 15),
+      // Новое TCP на каждый запрос: меньше «Connection closed before full header» при reuse сокета.
+      persistentConnection: false,
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
+        'Connection': 'close',
       },
     ));
 
+    // Retry до Error — иначе в Retry попадает уже ApiException, а не сырая HttpException.
     _dio.interceptors.addAll([
       _AuthInterceptor(this),
       _RetryInterceptor(_dio),
@@ -97,11 +126,26 @@ class ApiClient {
     );
   }
 
+  Uri _resolveBytesUri(String pathOrUrl) {
+    final p = pathOrUrl.trim();
+    if (p.startsWith('http://') || p.startsWith('https://')) {
+      return Uri.parse(p);
+    }
+    var base = ApiEndpoints.baseUrl.trim();
+    if (base.endsWith('/')) base = base.substring(0, base.length - 1);
+    var rel = p.startsWith('/') ? p.substring(1) : p;
+    if (rel.startsWith('api/v1/')) {
+      rel = rel.substring('api/v1/'.length);
+    }
+    return Uri.parse('$base/$rel');
+  }
+
   /// Бинарный GET (фото в чате / заказе с Authorization).
   Future<Result<List<int>>> getBytes(String path, {CancelToken? cancelToken}) async {
     try {
-      final res = await _dio.get<List<int>>(
-        path,
+      final uri = _resolveBytesUri(path);
+      final res = await _dio.getUri<List<int>>(
+        uri,
         options: Options(responseType: ResponseType.bytes),
         cancelToken: cancelToken,
       );
@@ -122,7 +166,7 @@ class _AuthInterceptor extends Interceptor {
 
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
-    options.headers['X-AutoHub-App'] = 'client';
+    options.headers['X-MP-Servis-App'] = 'client';
     final token = _client.accessToken;
     if (token != null) {
       options.headers['Authorization'] = 'Bearer $token';
@@ -138,10 +182,7 @@ class _RetryInterceptor extends Interceptor {
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) async {
     final options = err.requestOptions;
-    final isRetryable = err.type == DioExceptionType.connectionTimeout ||
-        err.type == DioExceptionType.sendTimeout ||
-        err.type == DioExceptionType.receiveTimeout ||
-        err.type == DioExceptionType.connectionError;
+    final isRetryable = _isRetryableTransportError(err);
     final attempt = options.extra['_retry_count'] as int? ?? 0;
     if (isRetryable && attempt < _kMaxRetries) {
       options.extra['_retry_count'] = attempt + 1;

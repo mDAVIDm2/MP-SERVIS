@@ -15,12 +15,16 @@ import '../../../../shared/models/chat_model.dart';
 import '../../../../shared/models/order_model.dart';
 import '../../../../shared/models/organization_business_kind.dart';
 import '../../../../core/utils/formatters.dart';
+import '../../../../core/navigation/subscription_tariff_route.dart';
 import 'approval_request_screen.dart';
 import '../../../clients/presentation/screens/client_detail_screen.dart';
 import '../../../orders/presentation/screens/confirm_correct_order_screen.dart';
 import '../../../orders/presentation/screens/order_detail_screen.dart';
 import '../../../orders/presentation/widgets/order_detail_panel.dart';
 import '../widgets/authenticated_chat_image.dart';
+import '../widgets/authenticated_profile_avatar.dart';
+
+export '../../ensure_chat_data_loaded.dart';
 
 /// Включить подробные логи для сравнения first open / switch chat / resume. Выключить после локализации бага.
 const bool _kChatOrderDebug = kDebugMode;
@@ -42,37 +46,6 @@ void _chatOrderLog(String scene, String message, [Map<String, Object?>? data]) {
     sb.write(data.entries.map((e) => '${e.key}=${e.value}').join(', '));
   }
   debugPrint(sb.toString());
-}
-
-/// Загружает чаты, заказы и сообщения чата перед открытием экрана. Вызывать перед push/показом ChatDetailScreen,
-/// чтобы лента (ссылки на заказы, карточки) строилась из актуальных данных с первого кадра.
-///
-/// [refValid] — после каждого await не обращаться к [ref], если виджет уже снят с дерева (иначе Riverpod бросает).
-Future<void> ensureChatDataLoaded(
-  WidgetRef ref,
-  String chatId, {
-  bool Function()? refValid,
-}) async {
-  bool ok() => refValid == null || refValid();
-  _chatOrderLog('ensureChatDataLoaded', 'START', {'chatId': chatId});
-  await ref.read(chatRepositoryProvider.notifier).loadFromApi();
-  if (!ok()) return;
-  final chatState = ref.read(chatRepositoryProvider);
-  _chatOrderLog('ensureChatDataLoaded', 'after loadFromApi chats', {'chatsCount': chatState.chats.length});
-  await ref.read(orderRepositoryProvider.notifier).loadFromApi();
-  if (!ok()) return;
-  final ordersCount = ref.read(orderRepositoryProvider).length;
-  _chatOrderLog('ensureChatDataLoaded', 'after loadFromApi orders', {'ordersCount': ordersCount});
-  await ref.read(chatRepositoryProvider.notifier).loadMessagesFor(chatId);
-  if (!ok()) return;
-  final msgs = ref.read(chatRepositoryProvider).messages[chatId] ?? [];
-  final orderIdsInMsgs = msgs.map((m) => m.orderId?.trim()).whereType<String>().where((s) => s.isNotEmpty).toSet();
-  _chatOrderLog('ensureChatDataLoaded', 'END', {
-    'chatId': chatId,
-    'messagesCount': msgs.length,
-    'uniqueOrderIdsInMessages': orderIdsInMsgs.length,
-    'orderIds': orderIdsInMsgs.take(5).join(';'),
-  });
 }
 
 class ChatDetailScreen extends ConsumerStatefulWidget {
@@ -321,7 +294,14 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
       _scrollToBottom();
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Не удалось отправить фото. Проверьте сеть и лимит тарифа.')),
+        SnackBar(
+          content: const Text('Не удалось отправить фото. Проверьте сеть и лимит тарифа.'),
+          duration: const Duration(seconds: 6),
+          action: SnackBarAction(
+            label: 'Подробнее',
+            onPressed: () => openSubscriptionTariffScreen(context),
+          ),
+        ),
       );
     }
   }
@@ -599,7 +579,7 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'Поддержка AutoHub',
+                    'Поддержка MP-Servis',
                     style: TextStyle(
                       fontSize: isDesktop ? 18 : 20,
                       fontWeight: FontWeight.w600,
@@ -616,30 +596,47 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
                   ),
                 ],
               )
-            : InkWell(
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ClientDetailScreen(
-                        clientName: chat.clientName.isNotEmpty ? chat.clientName : 'Клиент',
-                        clientPhone: chat.clientPhone.isNotEmpty ? chat.clientPhone : null,
-                        orders: chatOrders,
+            : Row(
+                children: [
+                  AuthenticatedProfileAvatar(
+                    imageUrl: chat.clientAvatarUrl,
+                    fallbackLetter: chat.clientName.isNotEmpty ? chat.clientName[0] : '?',
+                    size: isDesktop ? 36 : 40,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: InkWell(
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => ClientDetailScreen(
+                              clientName: chat.clientName.isNotEmpty ? chat.clientName : 'Клиент',
+                              clientPhone: chat.clientPhone.isNotEmpty ? chat.clientPhone : null,
+                              clientAvatarUrl: chat.clientAvatarUrl,
+                              orders: chatOrders,
+                            ),
+                          ),
+                        );
+                      },
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(chat.clientName.isNotEmpty ? chat.clientName : 'Клиент'),
+                          Text(
+                            'Чат с клиентом',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.normal,
+                              color: isDesktop ? AppColorsDesktop.textSecondary : AppColors.textSecondary,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  );
-                },
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(chat.clientName.isNotEmpty ? chat.clientName : 'Клиент'),
-                    const Text(
-                      'Чат с клиентом',
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.normal, color: AppColors.textSecondary),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
         actions: [
           if (!isSupport)
@@ -667,6 +664,8 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
                   onOrderTap: (orderId) => _openOrderDetail(context, orderId, isDesktop),
                   scrollToOrderKey: widget.currentOrderId != null ? _scrollToOrderKey : null,
                   isSupportChat: isSupport,
+                  clientAvatarUrl: chat.clientAvatarUrl,
+                  clientNameForAvatar: chat.clientName.isNotEmpty ? chat.clientName : 'Клиент',
                 ),
                 if (_overlayOrderId != null && isDesktop) ...[
                   Positioned.fill(
@@ -746,47 +745,70 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
               ],
             ),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(
-              color: isDesktop ? AppColorsDesktop.surface : AppColors.cardBg,
-              border: isDesktop ? const Border(top: BorderSide(color: AppColorsDesktop.border)) : null,
-            ),
-            child: SafeArea(
-              child: Row(
-                children: [
-                  if (!isSupport)
-                    IconButton(
-                      icon: const Icon(Icons.short_text_rounded),
-                      tooltip: 'Шаблоны',
-                      onPressed: _showTemplates,
-                    ),
-                  IconButton(
-                    icon: const Icon(Icons.photo_library_outlined),
-                    tooltip: 'Фото из галереи',
-                    onPressed: _pickAndSendChatImages,
+          Consumer(
+            builder: (context, ref, _) {
+              final canWrite = ref.watch(authProvider).user?.effectiveCanWriteChats ?? false;
+              if (!canWrite) {
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: isDesktop ? AppColorsDesktop.surface : AppColors.cardBg,
+                    border: isDesktop ? const Border(top: BorderSide(color: AppColorsDesktop.border)) : null,
                   ),
-                  Expanded(
-                    child: TextField(
-                      controller: _controller,
-                      decoration: const InputDecoration(
-                        hintText: 'Сообщение',
-                        border: OutlineInputBorder(),
-                        contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  child: SafeArea(
+                    child: Text(
+                      'У вас нет права отправлять сообщения в чатах. Обратитесь к администратору организации.',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: isDesktop ? AppColorsDesktop.textSecondary : AppColors.textSecondary,
                       ),
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _send(),
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  IconButton.filled(
-                    onPressed: _send,
-                    icon: const Icon(Icons.send_rounded),
-                    style: IconButton.styleFrom(backgroundColor: AppColors.primary),
+                );
+              }
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: isDesktop ? AppColorsDesktop.surface : AppColors.cardBg,
+                  border: isDesktop ? const Border(top: BorderSide(color: AppColorsDesktop.border)) : null,
+                ),
+                child: SafeArea(
+                  child: Row(
+                    children: [
+                      if (!isSupport)
+                        IconButton(
+                          icon: const Icon(Icons.short_text_rounded),
+                          tooltip: 'Шаблоны',
+                          onPressed: _showTemplates,
+                        ),
+                      IconButton(
+                        icon: const Icon(Icons.photo_library_outlined),
+                        tooltip: 'Фото из галереи',
+                        onPressed: _pickAndSendChatImages,
+                      ),
+                      Expanded(
+                        child: TextField(
+                          controller: _controller,
+                          decoration: const InputDecoration(
+                            hintText: 'Сообщение',
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          ),
+                          textInputAction: TextInputAction.send,
+                          onSubmitted: (_) => _send(),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton.filled(
+                        onPressed: _send,
+                        icon: const Icon(Icons.send_rounded),
+                        style: IconButton.styleFrom(backgroundColor: AppColors.primary),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            ),
+                ),
+              );
+            },
           ),
         ],
       ),
@@ -804,6 +826,8 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
     required void Function(String orderId) onOrderTap,
     GlobalKey? scrollToOrderKey,
     required bool isSupportChat,
+    String? clientAvatarUrl,
+    String clientNameForAvatar = 'Клиент',
   }) {
     final listView = ListView.builder(
       controller: _scrollController,
@@ -897,7 +921,14 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
             onOrderTap: onOrderTap,
           );
         } else {
-          content = _buildMessageBubble(context, m, isDesktop, isSupportChat);
+          content = _buildMessageBubble(
+            context,
+            m,
+            isDesktop,
+            isSupportChat,
+            clientAvatarUrl: clientAvatarUrl,
+            clientNameForAvatar: clientNameForAvatar,
+          );
         }
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -989,7 +1020,14 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
     );
   }
 
-  Widget _buildMessageBubble(BuildContext context, ChatMessage m, bool isDesktop, bool isSupportChat) {
+  Widget _buildMessageBubble(
+    BuildContext context,
+    ChatMessage m,
+    bool isDesktop,
+    bool isSupportChat, {
+    String? clientAvatarUrl,
+    String clientNameForAvatar = 'Клиент',
+  }) {
     final fromSupportOperator =
         m.isFromSupportOperator || m.messageType == 'support_operator_reply';
     final isMe = !isSupportChat
@@ -1008,41 +1046,67 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
     final border = isMe ? null : Border.all(color: isDesktop ? AppColorsDesktop.border : AppColors.border);
     final atts = m.attachments;
     final hasText = m.text.trim().isNotEmpty;
+    final showClientAvatar = !isSupportChat && !isMe;
+    final letter = clientNameForAvatar.isNotEmpty ? clientNameForAvatar[0] : '?';
+    final bubble = Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      constraints: BoxConstraints(maxWidth: maxW),
+      decoration: BoxDecoration(
+        color: bubbleColor,
+        borderRadius: BorderRadius.circular(16),
+        border: border,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (atts.isNotEmpty)
+            ...atts.map(
+              (a) => Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 280),
+                  child: AuthenticatedChatImage(attachment: a, maxHeight: 160),
+                ),
+              ),
+            ),
+          if (hasText)
+            Text(
+              m.text,
+              style: TextStyle(fontSize: 15, color: textColor),
+            ),
+          const SizedBox(height: 4),
+          Text(
+            DateFormat('HH:mm').format(m.at),
+            style: TextStyle(fontSize: 11, color: timeColor),
+          ),
+        ],
+      ),
+    );
+    if (!showClientAvatar) {
+      return Align(
+        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+        child: bubble,
+      );
+    }
     return Align(
-      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        constraints: BoxConstraints(maxWidth: maxW),
-        decoration: BoxDecoration(
-          color: bubbleColor,
-          borderRadius: BorderRadius.circular(16),
-          border: border,
-        ),
-        child: Column(
+      alignment: Alignment.centerLeft,
+      child: Padding(
+        padding: const EdgeInsets.only(right: 48),
+        child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (atts.isNotEmpty)
-              ...atts.map(
-                (a) => Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 280),
-                    child: AuthenticatedChatImage(attachment: a, maxHeight: 160),
-                  ),
-                ),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8, right: 6),
+              child: AuthenticatedProfileAvatar(
+                imageUrl: clientAvatarUrl,
+                fallbackLetter: letter,
+                size: 28,
               ),
-            if (hasText)
-              Text(
-                m.text,
-                style: TextStyle(fontSize: 15, color: textColor),
-              ),
-            const SizedBox(height: 4),
-            Text(
-              DateFormat('HH:mm').format(m.at),
-              style: TextStyle(fontSize: 11, color: timeColor),
             ),
+            Flexible(child: bubble),
           ],
         ),
       ),

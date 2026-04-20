@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/constants/app_info.dart';
 
 class AboutScreen extends StatelessWidget {
@@ -8,10 +8,10 @@ class AboutScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       appBar: AppBar(
-        backgroundColor: AppColors.background,
-        title: const Text('О приложении', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+        backgroundColor: context.palette.background,
+        title: Text('О приложении', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
       ),
       body: ListView(
         physics: const BouncingScrollPhysics(),
@@ -21,52 +21,59 @@ class AboutScreen extends StatelessWidget {
             child: Container(
               width: 88, height: 88,
               decoration: BoxDecoration(
-                gradient: AppColors.primaryGradient,
+                gradient: context.palette.primaryGradient,
                 borderRadius: BorderRadius.circular(22),
-                boxShadow: AppColors.goldGlow,
+                boxShadow: context.palette.goldGlow,
               ),
-              child: const Center(child: Text('AH', style: TextStyle(
-                fontSize: 32, fontWeight: FontWeight.w800, color: Color(0xFF0D0D0D),
-              ))),
+              child: Center(
+                child: Text(
+                  'MS',
+                  style: TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.w800,
+                    color: context.palette.onAccent,
+                  ),
+                ),
+              ),
             ),
           ),
-          const SizedBox(height: 20),
-          const Center(child: Text('AutoHub', style: TextStyle(
-            fontSize: 28, fontWeight: FontWeight.w700, color: AppColors.textPrimary,
+          SizedBox(height: 20),
+          Center(child: Text('MP-Servis', style: TextStyle(
+            fontSize: 28, fontWeight: FontWeight.w700, color: context.palette.textPrimary,
           ))),
-          const SizedBox(height: 4),
-          Center(child: Text('Версия $appVersion (сборка $appBuildNumber)', style: const TextStyle(
-            fontSize: 14, color: AppColors.textSecondary,
+          SizedBox(height: 4),
+          Center(child: Text('Версия $appVersion (сборка $appBuildNumber)', style: TextStyle(
+            fontSize: 14, color: context.palette.textSecondary,
           ))),
-          const SizedBox(height: 24),
+          SizedBox(height: 24),
           _ChangelogSection(items: changelog),
-          const SizedBox(height: 16),
+          SizedBox(height: 16),
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: AppColors.cardBg,
+              color: context.palette.cardBg,
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.border),
+              border: Border.all(color: context.palette.border),
             ),
-            child: const Text(
-              'AutoHub — платформа для управления автосервисными услугами. '
+            child: Text(
+              'MP-Servis — платформа для управления автосервисными услугами. '
               'Записывайтесь в проверенные автосервисы, отслеживайте статус работ в реальном времени, '
               'управляйте обслуживанием вашего автомобиля и храните всю историю в одном месте.',
-              style: TextStyle(fontSize: 14, color: AppColors.textSecondary, height: 1.6),
+              style: TextStyle(fontSize: 14, color: context.palette.textSecondary, height: 1.6),
             ),
           ),
-          const SizedBox(height: 16),
+          SizedBox(height: 16),
           _InfoRow(icon: Icons.map_rounded, label: 'Выбор карт', value: 'Профиль → Настройки → Карты'),
           _InfoRow(icon: Icons.code_rounded, label: 'Flutter', value: '3.10'),
           _InfoRow(icon: Icons.build_rounded, label: 'Сборка', value: '№$appBuildNumber'),
           _InfoRow(icon: Icons.shield_rounded, label: 'Лицензия', value: 'MIT'),
-          const SizedBox(height: 24),
+          SizedBox(height: 24),
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: AppColors.cardBg,
+              color: context.palette.cardBg,
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.border),
+              border: Border.all(color: context.palette.border),
             ),
             child: Column(
               children: [
@@ -76,9 +83,9 @@ class AboutScreen extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(height: 32),
-          const Center(child: Text('© 2025 AutoHub Team',
-            style: TextStyle(fontSize: 12, color: AppColors.textTertiary))),
+          SizedBox(height: 32),
+          Center(child: Text('© 2025 MP-Servis Team',
+            style: TextStyle(fontSize: 12, color: context.palette.textTertiary))),
         ],
       ),
     );
@@ -94,30 +101,30 @@ class _ChangelogSection extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: AppColors.cardBg,
+        color: context.palette.cardBg,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: context.palette.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(Icons.update_rounded, size: 20, color: AppColors.primary),
-              const SizedBox(width: 8),
-              const Text('Последние изменения', style: TextStyle(
-                fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textPrimary,
+              Icon(Icons.update_rounded, size: 20, color: context.palette.primary),
+              SizedBox(width: 8),
+              Text('Последние изменения', style: TextStyle(
+                fontSize: 16, fontWeight: FontWeight.w600, color: context.palette.textPrimary,
               )),
             ],
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
           ...items.map((e) => Padding(
             padding: const EdgeInsets.only(bottom: 6),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('• ', style: TextStyle(fontSize: 14, color: AppColors.primary)),
-                Expanded(child: Text(e, style: const TextStyle(fontSize: 13, color: AppColors.textSecondary, height: 1.35))),
+                Text('• ', style: TextStyle(fontSize: 14, color: context.palette.primary)),
+                Expanded(child: Text(e, style: TextStyle(fontSize: 13, color: context.palette.textSecondary, height: 1.35))),
               ],
             ),
           )),
@@ -139,17 +146,17 @@ class _InfoRow extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
-          color: AppColors.cardBg,
+          color: context.palette.cardBg,
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AppColors.border),
+          border: Border.all(color: context.palette.border),
         ),
         child: Row(
           children: [
-            Icon(icon, size: 20, color: AppColors.textTertiary),
-            const SizedBox(width: 12),
-            Text(label, style: const TextStyle(fontSize: 14, color: AppColors.textSecondary)),
+            Icon(icon, size: 20, color: context.palette.textTertiary),
+            SizedBox(width: 12),
+            Text(label, style: TextStyle(fontSize: 14, color: context.palette.textSecondary)),
             const Spacer(),
-            Text(value, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+            Text(value, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: context.palette.textPrimary)),
           ],
         ),
       ),
@@ -169,13 +176,13 @@ class _LinkRow extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: const BoxDecoration(
-          border: Border(bottom: BorderSide(color: AppColors.border, width: 0.5)),
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: context.palette.border, width: 0.5)),
         ),
         child: Row(
           children: [
-            Expanded(child: Text(label, style: const TextStyle(fontSize: 15, color: AppColors.primary))),
-            const Icon(Icons.open_in_new_rounded, size: 16, color: AppColors.textTertiary),
+            Expanded(child: Text(label, style: TextStyle(fontSize: 15, color: context.palette.primary))),
+            Icon(Icons.open_in_new_rounded, size: 16, color: context.palette.textTertiary),
           ],
         ),
       ),

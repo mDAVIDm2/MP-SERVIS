@@ -142,6 +142,8 @@ class Chat {
   /// Код вида бизнеса организации (`organization_kind` в API). Для подписи «Чат с …».
   final String? organizationKind;
   final String? stoLogoUrl;
+  /// Телефон организации (с API `organization_phone`).
+  final String? stoPhone;
   final String orderId;
   final String orderNumber;
   final String carBrand;
@@ -165,6 +167,7 @@ class Chat {
     required this.stoName,
     this.organizationKind,
     this.stoLogoUrl,
+    this.stoPhone,
     required this.orderId,
     required this.orderNumber,
     required this.carBrand,

@@ -19,6 +19,19 @@ class Formatters {
     return '${formatter.format(km)} км';
   }
 
+  static String mileageLocalized(int km, String intlLocale) {
+    final formatter = NumberFormat('#,###', intlLocale);
+    final unit = intlLocale.startsWith('en') ? 'km' : 'км';
+    return '${formatter.format(km)} $unit';
+  }
+
+  /// Две последние цифры года для подписи вроде `'25` (безопасно при годе 0 или < 10).
+  static String carYearTwoDigitSuffix(int year) {
+    final s = year.toString();
+    if (s.length < 2) return s;
+    return s.substring(s.length - 2);
+  }
+
   /// +79991234567 → "+7 (999) 123-45-67"
   static String phone(String raw) {
     final digits = raw.replaceAll(RegExp(r'[^\d]'), '');
@@ -33,9 +46,18 @@ class Formatters {
     return DateFormat('d MMMM yyyy', 'ru_RU').format(_local(d));
   }
 
+  static String dateFullLocalized(DateTime d, String intlLocale) {
+    return DateFormat('d MMMM yyyy', intlLocale).format(_local(d));
+  }
+
   /// DateTime → "23 дек"
   static String dateShortRu(DateTime d) {
     return DateFormat('d MMM', 'ru_RU').format(_local(d));
+  }
+
+  /// Короткая дата с учётом локали (`en_US` / `ru_RU`).
+  static String dateShortLocalized(DateTime d, String intlLocale) {
+    return DateFormat('d MMM', intlLocale).format(_local(d));
   }
 
   /// DateTime → "23 дек 2025"

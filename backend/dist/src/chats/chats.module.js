@@ -21,6 +21,7 @@ const organization_entity_1 = require("../organizations/organization.entity");
 const media_module_1 = require("../media/media.module");
 const subscriptions_module_1 = require("../subscriptions/subscriptions.module");
 const chat_message_attachment_entity_1 = require("./chat-message-attachment.entity");
+const users_module_1 = require("../users/users.module");
 let ChatsModule = class ChatsModule {
 };
 exports.ChatsModule = ChatsModule;
@@ -32,6 +33,7 @@ exports.ChatsModule = ChatsModule = __decorate([
             (0, common_1.forwardRef)(() => notifications_module_1.NotificationsModule),
             media_module_1.MediaModule,
             subscriptions_module_1.SubscriptionsModule,
+            users_module_1.UsersModule,
         ],
         controllers: [chats_controller_1.ChatsController],
         providers: [chats_service_1.ChatsService],

@@ -2,14 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/navigation/app_routes.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/theme/app_design_system.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../core/providers/app_providers.dart';
 import '../../../../shared/models/order_model.dart';
 import '../../../../shared/models/car_model.dart';
-import '../../../../shared/widgets/common_widgets.dart';
 import '../../../orders/presentation/screens/order_detail_screen.dart';
+import '../../../orders/presentation/widgets/order_avatars.dart';
 import '../../../search/presentation/screens/sto_detail_screen.dart';
 
 /// Компактный чип состояния заказа: под строкой даты, аккуратный вид.
@@ -44,7 +44,7 @@ class _CompactStatusChip extends StatelessWidget {
               shape: BoxShape.circle,
             ),
           ),
-          const SizedBox(width: 6),
+          SizedBox(width: 6),
           Text(
             label,
             style: TextStyle(
@@ -62,11 +62,13 @@ class _CompactStatusChip extends StatelessWidget {
 }
 
 /// Компактная action-кнопка: тёмный фон, золотой бордер, золотая иконка (36–40 px).
-Widget _buildActionButton({
+Widget _buildActionButton(
+  BuildContext context, {
   required IconData icon,
   required String tooltip,
   required VoidCallback onPressed,
 }) {
+  final p = context.palette;
   return Material(
     color: Colors.transparent,
     child: InkWell(
@@ -76,11 +78,11 @@ Widget _buildActionButton({
         width: 38,
         height: 38,
         decoration: BoxDecoration(
-          color: AppColors.bgCard2,
+          color: p.bgCard2,
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AppColors.strokeGold.withValues(alpha: 0.2)),
+          border: Border.all(color: p.strokeGold.withValues(alpha: 0.2)),
         ),
-        child: Icon(icon, size: 20, color: AppColors.gold1),
+        child: Icon(icon, size: 20, color: p.gold1),
       ),
     ),
   );
@@ -104,10 +106,10 @@ class OrderCard extends ConsumerWidget {
     if (!context.mounted) return;
     final sto = result.dataOrNull;
     if (sto != null) {
-      pushCupertino(context, STODetailScreen(sto: sto));
+      pushStoDetailScreen(context, STODetailScreen(sto: sto));
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Не удалось загрузить карточку сервиса'), backgroundColor: AppColors.warning),
+        SnackBar(content: Text('Не удалось загрузить карточку сервиса'), backgroundColor: context.palette.warning),
       );
     }
   }
@@ -117,7 +119,7 @@ class OrderCard extends ConsumerWidget {
     if (phone == null || phone.isEmpty) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Номер не указан'), backgroundColor: AppColors.warning),
+          SnackBar(content: Text('Номер не указан'), backgroundColor: context.palette.warning),
         );
       }
       return;
@@ -137,7 +139,7 @@ class OrderCard extends ConsumerWidget {
       await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Адрес не указан'), backgroundColor: AppColors.warning),
+        SnackBar(content: Text('Адрес не указан'), backgroundColor: context.palette.warning),
       );
     }
   }
@@ -188,11 +190,13 @@ class OrderCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final p = context.palette;
+    final stoAsync = ref.watch(stoByIdProvider(order.stoId));
+    final orgImageUrl = resolveOrganizationLogoUrl(stoAsync.valueOrNull);
     final (timeStart, timeEnd) = _timeRange(order);
     final dateStr = Formatters.dateShortRu(order.dateTime);
     final timeRangeStr = Formatters.timeRange(timeStart, timeEnd);
     final summaryRows = _summaryRows(order);
-    const double spacing = 12;
 
     return GestureDetector(
       onTap: () async {
@@ -200,7 +204,7 @@ class OrderCard extends ConsumerWidget {
         onReturnFromDetail?.call();
       },
       child: Container(
-        decoration: AppDesignSystem.orderCardDecoration(),
+        decoration: AppDesignSystem.orderCardDecoration(p),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -208,9 +212,9 @@ class OrderCard extends ConsumerWidget {
             Container(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
               decoration: BoxDecoration(
-                color: AppColors.bgCard2.withValues(alpha: 0.5),
+                color: context.palette.bgCard2.withValues(alpha: 0.5),
                 borderRadius: const BorderRadius.vertical(top: Radius.circular(AppDesignSystem.radiusOrderCard)),
-                border: Border(bottom: BorderSide(color: AppColors.strokeSoft.withValues(alpha: 0.6), width: 1)),
+                border: Border(bottom: BorderSide(color: context.palette.strokeSoft.withValues(alpha: 0.6), width: 1)),
               ),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
@@ -223,30 +227,30 @@ class OrderCard extends ConsumerWidget {
                         children: [
                           Text(
                             order.stoName,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.w700,
-                              color: AppColors.textPrimary,
+                              color: context.palette.textPrimary,
                               letterSpacing: -0.3,
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
                           if (_orderOrgKindLabel(order) != null) ...[
-                            const SizedBox(height: 6),
+                            SizedBox(height: 6),
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                               decoration: BoxDecoration(
-                                color: AppColors.nestedBg,
+                                color: context.palette.nestedBg,
                                 borderRadius: BorderRadius.circular(6),
-                                border: Border.all(color: AppColors.border.withValues(alpha: 0.5)),
+                                border: Border.all(color: context.palette.border.withValues(alpha: 0.5)),
                               ),
                               child: Text(
                                 _orderOrgKindLabel(order)!,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.w600,
-                                  color: AppColors.textSecondary,
+                                  color: context.palette.textSecondary,
                                 ),
                               ),
                             ),
@@ -255,22 +259,24 @@ class OrderCard extends ConsumerWidget {
                       ),
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  SizedBox(width: 8),
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Tooltip(
                         message: 'Позвонить',
                         child: _buildActionButton(
+                          context,
                           icon: Icons.phone_rounded,
                           tooltip: 'Позвонить',
                           onPressed: () => _openPhone(context, order),
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      SizedBox(width: 8),
                       Tooltip(
                         message: 'Маршрут',
                         child: _buildActionButton(
+                          context,
                           icon: Icons.directions_rounded,
                           tooltip: 'Маршрут',
                           onPressed: () => _openRoute(context, ref, order),
@@ -286,61 +292,52 @@ class OrderCard extends ConsumerWidget {
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 14, 20, 12),
               child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Container(
-                    width: 84,
-                    height: 84,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.06),
-                      borderRadius: BorderRadius.circular(AppDesignSystem.radiusSmall),
-                      border: Border.all(color: AppColors.strokeSoft),
-                    ),
-                    child: Icon(
-                      Icons.build_circle_rounded,
-                      size: 40,
-                      color: AppColors.gold2.withValues(alpha: 0.7),
-                    ),
+                  OrderOrganizationAvatar(
+                    imageUrl: orgImageUrl,
+                    name: order.stoName,
+                    size: 58,
                   ),
-                  const SizedBox(width: 14),
+                  SizedBox(width: 14),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
                           '#${order.orderNumber}',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w700,
-                            color: AppColors.gold1,
+                            color: context.palette.gold1,
                             letterSpacing: -0.2,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        const SizedBox(height: 4),
+                        SizedBox(height: 4),
                         Text(
-                          '${car.brand} ${car.model} \'${car.year.toString().substring(car.year.toString().length - 2)}',
-                          style: const TextStyle(
+                          '${car.brand} ${car.model} \'${Formatters.carYearTwoDigitSuffix(car.year)}',
+                          style: TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w500,
-                            color: AppColors.textSecondary,
+                            color: context.palette.textSecondary,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        const SizedBox(height: 4),
+                        SizedBox(height: 4),
                         Row(
                           children: [
-                            Icon(Icons.schedule_rounded, size: 13, color: AppColors.textMuted),
-                            const SizedBox(width: 4),
+                            Icon(Icons.schedule_rounded, size: 13, color: context.palette.textMuted),
+                            SizedBox(width: 4),
                             Expanded(
                               child: Text(
                                 '$dateStr, $timeRangeStr',
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w400,
-                                  color: AppColors.textMuted,
+                                  color: context.palette.textMuted,
                                 ),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
@@ -348,7 +345,7 @@ class OrderCard extends ConsumerWidget {
                             ),
                           ],
                         ),
-                        const SizedBox(height: 8),
+                        SizedBox(height: 8),
                         // Состояние заказа: компактный бейдж под строкой даты
                         _CompactStatusChip(
                           label: order.displayStatus.label,
@@ -369,19 +366,19 @@ class OrderCard extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
             if (order.itemsForDisplay.isNotEmpty) ...[
-              const Text(
+              Text(
                 'Состав заказа',
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
-                  color: AppColors.textSecondary,
+                  color: context.palette.textSecondary,
                 ),
               ),
             ],
 
             // Строки состава: кружок/галочка, название (перечёркнуто если выполнено), цена справа
             if (summaryRows.isNotEmpty) ...[
-              const SizedBox(height: 8),
+              SizedBox(height: 8),
               ...summaryRows.map((row) {
                 final completed = row.isCompleted == true;
                 return Padding(
@@ -392,24 +389,24 @@ class OrderCard extends ConsumerWidget {
                       Icon(
                         completed ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
                         size: 18,
-                        color: completed ? AppColors.success : AppColors.textMuted,
+                        color: completed ? context.palette.success : context.palette.textMuted,
                       ),
-                      const SizedBox(width: 8),
+                      SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           row.name,
                           style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w400,
-                            color: row.isRest ? AppColors.textMuted : AppColors.textSecondary,
+                            color: row.isRest ? context.palette.textMuted : context.palette.textSecondary,
                             decoration: completed ? TextDecoration.lineThrough : null,
-                            decorationColor: AppColors.textMuted,
+                            decorationColor: context.palette.textMuted,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      const SizedBox(width: 12),
+                      SizedBox(width: 12),
                       SizedBox(
                         width: 72,
                         child: Text(
@@ -417,9 +414,9 @@ class OrderCard extends ConsumerWidget {
                           style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
-                            color: AppColors.textPrimary,
+                            color: context.palette.textPrimary,
                             decoration: completed ? TextDecoration.lineThrough : null,
-                            decorationColor: AppColors.textMuted,
+                            decorationColor: context.palette.textMuted,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -433,20 +430,20 @@ class OrderCard extends ConsumerWidget {
             ],
 
             if (order.status == OrderStatus.inProgress) ...[
-              const SizedBox(height: 10),
+              SizedBox(height: 10),
               ClipRRect(
                 borderRadius: BorderRadius.circular(2),
                 child: LinearProgressIndicator(
                   value: order.itemsProgress,
                   minHeight: 3,
-                  backgroundColor: AppColors.bgCard2,
+                  backgroundColor: context.palette.bgCard2,
                   valueColor: AlwaysStoppedAnimation(order.status.color),
                 ),
               ),
-              const SizedBox(height: 4),
+              SizedBox(height: 4),
               Text(
                 '${(order.itemsProgress * 100).round()}%',
-                style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
+                style: TextStyle(fontSize: 12, color: context.palette.textMuted),
               ),
             ],
 
@@ -457,20 +454,20 @@ class OrderCard extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.baseline,
               textBaseline: TextBaseline.alphabetic,
               children: [
-                const Text(
+                Text(
                   'Итого:',
                   style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.textSecondary,
+                    color: context.palette.textSecondary,
                   ),
                 ),
                 Text(
                   Formatters.money(order.totalKopecksForDisplay),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 30,
                     fontWeight: FontWeight.w800,
-                    color: AppColors.textPrimary,
+                    color: context.palette.textPrimary,
                     letterSpacing: -0.5,
                   ),
                   maxLines: 1,

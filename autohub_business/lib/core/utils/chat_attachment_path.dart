@@ -2,6 +2,12 @@
 String chatAttachmentPathForDio(String urlFromServer, String apiBaseUrl) {
   final u = urlFromServer.trim();
   if (u.isEmpty) return u;
+  if (u.startsWith('/api/v1/')) {
+    return u.substring('/api/v1'.length);
+  }
+  if (u == '/api/v1') {
+    return '/';
+  }
   final uri = Uri.tryParse(u);
   if (uri != null && uri.hasScheme) {
     var p = uri.path;

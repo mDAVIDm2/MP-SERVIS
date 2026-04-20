@@ -48,6 +48,8 @@ class ChatPreview {
   final String orderNumber;
   final String clientName;
   final String clientPhone;
+  /// URL фото профиля клиента (с API `client_avatar_url`), для списка и ленты чата в приложении организации.
+  final String? clientAvatarUrl;
   final String lastMessageText;
   final DateTime lastMessageAt;
   final int unreadCount;
@@ -60,6 +62,7 @@ class ChatPreview {
     required this.orderNumber,
     required this.clientName,
     this.clientPhone = '',
+    this.clientAvatarUrl,
     required this.lastMessageText,
     required this.lastMessageAt,
     this.unreadCount = 0,
@@ -93,6 +96,10 @@ class ChatPreview {
       orderNumber: j['order_number'] as String? ?? '',
       clientName: j['client_name'] as String? ?? '',
       clientPhone: j['client_phone'] as String? ?? '',
+      clientAvatarUrl: () {
+        final u = j['client_avatar_url']?.toString() ?? j['clientAvatarUrl']?.toString() ?? '';
+        return u.trim().isEmpty ? null : u.trim();
+      }(),
       lastMessageText: j['last_message_text'] as String? ?? '',
       lastMessageAt: _parseAt(j['last_message_at']),
       unreadCount: (j['unread_count'] as num?)?.toInt() ?? 0,

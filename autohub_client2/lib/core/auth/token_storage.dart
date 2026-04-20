@@ -7,9 +7,9 @@ class TokenStorage {
 
   final FlutterSecureStorage _s;
 
-  static const _kAccess = 'autohub_access_token';
-  static const _kRefresh = 'autohub_refresh_token';
-  static const _kSession = 'autohub_session_id';
+  static const _kAccess = 'mp_servis_access_token';
+  static const _kRefresh = 'mp_servis_refresh_token';
+  static const _kSession = 'mp_servis_session_id';
 
   Future<void> writeAll({
     required String accessToken,

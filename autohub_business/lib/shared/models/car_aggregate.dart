@@ -17,6 +17,8 @@ class CarView {
   final String? clientName;
   /// Телефон клиента.
   final String? clientPhone;
+  /// Фото авто из любого заказа, где клиент передал URL.
+  final String? carPhotoUrl;
   /// Все заказы по этой машине (от новых к старым).
   final List<Order> orders;
 
@@ -31,6 +33,7 @@ class CarView {
     this.engineType,
     this.clientName,
     this.clientPhone,
+    this.carPhotoUrl,
     required this.orders,
   });
 
@@ -89,6 +92,14 @@ class CarView {
       final first = list.first;
       final clientName = first.clientName;
       final clientPhone = first.clientPhone;
+      String? photo;
+      for (final o in list) {
+        final u = o.carPhotoUrl?.trim();
+        if (u != null && u.isNotEmpty) {
+          photo = u;
+          break;
+        }
+      }
       cars.add(CarView(
         id: entry.key,
         carInfo: first.carInfo,
@@ -100,6 +111,7 @@ class CarView {
         engineType: first.engineType,
         clientName: clientName,
         clientPhone: clientPhone,
+        carPhotoUrl: photo,
         orders: list,
       ));
     }

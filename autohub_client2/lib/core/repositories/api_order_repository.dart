@@ -66,6 +66,8 @@ class ApiOrderRepository implements OrderRepository {
     String? color,
     int? mileage,
     String? engineType,
+    String? carPhotoUrl,
+    List<ClientOrderLineDraft>? orderLineItems,
   }) async {
     final servicesResult = await _stoRepo.getServices(organizationId);
     final services = servicesResult.dataOrNull;
@@ -80,15 +82,32 @@ class ApiOrderRepository implements OrderRepository {
         ),
       );
     }
-    final items = selected
-        .map(
-          (s) => <String, dynamic>{
-            'name': s.name,
-            'price_kopecks': s.effectivePriceKopecks(bodyType),
-            'estimated_minutes': s.effectiveDurationMinutes(bodyType),
-          },
-        )
-        .toList();
+    final List<Map<String, dynamic>> items;
+    if (orderLineItems != null && orderLineItems.isNotEmpty) {
+      items = orderLineItems
+          .map(
+            (e) => <String, dynamic>{
+              'name': e.name,
+              'price_kopecks': e.priceKopecks,
+              'estimated_minutes': e.estimatedMinutes,
+              // Ручной состав: без привязки к прайсу — организация сама задала цену/время.
+            },
+          )
+          .toList();
+    } else {
+      items = selected
+          .map(
+            (s) => <String, dynamic>{
+              'name': s.name,
+              'price_kopecks': s.effectivePriceKopecks(bodyType),
+              'estimated_minutes': s.effectiveDurationMinutes(bodyType),
+              'service_id': s.id,
+              if (s.catalogItemId != null && s.catalogItemId!.trim().isNotEmpty)
+                'catalog_item_id': s.catalogItemId!.trim(),
+            },
+          )
+          .toList();
+    }
     final DateTime dateTime;
     if (scheduledStartUtc != null) {
       dateTime = scheduledStartUtc.toUtc();
@@ -120,6 +139,7 @@ class ApiOrderRepository implements OrderRepository {
       if (mileage != null) 'mileage': mileage,
       if (engineType != null && engineType.isNotEmpty)
         'engine_type': engineType,
+      if (carPhotoUrl != null && carPhotoUrl.isNotEmpty) 'car_photo_url': carPhotoUrl,
     };
     final result = await _api.createOrderFromClient(body);
     final data = result.dataOrNull;

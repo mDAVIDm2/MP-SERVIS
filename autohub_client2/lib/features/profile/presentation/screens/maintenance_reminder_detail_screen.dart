@@ -1,12 +1,36 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/l10n/app_l10n.dart';
+import '../../../../core/l10n/l10n_scope.dart';
+import '../../../../core/l10n/maintenance_type_l10n.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/settings/maintenance_reminders_provider.dart';
 import '../../../../shared/models/car_model.dart';
+import '../widgets/add_maintenance_record_sheet.dart';
+
+String _maintenanceDetailEmoji(MaintenanceType t) {
+  switch (t) {
+    case MaintenanceType.oil:
+      return '🛢';
+    case MaintenanceType.tires:
+      return '🛞';
+    case MaintenanceType.battery:
+      return '🔋';
+    case MaintenanceType.antifreeze:
+      return '❄️';
+    case MaintenanceType.brakes:
+      return '🔧';
+    case MaintenanceType.inspection:
+      return '🔍';
+    default:
+      return '⚙️';
+  }
+}
 
 /// Полная карточка напоминания: интервалы, три блока «было / осталось / потребуется», история, запись вручную.
-class MaintenanceReminderDetailScreen extends ConsumerWidget {
+class MaintenanceReminderDetailScreen extends ConsumerStatefulWidget {
   const MaintenanceReminderDetailScreen({
     super.key,
     required this.car,
@@ -16,124 +40,159 @@ class MaintenanceReminderDetailScreen extends ConsumerWidget {
   final Car car;
   final MaintenanceType type;
 
-  static String _emoji(MaintenanceType t) {
-    switch (t) {
-      case MaintenanceType.oil:
-        return '🛢';
-      case MaintenanceType.tires:
-        return '🛞';
-      case MaintenanceType.battery:
-        return '🔋';
-      case MaintenanceType.antifreeze:
-        return '❄️';
-      case MaintenanceType.brakes:
-        return '🔧';
-      case MaintenanceType.inspection:
-        return '🔍';
-      default:
-        return '⚙️';
-    }
-  }
+  @override
+  ConsumerState<MaintenanceReminderDetailScreen> createState() => _MaintenanceReminderDetailScreenState();
+}
+
+class _MaintenanceReminderDetailScreenState extends ConsumerState<MaintenanceReminderDetailScreen> {
+  final GlobalKey<_IntervalsCardState> _intervalsKey = GlobalKey<_IntervalsCardState>();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     ref.watch(maintenanceRemindersProvider);
     final notifier = ref.read(maintenanceRemindersProvider.notifier);
+    final car = widget.car;
+    final type = widget.type;
     final config = notifier.getConfig(car.id, type.name);
     final records = notifier.getRecords(car.id, type.name);
     final snap = notifier.computeDue(car.id, type.name, car.mileage);
+    final oilQuickSetup = type == MaintenanceType.oil && records.isEmpty && config != null;
+    final l10n = L10nScope.of(context);
+    final showHistorySection = records.isNotEmpty || config != null;
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       appBar: AppBar(
-        backgroundColor: AppColors.background,
+        backgroundColor: context.palette.background,
         elevation: 0,
         title: Text(
-          type.title,
-          style: const TextStyle(
+          type.localizedTitle(l10n),
+          style: TextStyle(
             fontSize: 17,
             fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary,
+            color: context.palette.textPrimary,
           ),
         ),
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        padding: EdgeInsets.fromLTRB(
+          20,
+          8,
+          20,
+          32 + MediaQuery.viewInsetsOf(context).bottom,
+        ),
         children: [
-          _SummaryCard(
-            car: car,
-            type: type,
-            config: config,
-            snap: snap,
-          ),
+          if (oilQuickSetup)
+            _OilQuickSetupBanner(car: car, l10n: l10n)
+          else
+            _SummaryCard(
+              car: car,
+              type: type,
+              config: config,
+              snap: snap,
+              l10n: l10n,
+            ),
           if (config != null) ...[
-            const SizedBox(height: 16),
+            SizedBox(height: 16),
             _IntervalsCard(
+              key: _intervalsKey,
               car: car,
               type: type,
               config: config,
               notifier: notifier,
             ),
           ],
-          const SizedBox(height: 18),
-          Row(
-            children: [
-              Text(
-                'История замен',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.textPrimary.withValues(alpha: 0.95),
+          if (showHistorySection) ...[
+            SizedBox(height: 18),
+            Row(
+              children: [
+                Text(
+                  l10n.replacementHistory,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: context.palette.textPrimary.withValues(alpha: 0.95),
+                  ),
+                ),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: () => showAddMaintenanceRecordSheet(
+                    context,
+                    ref,
+                    cars: [car],
+                    initialCar: car,
+                    initialType: type,
+                  ),
+                  icon: Icon(Icons.add_rounded, size: 20),
+                  label: Text(l10n.add),
+                ),
+              ],
+            ),
+            SizedBox(height: 8),
+            if (records.isEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: context.palette.cardBg,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: context.palette.border),
+                ),
+                child: Text(
+                  l10n.maintHistoryEmpty,
+                  style: TextStyle(fontSize: 13, color: context.palette.textSecondary, height: 1.4),
+                ),
+              )
+            else
+              ...records.map(
+                (r) => _RecordTile(
+                  record: r,
+                  l10n: l10n,
+                  onDelete: () {
+                    notifier.removeRecord(r.id);
+                  },
                 ),
               ),
-              const Spacer(),
-              TextButton.icon(
-                onPressed: config == null
-                    ? null
-                    : () => _openAddRecord(context, ref, car, type, config),
-                icon: const Icon(Icons.add_rounded, size: 20),
-                label: const Text('Добавить'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          if (records.isEmpty)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: AppColors.cardBg,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: AppColors.border),
-              ),
-              child: const Text(
-                'Пока нет записей. Добавьте вручную или они появятся из завершённых заказов в автосервисе, на шиномонтаже или в сервисе электромобилей.',
-                style: TextStyle(fontSize: 13, color: AppColors.textSecondary, height: 1.4),
-              ),
-            )
-          else
-            ...records.map(
-              (r) => _RecordTile(
-                record: r,
-                onDelete: () {
-                  notifier.removeRecord(r.id);
-                },
-              ),
-            ),
+          ],
           if (config != null) ...[
-            const SizedBox(height: 28),
+            SizedBox(height: 28),
             Center(
               child: TextButton(
-                onPressed: () => _confirmRemoveReminder(context, ref, car.id, type.name),
-                child: const Text(
-                  'Убрать напоминание из списка',
-                  style: TextStyle(color: AppColors.error, fontWeight: FontWeight.w500),
+                onPressed: () => _confirmRemoveReminder(context, ref, car.id, type.name, l10n),
+                child: Text(
+                  l10n.removeReminderFromList,
+                  style: TextStyle(color: context.palette.error, fontWeight: FontWeight.w500),
                 ),
               ),
             ),
           ],
         ],
       ),
+      bottomNavigationBar: config == null
+          ? null
+          : SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+                child: FilledButton(
+                  onPressed: () {
+                    _intervalsKey.currentState?.commitIntervals();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(l10n.settingsSaved),
+                        backgroundColor: context.palette.success,
+                      ),
+                    );
+                  },
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(double.infinity, 48),
+                    backgroundColor: context.palette.primary,
+                    foregroundColor: context.palette.onAccent,
+                  ),
+                  child: Text(l10n.save, style: TextStyle(fontWeight: FontWeight.w600)),
+                ),
+              ),
+            ),
     );
   }
 
@@ -142,21 +201,22 @@ class MaintenanceReminderDetailScreen extends ConsumerWidget {
     WidgetRef ref,
     String carId,
     String typeKey,
+    AppL10n l10n,
   ) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.cardBg,
-        title: const Text('Убрать напоминание?', style: TextStyle(color: AppColors.textPrimary)),
-        content: const Text(
-          'Настройки интервалов будут удалены. История замен сохранится.',
-          style: TextStyle(color: AppColors.textSecondary),
+        backgroundColor: context.palette.cardBg,
+        title: Text(l10n.removeReminderTitle, style: TextStyle(color: context.palette.textPrimary)),
+        content: Text(
+          l10n.removeReminderBody,
+          style: TextStyle(color: context.palette.textSecondary),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(l10n.cancel)),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Убрать', style: TextStyle(color: AppColors.error)),
+            child: Text(l10n.removeAction, style: TextStyle(color: context.palette.error)),
           ),
         ],
       ),
@@ -167,60 +227,47 @@ class MaintenanceReminderDetailScreen extends ConsumerWidget {
     }
   }
 
-  static void _openAddRecord(
-    BuildContext context,
-    WidgetRef ref,
-    Car car,
-    MaintenanceType type,
-    MaintenanceConfig config,
-  ) {
-    final kmController = TextEditingController(text: '${car.mileage}');
-    final placeController = TextEditingController();
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.cardBg,
-        title: Text('Новая запись', style: const TextStyle(color: AppColors.textPrimary)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Пробег (км)', style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
-            const SizedBox(height: 4),
-            TextField(
-              controller: kmController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(border: OutlineInputBorder(), hintText: 'Например 65 000'),
-            ),
-            const SizedBox(height: 12),
-            const Text('Место (сервис)', style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
-            const SizedBox(height: 4),
-            TextField(
-              controller: placeController,
-              decoration: const InputDecoration(border: OutlineInputBorder(), hintText: 'Необязательно'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
-          TextButton(
-            onPressed: () {
-              final km = int.tryParse(kmController.text.replaceAll(' ', '').trim());
-              if (km != null && km >= 0) {
-                ref.read(maintenanceRemindersProvider.notifier).addRecord(
-                      MaintenanceRecord(
-                        id: 'man_${DateTime.now().millisecondsSinceEpoch}',
-                        carId: car.id,
-                        typeKey: type.name,
-                        odometerKm: km,
-                        date: DateTime.now(),
-                        place: placeController.text.trim().isEmpty ? null : placeController.text.trim(),
-                      ),
-                    );
-                Navigator.pop(ctx);
-              }
-            },
-            child: const Text('Сохранить', style: TextStyle(color: AppColors.primary)),
+}
+
+/// Первый шаг для масла: без тяжёлой сводки — только подсказка и поля интервалов ниже.
+class _OilQuickSetupBanner extends StatelessWidget {
+  const _OilQuickSetupBanner({required this.car, required this.l10n});
+
+  final Car car;
+  final AppL10n l10n;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: context.palette.cardBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: context.palette.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(_maintenanceDetailEmoji(MaintenanceType.oil), style: TextStyle(fontSize: 28)),
+              SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  MaintenanceType.oil.localizedTitle(l10n),
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: context.palette.textPrimary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 10),
+          Text(
+            car.displayName,
+            style: TextStyle(fontSize: 12, color: context.palette.textSecondary),
           ),
         ],
       ),
@@ -234,14 +281,14 @@ class _SummaryCard extends StatelessWidget {
     required this.type,
     required this.config,
     required this.snap,
+    required this.l10n,
   });
 
   final Car car;
   final MaintenanceType type;
   final MaintenanceConfig? config;
   final MaintenanceDueSnapshot snap;
-
-  static final _df = DateFormat('dd.MM.yyyy');
+  final AppL10n l10n;
 
   @override
   Widget build(BuildContext context) {
@@ -249,13 +296,13 @@ class _SummaryCard extends StatelessWidget {
       return Container(
         padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
-          color: AppColors.cardBg,
+          color: context.palette.cardBg,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.border),
+          border: Border.all(color: context.palette.border),
         ),
-        child: const Text(
-          'Напоминание не добавлено. Вернитесь назад и выберите услугу в списке.',
-          style: TextStyle(fontSize: 14, color: AppColors.textSecondary, height: 1.35),
+        child: Text(
+          l10n.reminderNotAdded,
+          style: TextStyle(fontSize: 14, color: context.palette.textSecondary, height: 1.35),
         ),
       );
     }
@@ -264,25 +311,25 @@ class _SummaryCard extends StatelessWidget {
     final last = snap.lastRecord;
     final kmLine = cfg.useKmInterval && cfg.intervalKm > 0;
     final moLine = cfg.useMonthsInterval && cfg.intervalMonths > 0;
+    final df = DateFormat('dd.MM.yyyy', l10n.locale.languageCode);
 
     String fmtKm(int? k) {
       if (k == null) return '—';
-      final sep = NumberFormat.decimalPattern('ru_RU');
-      return '${sep.format(k)} км';
+      return l10n.mileageValue(k);
     }
 
     String fmtDays(int? d) {
       if (d == null) return '—';
-      if (d < 0) return 'просрочено на ${-d} дн.';
-      return '≈ $d дн.';
+      if (d < 0) return l10n.overdueDays(-d);
+      return l10n.approxDays(d);
     }
 
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: AppColors.cardBg,
+        color: context.palette.cardBg,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: context.palette.border),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.04),
@@ -296,67 +343,70 @@ class _SummaryCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Text(MaintenanceReminderDetailScreen._emoji(type), style: const TextStyle(fontSize: 28)),
-              const SizedBox(width: 12),
+              Text(_maintenanceDetailEmoji(type), style: TextStyle(fontSize: 28)),
+              SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      type.title,
-                      style: const TextStyle(
+                      type.localizedTitle(l10n),
+                      style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w700,
-                        color: AppColors.textPrimary,
+                        color: context.palette.textPrimary,
                       ),
                     ),
-                    const SizedBox(height: 3),
+                    SizedBox(height: 3),
                     Text(
                       car.displayName,
-                      style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                      style: TextStyle(fontSize: 12, color: context.palette.textSecondary),
                     ),
                   ],
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          SizedBox(height: 16),
           _line(
-            'Последняя замена',
-            last != null ? '${fmtKm(last.odometerKm)} · ${_df.format(last.date)}' : 'Нет данных — добавьте запись',
-            AppColors.textPrimary,
+            context,
+            l10n.lastReplacement,
+            last != null ? '${fmtKm(last.odometerKm)} · ${df.format(last.date)}' : l10n.noDataAddRecord,
+            context.palette.textPrimary,
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
           _line(
-            'Осталось',
+            context,
+            l10n.remaining,
             last == null
                 ? '—'
                 : [
                     if (kmLine && snap.kmRemaining != null) fmtKm(snap.kmRemaining),
                     if (moLine && snap.daysRemaining != null) fmtDays(snap.daysRemaining),
                   ].where((s) => s != '—').join(' · ').orDashIfEmpty(),
-            snap.overdue ? AppColors.error : AppColors.textPrimary,
+            snap.overdue ? context.palette.error : context.palette.textPrimary,
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
           _line(
-            'Следующая замена',
+            context,
+            l10n.nextReplacement,
             last == null
                 ? '—'
                 : [
-                    if (kmLine && snap.nextDueKm != null) 'на ${fmtKm(snap.nextDueKm)}',
-                    if (moLine && snap.nextDueDate != null) 'до ${_df.format(snap.nextDueDate!)}',
+                    if (kmLine && snap.nextDueKm != null) '${l10n.onMileagePrefix}${fmtKm(snap.nextDueKm)}',
+                    if (moLine && snap.nextDueDate != null) '${l10n.untilPrefix}${df.format(snap.nextDueDate!)}',
                   ].join(' · ').orDashIfEmpty(),
-            snap.overdue ? AppColors.error : AppColors.primary,
+            snap.overdue ? context.palette.error : context.palette.primary,
           ),
           if (snap.overdue) ...[
-            const SizedBox(height: 10),
+            SizedBox(height: 10),
             Text(
               snap.overdueByKm && snap.overdueByDate
-                  ? 'Просрочено по пробегу и по сроку'
+                  ? l10n.overdueKmAndDate
                   : snap.overdueByKm
-                      ? 'Просрочено по пробегу'
-                      : 'Просрочено по сроку',
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.error),
+                      ? l10n.overdueKm
+                      : l10n.overdueDate,
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: context.palette.error),
             ),
           ],
         ],
@@ -364,12 +414,12 @@ class _SummaryCard extends StatelessWidget {
     );
   }
 
-  Widget _line(String label, String value, Color valueColor) {
+  Widget _line(BuildContext context, String label, String value, Color valueColor) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
-        const SizedBox(height: 4),
+        Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: context.palette.textSecondary)),
+        SizedBox(height: 4),
         Text(value, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: valueColor, height: 1.25)),
       ],
     );
@@ -380,8 +430,19 @@ extension _StrOr on String {
   String orDashIfEmpty() => isEmpty ? '—' : this;
 }
 
+const int _kKmIntervalMin = 1000;
+const int _kKmIntervalMax = 15000;
+const int _kMonthsIntervalMin = 1;
+const int _kMonthsIntervalMax = 24;
+
+int _snapKmInterval(int v) {
+  final r = (v / 1000.0).round() * 1000;
+  return r.clamp(_kKmIntervalMin, _kKmIntervalMax);
+}
+
 class _IntervalsCard extends StatefulWidget {
   const _IntervalsCard({
+    super.key,
     required this.car,
     required this.type,
     required this.config,
@@ -404,18 +465,20 @@ class _IntervalsCardState extends State<_IntervalsCard> {
   @override
   void initState() {
     super.initState();
-    _kmCtrl = TextEditingController(text: '${widget.config.intervalKm}');
-    _monthsCtrl = TextEditingController(text: widget.config.intervalMonths > 0 ? '${widget.config.intervalMonths}' : '12');
+    _kmCtrl = TextEditingController(text: '${_snapKmInterval(widget.config.intervalKm)}');
+    _monthsCtrl = TextEditingController(text: widget.config.intervalMonths > 0 ? '${widget.config.intervalMonths.clamp(_kMonthsIntervalMin, _kMonthsIntervalMax)}' : '12');
+    _kmCtrl.addListener(() => setState(() {}));
+    _monthsCtrl.addListener(() => setState(() {}));
   }
 
   @override
   void didUpdateWidget(covariant _IntervalsCard oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.config.intervalKm != widget.config.intervalKm) {
-      _kmCtrl.text = '${widget.config.intervalKm}';
+      _kmCtrl.text = '${_snapKmInterval(widget.config.intervalKm)}';
     }
     if (oldWidget.config.intervalMonths != widget.config.intervalMonths) {
-      _monthsCtrl.text = widget.config.intervalMonths > 0 ? '${widget.config.intervalMonths}' : '12';
+      _monthsCtrl.text = widget.config.intervalMonths > 0 ? '${widget.config.intervalMonths.clamp(_kMonthsIntervalMin, _kMonthsIntervalMax)}' : '12';
     }
   }
 
@@ -444,84 +507,75 @@ class _IntervalsCardState extends State<_IntervalsCard> {
     ));
   }
 
+  /// Сохранить километраж и месяцы из полей (кнопка «Сохранить» снизу экрана).
+  void commitIntervals() {
+    final c = widget.config;
+    final nKm = int.tryParse(_kmCtrl.text.trim());
+    final nMo = int.tryParse(_monthsCtrl.text.trim());
+    final km = nKm != null ? _snapKmInterval(nKm) : _snapKmInterval(c.intervalKm);
+    final mo = nMo != null ? nMo.clamp(_kMonthsIntervalMin, _kMonthsIntervalMax) : c.intervalMonths.clamp(_kMonthsIntervalMin, _kMonthsIntervalMax);
+    widget.notifier.setConfig(MaintenanceConfig(
+      carId: c.carId,
+      typeKey: c.typeKey,
+      intervalKm: km,
+      useKmInterval: c.useKmInterval,
+      intervalMonths: mo,
+      useMonthsInterval: c.useMonthsInterval,
+      remindEnabled: c.remindEnabled,
+    ));
+  }
+
+  int get _kmForSlider {
+    final n = int.tryParse(_kmCtrl.text.trim());
+    if (n == null) return _snapKmInterval(widget.config.intervalKm);
+    return _snapKmInterval(n);
+  }
+
+  int get _monthsForSlider {
+    final n = int.tryParse(_monthsCtrl.text.trim());
+    if (n == null) {
+      final m = widget.config.intervalMonths;
+      return m > 0 ? m.clamp(_kMonthsIntervalMin, _kMonthsIntervalMax) : 12;
+    }
+    return n.clamp(_kMonthsIntervalMin, _kMonthsIntervalMax);
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = widget.config;
+    final l10n = L10nScope.of(context);
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: AppColors.cardBg,
+        color: context.palette.cardBg,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: context.palette.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Настройка напоминания',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
-          ),
-          const SizedBox(height: 6),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('Напоминание включено'),
-            subtitle: const Text('При выключении расчёты сохраняются', style: TextStyle(fontSize: 12)),
+            title: Text(l10n.reminderEnabled),
             value: c.remindEnabled,
-            activeThumbColor: AppColors.primary,
+            activeThumbColor: context.palette.primary,
             onChanged: (v) => widget.notifier.setRemindEnabled(widget.car.id, widget.type.name, v),
           ),
-          if (!c.remindEnabled) ...[
-            const SizedBox(height: 4),
-            const Text(
-              'Включите напоминание, чтобы получать расчёт срока и пробега.',
-              style: TextStyle(fontSize: 12, color: AppColors.textSecondary, height: 1.35),
-            ),
-          ],
           if (c.remindEnabled) ...[
-            const SizedBox(height: 2),
-            const Text(
-              'Можно использовать пробег, срок или оба критерия. Сработает то, что наступит раньше.',
-              style: TextStyle(fontSize: 12, color: AppColors.textSecondary, height: 1.35),
-            ),
-            const SizedBox(height: 12),
+            SizedBox(height: 8),
             _intervalBlock(
-              title: 'Интервал по пробегу',
+              title: l10n.intervalByMileage,
               enabled: c.useKmInterval,
-              currentValueLabel: 'Каждые ${_kmCtrl.text} км',
               onToggle: (v) => setState(() => _savePartial(useKm: v)),
-              field: TextField(
-                controller: _kmCtrl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'Километров между заменами',
-                  border: OutlineInputBorder(),
-                  isDense: true,
-                ),
-              ),
-              onApply: () {
-                final n = int.tryParse(_kmCtrl.text.trim());
-                if (n != null && n > 0) _savePartial(intervalKm: n);
-              },
+              field: _kmSliderRow(context, l10n),
             ),
-            const SizedBox(height: 10),
+            SizedBox(height: 8),
             _intervalBlock(
-              title: 'Интервал по времени',
+              title: l10n.intervalByTime,
               enabled: c.useMonthsInterval,
-              currentValueLabel: 'Раз в ${_monthsCtrl.text} мес.',
               onToggle: (v) => setState(() => _savePartial(useMonths: v)),
-              field: TextField(
-                controller: _monthsCtrl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'Месяцев между заменами',
-                  border: OutlineInputBorder(),
-                  isDense: true,
-                ),
-              ),
-              onApply: () {
-                final n = int.tryParse(_monthsCtrl.text.trim());
-                if (n != null && n > 0) _savePartial(intervalMonths: n);
-              },
+              field: _monthsSliderBlock(context, l10n),
+              compact: true,
             ),
           ],
         ],
@@ -532,40 +586,157 @@ class _IntervalsCardState extends State<_IntervalsCard> {
   Widget _intervalBlock({
     required String title,
     required bool enabled,
-    required String currentValueLabel,
     required ValueChanged<bool> onToggle,
     required Widget field,
-    required VoidCallback onApply,
+    bool compact = false,
   }) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+      padding: EdgeInsets.fromLTRB(compact ? 8 : 10, compact ? 6 : 8, compact ? 8 : 10, compact ? 8 : 10),
       decoration: BoxDecoration(
-        color: AppColors.background,
+        color: context.palette.background,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: context.palette.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: Text(title),
-            subtitle: Text(currentValueLabel, style: const TextStyle(fontSize: 12)),
+            dense: true,
+            visualDensity: VisualDensity.compact,
+            title: Text(title, style: TextStyle(fontSize: compact ? 13 : 14, fontWeight: FontWeight.w600)),
             value: enabled,
-            activeThumbColor: AppColors.primary,
+            activeThumbColor: context.palette.primary,
             onChanged: onToggle,
           ),
-          if (enabled) ...[
-            field,
-            const SizedBox(height: 6),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed: onApply,
-                child: const Text('Применить'),
+          if (enabled) field,
+        ],
+      ),
+    );
+  }
+
+  Widget _kmSliderRow(BuildContext context, AppL10n l10n) {
+    final step = ((_kmForSlider - _kKmIntervalMin) ~/ 1000).clamp(0, 14);
+    final pal = context.palette;
+    return Padding(
+      padding: const EdgeInsets.only(left: 4, right: 0, top: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 4,
+                activeTrackColor: pal.primary,
+                inactiveTrackColor: pal.border,
+                thumbColor: pal.primary,
+                overlayColor: pal.primary.withValues(alpha: 0.12),
+              ),
+              child: Slider(
+                value: step.toDouble(),
+                min: 0,
+                max: 14,
+                divisions: 14,
+                label: '$_kmForSlider',
+                onChanged: (v) {
+                  final s = v.round().clamp(0, 14);
+                  final km = _kKmIntervalMin + s * 1000;
+                  final t = '$km';
+                  if (_kmCtrl.text != t) {
+                    _kmCtrl.value = TextEditingValue(text: t, selection: TextSelection.collapsed(offset: t.length));
+                  }
+                  setState(() {});
+                },
               ),
             ),
-          ],
+          ),
+          SizedBox(width: 2),
+          SizedBox(
+            width: 104,
+            child: TextField(
+              controller: _kmCtrl,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              textAlign: TextAlign.end,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              decoration: InputDecoration(
+                suffixText: l10n.kmBetween,
+                suffixStyle: TextStyle(fontSize: 12, color: pal.textSecondary),
+                border: const OutlineInputBorder(),
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _monthsSliderBlock(BuildContext context, AppL10n l10n) {
+    final m = _monthsForSlider.toDouble();
+    final pal = context.palette;
+    final sliderTheme = SliderTheme.of(context).copyWith(
+      trackHeight: 2.5,
+      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+      overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+      activeTrackColor: pal.primary,
+      inactiveTrackColor: pal.border,
+      thumbColor: pal.primary,
+      overlayColor: pal.primary.withValues(alpha: 0.1),
+    );
+    return Padding(
+      padding: const EdgeInsets.only(left: 4, top: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: FractionallySizedBox(
+                widthFactor: 0.78,
+                alignment: Alignment.centerLeft,
+                child: SliderTheme(
+                  data: sliderTheme,
+                  child: Slider(
+                    value: m,
+                    min: _kMonthsIntervalMin.toDouble(),
+                    max: _kMonthsIntervalMax.toDouble(),
+                    divisions: _kMonthsIntervalMax - _kMonthsIntervalMin,
+                    label: '$m',
+                    onChanged: (v) {
+                      final mo = v.round().clamp(_kMonthsIntervalMin, _kMonthsIntervalMax);
+                      final t = '$mo';
+                      if (_monthsCtrl.text != t) {
+                        _monthsCtrl.value = TextEditingValue(text: t, selection: TextSelection.collapsed(offset: t.length));
+                      }
+                      setState(() {});
+                    },
+                  ),
+                ),
+              ),
+            ),
+          ),
+          SizedBox(width: 2),
+          SizedBox(
+            width: 62,
+            child: TextField(
+              controller: _monthsCtrl,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+              decoration: InputDecoration(
+                suffixText: l10n.monthsBetween,
+                suffixStyle: TextStyle(fontSize: 11, color: pal.textSecondary),
+                border: const OutlineInputBorder(),
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+          ),
         ],
       ),
     );
@@ -573,22 +744,23 @@ class _IntervalsCardState extends State<_IntervalsCard> {
 }
 
 class _RecordTile extends StatelessWidget {
-  const _RecordTile({required this.record, required this.onDelete});
+  const _RecordTile({required this.record, required this.onDelete, required this.l10n});
 
   final MaintenanceRecord record;
   final VoidCallback onDelete;
-
-  static final _df = DateFormat('dd.MM.yyyy');
+  final AppL10n l10n;
 
   @override
   Widget build(BuildContext context) {
+    final df = DateFormat('dd.MM.yyyy', l10n.locale.languageCode);
+    final sep = NumberFormat.decimalPattern(l10n.intlLocale);
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: AppColors.cardBg,
+        color: context.palette.cardBg,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: context.palette.border),
       ),
       child: Row(
         children: [
@@ -597,29 +769,29 @@ class _RecordTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '${NumberFormat.decimalPattern('ru_RU').format(record.odometerKm)} км · ${_df.format(record.date)}',
-                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+                  '${sep.format(record.odometerKm)} ${l10n.kmUnit} · ${df.format(record.date)}',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: context.palette.textPrimary),
                 ),
                 if (record.place != null && record.place!.isNotEmpty)
-                  Text(record.place!, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                  Text(record.place!, style: TextStyle(fontSize: 12, color: context.palette.textSecondary)),
                 if (record.orderId != null)
-                  Text('Из заказа', style: TextStyle(fontSize: 11, color: AppColors.textSecondary.withValues(alpha: 0.85))),
+                  Text(l10n.fromOrder, style: TextStyle(fontSize: 11, color: context.palette.textSecondary.withValues(alpha: 0.85))),
               ],
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.delete_outline_rounded, color: AppColors.textSecondary),
+            icon: Icon(Icons.delete_outline_rounded, color: context.palette.textSecondary),
             onPressed: () async {
               final ok = await showDialog<bool>(
                 context: context,
                 builder: (ctx) => AlertDialog(
-                  backgroundColor: AppColors.cardBg,
-                  title: const Text('Удалить запись?', style: TextStyle(color: AppColors.textPrimary)),
+                  backgroundColor: context.palette.cardBg,
+                  title: Text(l10n.deleteRecordTitle, style: TextStyle(color: context.palette.textPrimary)),
                   actions: [
-                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(l10n.cancel)),
                     TextButton(
                       onPressed: () => Navigator.pop(ctx, true),
-                      child: const Text('Удалить', style: TextStyle(color: AppColors.error)),
+                      child: Text(l10n.delete, style: TextStyle(color: context.palette.error)),
                     ),
                   ],
                 ),

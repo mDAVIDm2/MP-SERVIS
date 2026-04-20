@@ -17,7 +17,10 @@ async function bootstrap() {
     app.enableCors();
     const port = process.env.PORT || 3000;
     await app.listen(port, '0.0.0.0');
-    console.log(`AutoHub API: http://localhost:${port}/api/v1 (listening on 0.0.0.0)`);
+    const httpServer = app.getHttpAdapter().getHttpServer();
+    httpServer.keepAliveTimeout = 65_000;
+    httpServer.headersTimeout = 66_000;
+    console.log(`MP-Servis API: http://localhost:${port}/api/v1 (listening on 0.0.0.0)`);
 }
 bootstrap();
 //# sourceMappingURL=main.js.map

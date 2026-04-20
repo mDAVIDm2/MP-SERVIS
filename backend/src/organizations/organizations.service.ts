@@ -1,4 +1,12 @@
-import { BadRequestException, ConflictException, forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  forwardRef,
+  Inject,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 import * as path from 'path';
@@ -14,6 +22,8 @@ import { ServiceCatalogItem } from '../reference/service-catalog-item.entity';
 import { OrganizationInvitation, OrganizationInvitationStatus } from './organization-invitation.entity';
 import { SubscriptionQuotaService } from '../subscriptions/subscription-quota.service';
 import { UsersService } from '../users/users.service';
+import { User } from '../users/user.entity';
+import { UserOrganizationMembership } from '../users/user-organization-membership.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TransactionalMailService } from '../mail/transactional-mail.service';
 import {
@@ -30,6 +40,8 @@ export interface CurrentUserForMaster {
   name: string;
   phone: string | null;
   organizationId: string | null;
+  /** Роль пользователя в Business; мастер не может управлять составом персонала. */
+  role: string;
 }
 
 const ORG_PHOTOS_DIR = path.join(process.cwd(), 'uploads', 'organizations');
@@ -56,6 +68,8 @@ export class OrganizationsService {
     @InjectRepository(OrganizationInvitation) private invitationRepo: Repository<OrganizationInvitation>,
     @InjectRepository(MasterSchedule) private scheduleRepo: Repository<MasterSchedule>,
     @InjectRepository(ServiceCatalogItem) private catalogItemRepo: Repository<ServiceCatalogItem>,
+    @InjectRepository(User) private userRepo: Repository<User>,
+    @InjectRepository(UserOrganizationMembership) private userOrgMembershipRepo: Repository<UserOrganizationMembership>,
     private readonly subscriptionQuota: SubscriptionQuotaService,
     private readonly dataSource: DataSource,
     @Inject(forwardRef(() => UsersService)) private readonly usersService: UsersService,
@@ -368,8 +382,198 @@ export class OrganizationsService {
     return { items: list.map((s) => this._staffToItem(s)) };
   }
 
+  /**
+   * Список персонала с подготовкой для самозанятого: автозапись как мастер в БД,
+   * повышение solo → owner при появлении второго активного мастера.
+   */
+  /**
+   * Публичный guard: смена тарифа / состава по тарифу — не для роли master.
+   */
+  ensureCallerCanManageOrganizationStaff(caller: User): void {
+    this.assertCanManageOrganizationStaff(caller);
+  }
+
+  private assertCanManageOrganizationStaff(caller: User): void {
+    if (caller.role === 'master') {
+      throw new ForbiddenException(
+        'Управление персоналом и приглашениями доступно владельцу, администратору или самозанятому.',
+      );
+    }
+  }
+
+  async getStaffForCaller(orgId: string, caller: User) {
+    await this.ensureSoloStaffMember(orgId, caller);
+    await this.promoteSoloToOwnerIfNeeded(orgId);
+
+    if (caller.role === 'master') {
+      const byUser = await this.staffRepo.find({
+        where: { organizationId: orgId, userId: caller.id },
+        relations: ['schedule'],
+        order: { invitedAt: 'DESC' },
+      });
+      if (byUser.length > 0) {
+        return { items: byUser.map((s) => this._staffToItem(s)) };
+      }
+      const p = this.normalizePhoneLoose(caller.phone);
+      if (p) {
+        const all = await this.staffRepo.find({
+          where: { organizationId: orgId },
+          relations: ['schedule'],
+          order: { invitedAt: 'DESC' },
+        });
+        const matched = all.filter((s) => this.normalizePhoneLoose(s.phone) === p);
+        return { items: matched.map((s) => this._staffToItem(s)) };
+      }
+      return { items: [] };
+    }
+
+    return this.getStaff(orgId);
+  }
+
+  /** Публично: после принятия приглашения / добавления мастера. */
+  async promoteSoloToOwnerIfNeeded(orgId: string): Promise<void> {
+    await this.promoteSoloToOwner(orgId);
+  }
+
+  private async countActiveMasters(orgId: string): Promise<number> {
+    return this.staffRepo.count({
+      where: { organizationId: orgId, isActive: true, role: 'master' },
+    });
+  }
+
+  /** Режим «один мастер + в системе ещё есть пользователь solo для этой организации». */
+  private async isSoloSingleMasterOrg(orgId: string): Promise<boolean> {
+    const solo = await this.userRepo.findOne({ where: { organizationId: orgId, role: 'solo' } });
+    if (!solo) return false;
+    const n = await this.countActiveMasters(orgId);
+    return n === 1;
+  }
+
+  private parseHHMMToMinutes(raw: string): number {
+    const m = String(raw || '09:00').match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return 9 * 60;
+    const h = Math.min(23, Math.max(0, parseInt(m[1], 10)));
+    const min = Math.min(59, Math.max(0, parseInt(m[2], 10)));
+    return h * 60 + min;
+  }
+
+  private formatMinutesAsHHMM(mins: number): string {
+    const h = Math.floor(mins / 60) % 24;
+    const m = mins % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  }
+
+  private async syncOrgSlotsFromMasterSchedule(orgId: string, slots: ScheduleSlotDto[]): Promise<void> {
+    const working = slots.filter((s) => s.is_working_day !== false);
+    if (working.length === 0) return;
+    let minM = 24 * 60;
+    let maxM = 0;
+    for (const s of working) {
+      const st = s.start_time != null ? String(s.start_time).slice(0, 5) : '09:00';
+      const en = s.end_time != null ? String(s.end_time).slice(0, 5) : '18:00';
+      minM = Math.min(minM, this.parseHHMMToMinutes(st));
+      maxM = Math.max(maxM, this.parseHHMMToMinutes(en));
+    }
+    if (maxM <= minM) return;
+    let row = await this.settingsRepo.findOne({ where: { organizationId: orgId } });
+    if (!row) {
+      row = this.settingsRepo.create({ organizationId: orgId, data: {} });
+    }
+    const data = { ...(typeof row.data === 'object' && row.data !== null ? (row.data as Record<string, unknown>) : {}) };
+    const prevSlots =
+      typeof data.slots === 'object' && data.slots !== null ? { ...(data.slots as Record<string, unknown>) } : {};
+    data.slots = {
+      ...prevSlots,
+      work_day_start: this.formatMinutesAsHHMM(minM),
+      work_day_end: this.formatMinutesAsHHMM(maxM),
+    };
+    row.data = data as any;
+    await this.settingsRepo.save(row);
+  }
+
+  /** При изменении слотов организации — подставить время в график единственного мастера (только рабочие дни). */
+  private async syncSoloMasterTimesFromOrgSlots(orgId: string, slots: Record<string, unknown>): Promise<void> {
+    if (!(await this.isSoloSingleMasterOrg(orgId))) return;
+    const ws = String(slots['work_day_start'] ?? slots['workDayStart'] ?? '09:00').slice(0, 5);
+    const we = String(slots['work_day_end'] ?? slots['workDayEnd'] ?? '18:00').slice(0, 5);
+    const masters = await this.staffRepo.find({
+      where: { organizationId: orgId, isActive: true, role: 'master' },
+    });
+    if (masters.length !== 1) return;
+    const masterId = masters[0].id;
+    const rows = await this.scheduleRepo.find({ where: { masterId } });
+    for (const sch of rows) {
+      if (!sch.isWorkingDay) continue;
+      sch.startTime = /^\d{1,2}:\d{2}$/.test(ws) ? ws : '09:00';
+      sch.endTime = /^\d{1,2}:\d{2}$/.test(we) ? we : '18:00';
+      await this.scheduleRepo.save(sch);
+    }
+  }
+
+  private async ensureSoloStaffMember(orgId: string, caller: User): Promise<void> {
+    if (caller.role !== 'solo' || caller.organizationId !== orgId) return;
+    const existing = await this.staffRepo.findOne({ where: { organizationId: orgId, userId: caller.id } });
+    if (existing) return;
+
+    const settings = await this.getSettings(orgId);
+    const slots = (settings as { slots?: Record<string, unknown> }).slots ?? {};
+    const ws = String(slots['work_day_start'] ?? slots['workDayStart'] ?? '09:00').slice(0, 5);
+    const we = String(slots['work_day_end'] ?? slots['workDayEnd'] ?? '18:00').slice(0, 5);
+    const startT = /^\d{1,2}:\d{2}$/.test(ws) ? ws : '09:00';
+    const endT = /^\d{1,2}:\d{2}$/.test(we) ? we : '18:00';
+
+    const staff = this.staffRepo.create({
+      organizationId: orgId,
+      userId: caller.id,
+      name: caller.name || 'Мастер',
+      phone: caller.phone || null,
+      role: 'master',
+      isActive: true,
+      invitedAt: new Date(),
+      skills: [],
+    });
+    await this.staffRepo.save(staff);
+
+    for (let dow = 0; dow <= 6; dow++) {
+      const working = dow >= 1 && dow <= 5;
+      const row = this.scheduleRepo.create({
+        masterId: staff.id,
+        dayOfWeek: dow,
+        startTime: startT,
+        endTime: endT,
+        isWorkingDay: working,
+      });
+      await this.scheduleRepo.save(row);
+    }
+    this.log.log(`ensureSoloStaffMember: created staff ${staff.id} for solo user ${caller.id} org ${orgId}`);
+  }
+
+  private async promoteSoloToOwner(orgId: string): Promise<void> {
+    const n = await this.countActiveMasters(orgId);
+    if (n < 2) return;
+
+    const soloUsers = await this.userRepo.find({ where: { organizationId: orgId, role: 'solo' } });
+    for (const u of soloUsers) {
+      (u as { role: string }).role = 'owner';
+      await this.userRepo.save(u);
+    }
+    const memberships = await this.userOrgMembershipRepo.find({
+      where: { organizationId: orgId, role: 'solo' },
+    });
+    for (const m of memberships) {
+      m.role = 'owner';
+      await this.userOrgMembershipRepo.save(m);
+    }
+    if (soloUsers.length > 0) {
+      this.log.log(`promoteSoloToOwner: org ${orgId} now has ${n} masters; promoted ${soloUsers.length} solo user(s) to owner`);
+    }
+  }
+
   /** Добавить текущего пользователя (владелец/админ) как мастера. После вызова нужно задать график работы. */
   async addCurrentUserAsMaster(orgId: string, user: CurrentUserForMaster) {
+    if (user.role === 'master') {
+      throw new ForbiddenException('Мастер не может управлять составом персонала.');
+    }
     if (user.organizationId !== orgId) {
       throw new BadRequestException('Пользователь не принадлежит этой организации');
     }
@@ -394,10 +598,16 @@ export class OrganizationsService {
       where: { id: staff.id },
       relations: ['schedule'],
     });
+    await this.promoteSoloToOwnerIfNeeded(orgId);
     return this._staffToItem(withSchedule!);
   }
 
   private _staffToItem(s: StaffMember) {
+    const caps = s as StaffMember & {
+      canSeeChats?: boolean;
+      canWriteChats?: boolean;
+      canManageOrgSettings?: boolean;
+    };
     return {
       id: s.id,
       user_id: (s as any).userId ?? null,
@@ -408,6 +618,9 @@ export class OrganizationsService {
       is_active: (s as any).isActive !== false,
       invited_at: (s as any).invitedAt?.toISOString?.(),
       skills: Array.isArray((s as any).skills) ? (s as any).skills : [],
+      can_see_chats: caps.canSeeChats === true,
+      can_write_chats: caps.canWriteChats === true,
+      can_manage_org_settings: caps.canManageOrgSettings === true,
       schedule: Array.isArray((s as any).schedule)
         ? (s as any).schedule.map((sch: MasterSchedule) => ({
             id: sch.id,
@@ -482,9 +695,9 @@ export class OrganizationsService {
         `${inviterName} приглашает вас в организацию «${orgName}» (роль: ${inv.role}).`,
         expiresText,
         '',
-        'Откройте приложение AutoHub Business, войдите под этим email и перейдите: Профиль → Входящие приглашения.',
+        'Откройте приложение MP-Servis Business, войдите под этим email и перейдите: Профиль → Входящие приглашения.',
         '',
-        '— AutoHub',
+        '— MP-Servis',
       ]
         .filter((line) => line !== '')
         .join('\n');
@@ -492,7 +705,7 @@ export class OrganizationsService {
       try {
         await this.mail.send({
           to: toEmail,
-          subject: `Приглашение в «${orgName}» — AutoHub`,
+          subject: `Приглашение в «${orgName}» — MP-Servis`,
           text,
         });
       } catch (e) {
@@ -503,9 +716,11 @@ export class OrganizationsService {
 
   async createInvitation(
     orgId: string,
-    invitedByUserId: string,
+    caller: User,
     dto: { name?: string; phone?: string; email?: string; role: string; message?: string; expires_in_days?: number },
   ) {
+    this.assertCanManageOrganizationStaff(caller);
+    const invitedByUserId = caller.id;
     const emailNorm = this.normalizeEmail(dto.email);
     const phoneNorm = this.normalizePhoneLoose(dto.phone);
     if (!emailNorm && !phoneNorm) {
@@ -556,7 +771,8 @@ export class OrganizationsService {
     return this.invitationToItem(fresh!);
   }
 
-  async listInvitations(orgId: string, status?: OrganizationInvitationStatus) {
+  async listInvitations(orgId: string, caller: User, status?: OrganizationInvitationStatus) {
+    this.assertCanManageOrganizationStaff(caller);
     const qb = this.invitationRepo
       .createQueryBuilder('inv')
       .leftJoinAndSelect('inv.organization', 'org')
@@ -572,7 +788,8 @@ export class OrganizationsService {
     return { items: rows.map((x) => this.invitationToItem(x)) };
   }
 
-  async cancelInvitation(orgId: string, invitationId: string) {
+  async cancelInvitation(orgId: string, invitationId: string, caller: User) {
+    this.assertCanManageOrganizationStaff(caller);
     const inv = await this.invitationRepo.findOne({ where: { id: invitationId, organizationId: orgId } });
     if (!inv) {
       throw new BadRequestException('Приглашение не найдено');
@@ -591,11 +808,21 @@ export class OrganizationsService {
     await this.subscriptionQuota.assertCanAddOrActivateStaff(orgId);
     const s = this.staffRepo.create({ ...dto, organizationId: orgId, invitedAt: new Date() });
     await this.staffRepo.save(s);
+    const isAdmin = String(dto.role).toLowerCase() === 'admin';
+    await this.staffRepo.update(
+      { id: s.id },
+      {
+        canSeeChats: isAdmin,
+        canWriteChats: isAdmin,
+        canManageOrgSettings: isAdmin,
+      } as any,
+    );
     const withSchedule = await this.staffRepo.findOne({ where: { id: s.id }, relations: ['schedule'] });
     return withSchedule ? this._staffToItem(withSchedule) : this._staffToItem(s);
   }
 
-  async updateStaffMember(orgId: string, staffId: string, dto: Record<string, unknown>) {
+  async updateStaffMember(orgId: string, staffId: string, dto: Record<string, unknown>, caller: User) {
+    this.assertCanManageOrganizationStaff(caller);
     const staff = await this.staffRepo.findOne({ where: { id: staffId, organizationId: orgId }, relations: ['schedule'] });
     if (!staff) return null;
 
@@ -625,6 +852,10 @@ export class OrganizationsService {
     if (dto.role !== undefined) setObj.role = String(dto.role);
     if (dto.is_active !== undefined) setObj.isActive = Boolean(dto.is_active);
     if (Array.isArray(dto.skills)) setObj.skills = dto.skills as string[];
+    if (dto.can_see_chats !== undefined) setObj.canSeeChats = Boolean(dto.can_see_chats);
+    if (dto.can_write_chats !== undefined) setObj.canWriteChats = Boolean(dto.can_write_chats);
+    if (dto.can_manage_org_settings !== undefined)
+      setObj.canManageOrgSettings = Boolean(dto.can_manage_org_settings);
 
     try {
       if (Object.keys(setObj).length > 0) {
@@ -656,6 +887,16 @@ export class OrganizationsService {
 
     const s = await this.staffRepo.findOne({ where: { id: staffId }, relations: ['schedule'] });
     if (!s) return null;
+
+    if (Array.isArray(dto.schedule) && (await this.isSoloSingleMasterOrg(orgId))) {
+      try {
+        await this.syncOrgSlotsFromMasterSchedule(orgId, dto.schedule as ScheduleSlotDto[]);
+      } catch (e) {
+        this.log.warn(`syncOrgSlotsFromMasterSchedule: ${e}`);
+      }
+    }
+
+    await this.promoteSoloToOwnerIfNeeded(orgId);
     return this._staffToItem(s);
   }
 
@@ -685,6 +926,16 @@ export class OrganizationsService {
       row.data = data;
       await this.settingsRepo.save(row);
     }
+
+    const slotsPatch = data['slots'];
+    if (slotsPatch && typeof slotsPatch === 'object') {
+      try {
+        await this.syncSoloMasterTimesFromOrgSlots(orgId, slotsPatch as Record<string, unknown>);
+      } catch (e) {
+        this.log.warn(`syncSoloMasterTimesFromOrgSlots: ${e}`);
+      }
+    }
+
     return row.data;
   }
 
@@ -744,6 +995,39 @@ export class OrganizationsService {
     return { url };
   }
 
+  /** Удалить фото точки: по полному URL или по совпадению имени файла в списке организации. */
+  async removePhoto(orgId: string, photoUrlOrInput: string): Promise<boolean> {
+    const org = await this.orgRepo.findOne({ where: { id: orgId } });
+    if (!org) return false;
+    const urls = this.getPhotoUrls(org);
+    if (urls.length === 0) return false;
+    const input = photoUrlOrInput.trim().split('?')[0];
+    if (!input) return false;
+    const inputBase = path.basename(input);
+    if (!inputBase || inputBase === '.' || inputBase === '..' || inputBase.includes('..')) {
+      return false;
+    }
+    const idx = urls.findIndex((stored) => {
+      const u = stored.trim().split('?')[0];
+      if (u === input) return true;
+      const base = path.basename(u);
+      return base === inputBase && u.includes(`/organizations/${orgId}/photos/`);
+    });
+    if (idx < 0) return false;
+    const removed = urls[idx];
+    const filename = path.basename(removed.split('?')[0]);
+    if (!filename || filename.includes('..')) return false;
+    const newUrls = urls.filter((_, i) => i !== idx);
+    const fullPath = path.join(ORG_PHOTOS_DIR, orgId, filename);
+    try {
+      if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+    } catch {
+      // файл мог быть уже удалён вручную — всё равно чистим БД
+    }
+    await this.orgRepo.update(orgId, { photoUrls: newUrls } as any);
+    return true;
+  }
+
   async getPhotoPath(orgId: string, filename: string): Promise<string | null> {
     const org = await this.orgRepo.findOne({ where: { id: orgId } });
     if (!org) return null;
@@ -755,5 +1039,16 @@ export class OrganizationsService {
   getPhotoUrls(org: Organization): string[] {
     const urls = (org as any).photoUrls;
     return Array.isArray(urls) ? urls : [];
+  }
+
+  /** Удалить все фото точки с диска и обнулить список в БД. */
+  async clearAllOrganizationPhotos(orgId: string): Promise<boolean> {
+    const org = await this.orgRepo.findOne({ where: { id: orgId } });
+    if (!org) return false;
+    const urls = [...this.getPhotoUrls(org)];
+    for (const u of urls) {
+      await this.removePhoto(orgId, u);
+    }
+    return true;
   }
 }

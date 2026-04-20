@@ -17,11 +17,14 @@ import 'core/auth/auth_provider.dart';
 import 'core/repositories/organization_repository.dart';
 import 'core/push/push_registration.dart';
 import 'core/router/app_router.dart';
+import 'core/navigation/subscription_tariff_route.dart';
+import 'features/profile/presentation/screens/subscription_tariff_screen.dart';
 
 bool _isWsError(Object e) =>
     e is WebSocketChannelException || (e is Exception && e.toString().contains('WebSocket'));
 
 void main() {
+  registerSubscriptionTariffFactory(() => const SubscriptionTariffScreen());
   runZonedGuarded(() async {
     WidgetsFlutterBinding.ensureInitialized();
     final rootOnError = ui.PlatformDispatcher.instance.onError;
@@ -42,12 +45,12 @@ void main() {
 
 Future<void> _runApp() async {
   if (kDebugMode) {
-    debugPrint('[AutoHub Business] API baseUrl=${AppConfig.baseUrl}');
+    debugPrint('[MP-Servis Business] API baseUrl=${AppConfig.baseUrl}');
     if (!AppConfig.apiHostFromDartDefine) {
       debugPrint(
-        '[AutoHub Business] Хост из умолчания платформы. Свой IP/эмулятор: '
-        '--dart-define=AUTOHUB_API_HOST=<IP> (Android эмулятор: часто 10.0.2.2; iOS Simulator на Mac: 127.0.0.1). '
-        'LAN по умолчанию для телефонов: --dart-define=AUTOHUB_DEFAULT_LAN_HOST=<IP>.',
+        '[MP-Servis Business] Хост из умолчания платформы. Свой IP/эмулятор: '
+        '--dart-define=MP_SERVIS_API_HOST=<IP> (Android эмулятор: часто 10.0.2.2; iOS Simulator на Mac: 127.0.0.1). '
+        'LAN по умолчанию для телефонов: --dart-define=MP_SERVIS_DEFAULT_LAN_HOST=<IP>.',
       );
     }
   }
@@ -76,19 +79,19 @@ Future<void> _runApp() async {
         sharedPreferencesProvider.overrideWith((ref) => Future.value(prefs)),
         sharedPreferencesOrgProvider.overrideWith((ref) => Future.value(prefs)),
       ],
-      child: const AutoHubBusinessApp(),
+      child: const MpServisBusinessApp(),
     ),
   );
 }
 
-class AutoHubBusinessApp extends ConsumerStatefulWidget {
-  const AutoHubBusinessApp({super.key});
+class MpServisBusinessApp extends ConsumerStatefulWidget {
+  const MpServisBusinessApp({super.key});
 
   @override
-  ConsumerState<AutoHubBusinessApp> createState() => _AutoHubBusinessAppState();
+  ConsumerState<MpServisBusinessApp> createState() => _MpServisBusinessAppState();
 }
 
-class _AutoHubBusinessAppState extends ConsumerState<AutoHubBusinessApp> {
+class _MpServisBusinessAppState extends ConsumerState<MpServisBusinessApp> {
   @override
   void initState() {
     super.initState();
@@ -104,7 +107,7 @@ class _AutoHubBusinessAppState extends ConsumerState<AutoHubBusinessApp> {
     final useDesktopTheme = isDesktopPlatform;
 
     return MaterialApp.router(
-      title: 'AutoHub Business',
+      title: 'MP-Servis Business',
       debugShowCheckedModeBanner: false,
       theme: useDesktopTheme ? AppTheme.desktop : AppTheme.dark,
       routerConfig: router,

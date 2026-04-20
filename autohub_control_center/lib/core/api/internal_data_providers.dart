@@ -59,6 +59,14 @@ final usersProvider = StreamProvider.autoDispose<List<Map<String, dynamic>>>((re
   }
 });
 
+final userDetailProvider = StreamProvider.autoDispose.family<Map<String, dynamic>?, String>((ref, userId) async* {
+  while (true) {
+    final api = ref.watch(internalApiProvider);
+    yield await api.getUserDetail(userId);
+    await Future<void>.delayed(kControlCenterPollInterval);
+  }
+});
+
 List<dynamic> _ordersItemsFromPayload(Map<String, dynamic>? data) {
   if (data == null) return [];
   dynamic raw = data['items'];
@@ -112,11 +120,7 @@ final carBrandsProvider = StreamProvider.autoDispose<List<Map<String, dynamic>>>
   while (true) {
     final api = ref.watch(internalApiProvider);
     final list = await api.getCarBrands();
-    if (list == null) {
-      yield [];
-    } else {
-      yield list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-    }
+    yield list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
     await Future<void>.delayed(_carBrandsPollInterval);
   }
 });

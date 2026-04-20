@@ -2,11 +2,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../auth/auth_provider.dart';
 
-/// Выбор карты: встроенная OSM или открытие в Google/Яндекс
+/// Подложка поиска и кнопка «открыть во внешних картах».
+/// Встроенная карта — [flutter_map] + данные OSM (стиль Carto Voyager); тайлы Google/Яндекс без SDK недоступны.
 enum MapProvider {
-  osm('OSM', 'Карта в приложении (OpenStreetMap)'),
-  google('Google', 'Открывать в Google Картах'),
-  yandex('Яндекс', 'Открывать в Яндекс.Картах');
+  osm('OSM', 'Только приложение: карта и точки здесь'),
+  google('Google', 'Точки в приложении; кнопка открыть вид в Google Картах'),
+  yandex('Яндекс', 'Точки в приложении; кнопка открыть вид в Яндекс.Картах');
 
   final String shortName;
   final String description;

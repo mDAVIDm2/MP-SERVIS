@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 
+import '../../core/config/app_config.dart';
 import '../../core/utils/formatters.dart';
 import '../org_business_kind.dart';
-import '../../core/theme/app_colors.dart';
+import '../../core/theme/client_palette.dart';
 
 enum OrderStatus {
   pendingConfirmation,
@@ -27,13 +28,13 @@ enum OrderStatus {
 
   Color get color {
     switch (this) {
-      case pendingConfirmation: return AppColors.statusPending;
-      case confirmed: return AppColors.statusConfirmed;
-      case inProgress: return AppColors.statusInProgress;
-      case pendingApproval: return AppColors.statusApproval;
-      case completed: return AppColors.statusCompleted;
-      case done: return AppColors.statusDone;
-      case cancelled: return AppColors.statusCancelled;
+      case pendingConfirmation: return SemanticColors.statusPending;
+      case confirmed: return SemanticColors.statusConfirmed;
+      case inProgress: return SemanticColors.statusInProgress;
+      case pendingApproval: return SemanticColors.statusApproval;
+      case completed: return SemanticColors.statusCompleted;
+      case done: return SemanticColors.statusDone;
+      case cancelled: return SemanticColors.statusCancelled;
     }
   }
 
@@ -90,6 +91,9 @@ class OrderItem {
   /// ID услуги в каталоге организации (для запроса слотов). Может быть null.
   final String? serviceId;
 
+  /// Id позиции общего справочника (`svc_*`), если бэкенд отдал.
+  final String? catalogItemId;
+
   const OrderItem({
     required this.id,
     required this.name,
@@ -100,6 +104,7 @@ class OrderItem {
     this.isAdditional = false,
     this.isRejected = false,
     this.serviceId,
+    this.catalogItemId,
   });
 
   OrderItem copyWith({
@@ -112,6 +117,7 @@ class OrderItem {
     bool? isAdditional,
     bool? isRejected,
     String? serviceId,
+    String? catalogItemId,
   }) {
     return OrderItem(
       id: id ?? this.id,
@@ -123,6 +129,7 @@ class OrderItem {
       isAdditional: isAdditional ?? this.isAdditional,
       isRejected: isRejected ?? this.isRejected,
       serviceId: serviceId ?? this.serviceId,
+      catalogItemId: catalogItemId ?? this.catalogItemId,
     );
   }
 
@@ -154,7 +161,11 @@ class Order {
   /// С бэкенда (для PDF и карточек).
   final String? clientName;
   final String? clientPhone;
+  /// URL фото профиля текущего пользователя в контексте заказа (`client_avatar_url`).
+  final String? clientAvatarUrl;
   final String? carInfo;
+  /// Снимок URL фото авто с сервера (`car_photo_url`).
+  final String? carPhotoUrl;
   final String? masterName;
   final String? bayName;
   final String? vin;
@@ -224,7 +235,9 @@ class Order {
     this.comment,
     this.clientName,
     this.clientPhone,
+    this.clientAvatarUrl,
     this.carInfo,
+    this.carPhotoUrl,
     this.masterName,
     this.bayName,
     this.vin,
@@ -257,7 +270,9 @@ class Order {
     String? comment,
     String? clientName,
     String? clientPhone,
+    String? clientAvatarUrl,
     String? carInfo,
+    String? carPhotoUrl,
     String? masterName,
     String? bayName,
     String? vin,
@@ -292,7 +307,9 @@ class Order {
       comment: comment ?? this.comment,
       clientName: clientName ?? this.clientName,
       clientPhone: clientPhone ?? this.clientPhone,
+      clientAvatarUrl: clientAvatarUrl ?? this.clientAvatarUrl,
       carInfo: carInfo ?? this.carInfo,
+      carPhotoUrl: carPhotoUrl ?? this.carPhotoUrl,
       masterName: masterName ?? this.masterName,
       bayName: bayName ?? this.bayName,
       vin: vin ?? this.vin,
@@ -323,6 +340,7 @@ class Order {
   /// Из ответа API (общий бэкенд с Business)
   static Order fromApiJson(Map<String, dynamic> j) {
     OrderItem parseItem(Map<String, dynamic> m) {
+      final catRaw = m['catalog_item_id']?.toString() ?? m['catalogItemId']?.toString();
       return OrderItem(
         id: m['id']?.toString() ?? '',
         name: m['name']?.toString() ?? '',
@@ -333,6 +351,7 @@ class Order {
         isApproved: true,
         isRejected: false,
         serviceId: m['service_id']?.toString(),
+        catalogItemId: (catRaw != null && catRaw.trim().isNotEmpty) ? catRaw.trim() : null,
       );
     }
 
@@ -380,7 +399,19 @@ class Order {
       comment: j['comment']?.toString(),
       clientName: j['client_name']?.toString(),
       clientPhone: j['client_phone']?.toString(),
+      clientAvatarUrl: () {
+        final u = j['client_avatar_url']?.toString() ?? j['clientAvatarUrl']?.toString() ?? '';
+        final t = u.trim();
+        if (t.isEmpty) return null;
+        return AppConfig.resolveProfileAvatarUrl(t);
+      }(),
       carInfo: j['car_info']?.toString(),
+      carPhotoUrl: () {
+        final u = j['car_photo_url']?.toString() ?? j['carPhotoUrl']?.toString() ?? '';
+        final t = u.trim();
+        if (t.isEmpty) return null;
+        return AppConfig.resolveCarOrOrderPhotoUrl(t);
+      }(),
       masterName: j['master_name']?.toString(),
       bayName: j['bay_name']?.toString(),
       vin: j['vin']?.toString(),

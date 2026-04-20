@@ -14,12 +14,12 @@ const _kStaffListPrefix = 'staff_list_';
 /// Репозиторий персонала: загрузка с API (GET), invite/update/deactivate/activate через API + кэш в prefs по orgId.
 class StaffRepository extends StateNotifier<List<StaffEntry>> {
   StaffRepository(this._api, this._prefs, this._ref) : super([]) {
-    final orgId = _ref.read(authProvider).user?.organizationId;
+    final orgId = _ref.read(authProvider).user?.effectiveOrganizationId;
     _orgId = orgId;
     state = _loadFromPrefs(_prefs, orgId);
     load(orgId);
     _ref.listen<AuthState>(authProvider, (prev, next) {
-      final nextId = next.user?.organizationId;
+      final nextId = next.user?.effectiveOrganizationId;
       if (nextId != _orgId) load(nextId);
     });
   }
@@ -49,6 +49,14 @@ class StaffRepository extends StateNotifier<List<StaffEntry>> {
 
   List<StaffEntry> get activeStaff => state.where((e) => e.isActive).toList();
 
+  /// ID организации для запросов: сначала профиль (в т.ч. fallback по списку организаций), затем кэш репозитория.
+  String? _resolveOrgIdForApi() {
+    final fromAuth = _ref.read(authProvider).user?.effectiveOrganizationId?.trim();
+    if (fromAuth != null && fromAuth.isNotEmpty) return fromAuth;
+    final o = _orgId?.trim();
+    return (o != null && o.isNotEmpty) ? o : null;
+  }
+
   /// Загрузить персонал: при наличии orgId — GET API, иначе или при ошибке — из prefs.
   Future<void> load(String? orgId) async {
     _orgId = orgId;
@@ -62,6 +70,13 @@ class StaffRepository extends StateNotifier<List<StaffEntry>> {
     if (data != null) {
       state = data;
       _save();
+      final user = _ref.read(authProvider).user;
+      if (user != null && user.role == BusinessRole.solo) {
+        final activeMasters = data.where((e) => e.isActive && e.role == StaffRole.master).length;
+        if (activeMasters >= 2) {
+          Future.microtask(() => _ref.read(authProvider.notifier).refreshProfile());
+        }
+      }
     } else {
       state = _loadFromPrefs(_prefs, orgId);
     }
@@ -73,28 +88,22 @@ class StaffRepository extends StateNotifier<List<StaffEntry>> {
     String? email,
     required StaffRole role,
   }) async {
-    final orgId = _orgId;
-    if (orgId != null && orgId.isNotEmpty) {
-      final result = await _api.invite(orgId, name: name, phone: phone, email: email, role: role);
-      final inv = result.dataOrNull;
-      if (inv != null) {
-        return Result.success(inv);
-      }
-      return Result.failure(result.errorOrNull!);
+    final orgId = _resolveOrgIdForApi();
+    if (orgId == null || orgId.isEmpty) {
+      return Result.failure(
+        const ApiException(
+          code: ApiErrorCode.validation,
+          message: 'В профиле не найдена организация. Обновите профиль или выберите организацию в настройках.',
+        ),
+      );
     }
-    final id = 'inv_${DateTime.now().millisecondsSinceEpoch}';
-    final inv = StaffInvitation(
-      id: id,
-      organizationId: orgId ?? '',
-      organizationName: null,
-      role: role,
-      invitedName: name?.trim().isEmpty == true ? null : name?.trim(),
-      invitedPhone: phone?.trim().isEmpty == true ? null : phone?.trim(),
-      invitedEmail: email?.trim().isEmpty == true ? null : email?.trim(),
-      status: StaffInvitationStatus.pending,
-      createdAt: DateTime.now(),
-    );
-    return Result.success(inv);
+    _orgId = orgId;
+    final result = await _api.invite(orgId, name: name, phone: phone, email: email, role: role);
+    final inv = result.dataOrNull;
+    if (inv != null) {
+      return Result.success(inv);
+    }
+    return Result.failure(result.errorOrNull!);
   }
 
   Future<Result<List<StaffInvitation>>> getIncomingInvitations() async {
@@ -107,7 +116,7 @@ class StaffRepository extends StateNotifier<List<StaffEntry>> {
   Future<Result<List<StaffInvitation>>> getOrganizationInvitations({
     StaffInvitationStatus? status,
   }) async {
-    final orgId = _orgId;
+    final orgId = _resolveOrgIdForApi();
     if (orgId == null || orgId.isEmpty) {
       return Result.success(const []);
     }
@@ -126,7 +135,7 @@ class StaffRepository extends StateNotifier<List<StaffEntry>> {
   }
 
   Future<Result<void>> cancelOrganizationInvitation(String invitationId) async {
-    final orgId = _orgId;
+    final orgId = _resolveOrgIdForApi();
     if (orgId == null || orgId.isEmpty) {
       return Result.failure(const ApiException(code: ApiErrorCode.validation, message: 'Организация не выбрана'));
     }
@@ -134,7 +143,7 @@ class StaffRepository extends StateNotifier<List<StaffEntry>> {
   }
 
   Future<Result<StaffEntry>> update(StaffEntry entry) async {
-    final orgId = _orgId;
+    final orgId = _resolveOrgIdForApi();
     if (orgId != null && orgId.isNotEmpty) {
       final result = await _api.update(orgId, entry.id, entry);
       final updated = result.dataOrNull;
@@ -151,7 +160,7 @@ class StaffRepository extends StateNotifier<List<StaffEntry>> {
   }
 
   Future<Result<void>> deactivate(String id) async {
-    final orgId = _orgId;
+    final orgId = _resolveOrgIdForApi();
     if (orgId != null && orgId.isNotEmpty) {
       final result = await _api.setActive(orgId, id, false);
       if (result.errorOrNull != null) {
@@ -167,7 +176,7 @@ class StaffRepository extends StateNotifier<List<StaffEntry>> {
   }
 
   Future<Result<void>> activate(String id) async {
-    final orgId = _orgId;
+    final orgId = _resolveOrgIdForApi();
     if (orgId != null && orgId.isNotEmpty) {
       final result = await _api.setActive(orgId, id, true);
       if (result.errorOrNull != null) {
@@ -192,7 +201,7 @@ class StaffRepository extends StateNotifier<List<StaffEntry>> {
 
   /// Добавить текущего пользователя (владелец/админ) как мастера. После вызова нужно задать график в карточке сотрудника.
   Future<Result<StaffEntry>> addMeAsMaster() async {
-    final orgId = _orgId;
+    final orgId = _resolveOrgIdForApi();
     if (orgId == null || orgId.isEmpty) {
       return Result.failure(const ApiException(code: ApiErrorCode.unauthorized, message: 'Нет организации'));
     }

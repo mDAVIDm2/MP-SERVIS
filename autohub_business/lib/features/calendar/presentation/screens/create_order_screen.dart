@@ -9,12 +9,15 @@ import '../../../../shared/models/settings_models.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../core/utils/russian_plate_utils.dart';
 import '../../../../core/api/services/api_services_providers.dart';
+import '../../../orders/application/order_creation_drafts_notifier.dart';
+import '../../../orders/domain/order_creation_draft.dart';
 import '../../../orders/presentation/screens/order_detail_screen.dart';
 
 class CreateOrderScreen extends ConsumerStatefulWidget {
   final DateTime? initialDate;
+  final OrderCreationDraft? resumeDraft;
 
-  const CreateOrderScreen({super.key, this.initialDate});
+  const CreateOrderScreen({super.key, this.initialDate, this.resumeDraft});
 
   @override
   ConsumerState<CreateOrderScreen> createState() => _CreateOrderScreenState();
@@ -77,19 +80,181 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
   bool _carFromList = true;
   _CarPick? _pickedCar;
   String? _selectedBayId;
+  String? _linkedDraftId;
+  bool _saveSucceeded = false;
 
   @override
   void initState() {
     super.initState();
-    final initial = widget.initialDate ?? DateTime.now().add(const Duration(days: 1));
+    DateTime initial;
+    if (widget.resumeDraft != null) {
+      final ds = widget.resumeDraft!.data['dateTime'] as String?;
+      final parsed = ds != null ? DateTime.tryParse(ds) : null;
+      initial = parsed ?? widget.initialDate ?? DateTime.now().add(const Duration(days: 1));
+    } else {
+      initial = widget.initialDate ?? DateTime.now().add(const Duration(days: 1));
+    }
     _dateTime = initial;
     if (_dateTime.hour == 0 && _dateTime.minute == 0) {
       _dateTime = _dateTime.copyWith(hour: 9, minute: 0);
     }
+    if (widget.resumeDraft != null) {
+      _linkedDraftId = widget.resumeDraft!.id;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final d = widget.resumeDraft;
+        if (d != null && d.source == OrderCreationDraft.kSourceCalendar) {
+          _applyCalendarDraftData(d.data);
+        }
+      });
+    }
+  }
+
+  void _applyCalendarDraftData(Map<String, dynamic> m) {
+    final v = m['v'];
+    if (v is! num || v.toInt() != 1) return;
+    final settings = ref.read(settingsRepositoryProvider);
+    final byId = {for (final s in settings.services) s.id: s};
+    final ids = (m['selectedServiceIds'] as List?)?.map((e) => e.toString()).toList() ?? <String>[];
+    final selected = <ServiceItem>[];
+    for (final id in ids) {
+      final s = byId[id];
+      if (s != null) selected.add(s);
+    }
+    final customRaw = m['customItems'] as List?;
+    final customs = <OrderItem>[];
+    if (customRaw != null) {
+      for (var i = 0; i < customRaw.length; i++) {
+        final e = customRaw[i];
+        if (e is! Map) continue;
+        final map = Map<String, dynamic>.from(e);
+        customs.add(OrderItem(
+          id: 'draft_cal_${i}_${map['name']}',
+          name: map['name'] as String? ?? '',
+          priceKopecks: (map['priceKopecks'] as num?)?.toInt() ?? 0,
+          estimatedMinutes: (map['estimatedMinutes'] as num?)?.toInt() ?? 60,
+        ));
+      }
+    }
+    final dtStr = m['dateTime'] as String?;
+    final dt = dtStr != null ? DateTime.tryParse(dtStr) : null;
+    setState(() {
+      if (dt != null) {
+        _dateTime = dt;
+      }
+      _carFromList = m['carFromList'] as bool? ?? true;
+      _clientNameController.text = m['clientName'] as String? ?? '';
+      _clientPhoneController.text = m['clientPhone'] as String? ?? '';
+      _carSearchController.text = m['carSearch'] as String? ?? '';
+      _carInfoController.text = m['carInfo'] as String? ?? '';
+      _vinController.text = m['vin'] as String? ?? '';
+      _licensePlateController.text = m['licensePlate'] as String? ?? '';
+      _bodyTypeController.text = m['bodyType'] as String? ?? '';
+      _colorController.text = m['color'] as String? ?? '';
+      _mileageController.text = m['mileage'] as String? ?? '';
+      _engineTypeController.text = m['engineType'] as String? ?? '';
+      _commentController.text = m['comment'] as String? ?? '';
+      _selectedServices.clear();
+      _selectedServices.addAll(selected);
+      _customItems.clear();
+      _customItems.addAll(customs);
+      _selectedBayId = m['bayId'] as String?;
+      final pk = m['pickedCar'];
+      if (pk is Map) {
+        final cm = Map<String, dynamic>.from(pk);
+        _pickedCar = _CarPick(
+          carId: cm['carId'] as String? ?? '',
+          carInfo: cm['carInfo'] as String? ?? '',
+          vin: cm['vin'] as String?,
+          licensePlate: cm['licensePlate'] as String?,
+        );
+      } else {
+        _pickedCar = null;
+      }
+    });
+  }
+
+  Map<String, dynamic> _calendarDraftSnapshot() {
+    return {
+      'v': 1,
+      'dateTime': _dateTime.toIso8601String(),
+      'clientName': _clientNameController.text,
+      'clientPhone': _clientPhoneController.text,
+      'carSearch': _carSearchController.text,
+      'carInfo': _carInfoController.text,
+      'vin': _vinController.text,
+      'licensePlate': _licensePlateController.text,
+      'bodyType': _bodyTypeController.text,
+      'color': _colorController.text,
+      'mileage': _mileageController.text,
+      'engineType': _engineTypeController.text,
+      'comment': _commentController.text,
+      'carFromList': _carFromList,
+      'pickedCar': _pickedCar == null
+          ? null
+          : {
+              'carId': _pickedCar!.carId,
+              'carInfo': _pickedCar!.carInfo,
+              'vin': _pickedCar!.vin,
+              'licensePlate': _pickedCar!.licensePlate,
+            },
+      'selectedServiceIds': _selectedServices.map((s) => s.id).toList(),
+      'customItems': _customItems
+          .map((i) => {
+                'name': i.name,
+                'priceKopecks': i.priceKopecks,
+                'estimatedMinutes': i.estimatedMinutes,
+              })
+          .toList(),
+      'bayId': _selectedBayId,
+    };
+  }
+
+  bool _shouldSaveCalendarDraft() {
+    if (_saveSucceeded) return false;
+    if (_clientNameController.text.trim().isNotEmpty) return true;
+    if (_clientPhoneController.text.trim().isNotEmpty) return true;
+    if (_carInfoController.text.trim().isNotEmpty ||
+        _carSearchController.text.trim().isNotEmpty ||
+        _vinController.text.trim().isNotEmpty ||
+        _licensePlateController.text.trim().isNotEmpty ||
+        _bodyTypeController.text.trim().isNotEmpty ||
+        _colorController.text.trim().isNotEmpty ||
+        _mileageController.text.trim().isNotEmpty ||
+        _engineTypeController.text.trim().isNotEmpty) {
+      return true;
+    }
+    if (_commentController.text.trim().isNotEmpty) return true;
+    if (_selectedServices.isNotEmpty || _customItems.isNotEmpty) return true;
+    if (_pickedCar != null) return true;
+    if (_selectedBayId != null && _selectedBayId!.trim().isNotEmpty) return true;
+    return false;
   }
 
   @override
   void dispose() {
+    if (!_saveSucceeded) {
+      if (_shouldSaveCalendarDraft()) {
+        final snap = _calendarDraftSnapshot();
+        final existing = _linkedDraftId;
+        Future(() async {
+          try {
+            await ref.read(orderCreationDraftsProvider.notifier).upsertFromSnapshot(
+                  existingId: existing,
+                  source: OrderCreationDraft.kSourceCalendar,
+                  data: snap,
+                );
+          } catch (_) {}
+        });
+      } else if (_linkedDraftId != null) {
+        final rid = _linkedDraftId!;
+        Future(() async {
+          try {
+            await ref.read(orderCreationDraftsProvider.notifier).remove(rid);
+          } catch (_) {}
+        });
+      }
+    }
     _clientNameController.dispose();
     _clientPhoneController.dispose();
     _carSearchController.dispose();
@@ -281,6 +446,8 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
           name: s.name,
           priceKopecks: s.priceKopecks,
           estimatedMinutes: s.durationMinutes,
+          serviceId: s.id,
+          catalogItemId: s.catalogItemId,
         ),
       ),
       ..._customItems,
@@ -353,6 +520,11 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
     final addedOrder = await repo.addOrderAsync(order);
 
     if (mounted) {
+      _saveSucceeded = true;
+      final draftId = _linkedDraftId;
+      if (draftId != null) {
+        await ref.read(orderCreationDraftsProvider.notifier).remove(draftId);
+      }
       Navigator.pop(context);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(

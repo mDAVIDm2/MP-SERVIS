@@ -1,6 +1,6 @@
-# AutoHub Backend (NestJS + PostgreSQL)
+# MP-Servis Backend (NestJS + PostgreSQL)
 
-API для приложений **AutoHub Business** и **AutoHub Client**. Порт по умолчанию: 3000, префикс: `/api/v1`.
+API для приложений **MP-Servis Business** и клиента **MP-Servis**. Порт по умолчанию: 3000, префикс: `/api/v1`.
 
 ## Требования
 
@@ -20,7 +20,7 @@ cp .env.example .env
 Создайте БД:
 
 ```bash
-createdb autohub
+createdb mp_servis
 ```
 
 При первом запуске TypeORM создаст таблицы (`synchronize: true` в dev). В production используйте миграции.
@@ -55,3 +55,11 @@ API: http://localhost:3000/api/v1
 - `wsUrl = 'ws://localhost:3000/ws'` (WebSocket — при необходимости добавьте gateway)
 
 Запустите бэкенд и приложение Business — авторизация и данные пойдут в PostgreSQL.
+
+## Деплой на VPS (Ubuntu)
+
+Шаблоны **systemd**, **nginx**, пример `.env` для прода и пошаговая инструкция:
+
+- [`deploy/SETUP_SERVER_RU.md`](deploy/SETUP_SERVER_RU.md)
+
+Миграции на сервере без dev-зависимостей: `npm run build` затем `npm run migration:run:prod`.

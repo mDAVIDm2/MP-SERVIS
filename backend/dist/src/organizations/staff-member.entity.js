@@ -57,6 +57,18 @@ __decorate([
     __metadata("design:type", Array)
 ], StaffMember.prototype, "skills", void 0);
 __decorate([
+    (0, typeorm_1.Column)({ name: 'can_see_chats', default: false }),
+    __metadata("design:type", Boolean)
+], StaffMember.prototype, "canSeeChats", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'can_write_chats', default: false }),
+    __metadata("design:type", Boolean)
+], StaffMember.prototype, "canWriteChats", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'can_manage_org_settings', default: false }),
+    __metadata("design:type", Boolean)
+], StaffMember.prototype, "canManageOrgSettings", void 0);
+__decorate([
     (0, typeorm_1.ManyToOne)(() => organization_entity_1.Organization, (o) => o.staff, { onDelete: 'CASCADE' }),
     (0, typeorm_1.JoinColumn)({ name: 'organization_id' }),
     __metadata("design:type", organization_entity_1.Organization)

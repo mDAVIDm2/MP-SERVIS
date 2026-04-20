@@ -40,6 +40,7 @@ export declare class OrdersController {
     getPhotoFile(orderId: string, photoId: string, res: Response): Promise<void | Response<any, Record<string, any>>>;
     get(id: string, req: Request & {
         user: {
+            id?: string;
             organizationId?: string | null;
             phone?: string;
         };

@@ -26,9 +26,10 @@ const organization_business_kind_1 = require("../organizations/organization-busi
 const orders_service_1 = require("../orders/orders.service");
 const media_service_1 = require("../media/media.service");
 const subscription_quota_service_1 = require("../subscriptions/subscription-quota.service");
+const users_service_1 = require("../users/users.service");
 const norm = (s) => (s || '').replace(/\D/g, '');
 let ChatsService = class ChatsService {
-    constructor(chatRepo, msgRepo, orderRepo, itemRepo, orgRepo, orders, notifications, mediaService, subscriptionQuota) {
+    constructor(chatRepo, msgRepo, orderRepo, itemRepo, orgRepo, orders, notifications, mediaService, subscriptionQuota, usersService) {
         this.chatRepo = chatRepo;
         this.msgRepo = msgRepo;
         this.orderRepo = orderRepo;
@@ -38,6 +39,7 @@ let ChatsService = class ChatsService {
         this.notifications = notifications;
         this.mediaService = mediaService;
         this.subscriptionQuota = subscriptionQuota;
+        this.usersService = usersService;
     }
     apiBaseUrl() {
         return process.env.API_BASE_URL || 'http://localhost:3000/api/v1';
@@ -75,8 +77,18 @@ let ChatsService = class ChatsService {
             return chat;
         chat = this.chatRepo.create({ organizationId: null, clientPhone: phoneNorm });
         await this.chatRepo.save(chat);
-        await this.addSystemMessage(chat.id, 'Добро пожаловать в чат поддержки AutoHub. Опишите вопрос — оператор ответит в ближайшее время.');
+        await this.addSystemMessage(chat.id, 'Добро пожаловать в чат поддержки MP-Servis. Опишите вопрос — оператор ответит в ближайшее время.');
         return (await this.chatRepo.findOne({ where: { id: chat.id }, relations: ['messages'] }));
+    }
+    async openOrganizationChatForClient(organizationId, clientPhoneRaw) {
+        const org = await this.orgRepo.findOne({ where: { id: organizationId } });
+        if (!org)
+            throw new common_1.NotFoundException('Организация не найдена');
+        const phoneNorm = norm(clientPhoneRaw);
+        if (!phoneNorm)
+            throw new common_1.BadRequestException('В профиле не указан телефон');
+        const chat = await this.getOrCreateForClient(organizationId, clientPhoneRaw);
+        return this.getChatById(chat.id, null, phoneNorm, true);
     }
     async getOrCreateForClient(organizationId, clientPhoneRaw) {
         const phoneNorm = norm(clientPhoneRaw);
@@ -473,6 +485,16 @@ let ChatsService = class ChatsService {
         }
         return this.getLastOrderForChat(c, organizationId, clientPhoneNorm);
     }
+    async markApprovalRequestsResolvedForOrder(orderId, status) {
+        await this.msgRepo
+            .createQueryBuilder()
+            .update(chat_message_entity_1.ChatMessage)
+            .set({ approvalStatus: status })
+            .where('order_id = :oid', { oid: orderId })
+            .andWhere('message_type = :mt', { mt: 'approval_request' })
+            .andWhere('(approval_status IS NULL OR approval_status = :pending)', { pending: 'pending' })
+            .execute();
+    }
     isPendingApproval(msg) {
         const mt = msg.messageType ?? msg.message_type;
         if (mt !== 'approval_request')
@@ -684,12 +706,27 @@ let ChatsService = class ChatsService {
             const list = await this.orgRepo.find({ where: { id: (0, typeorm_2.In)([...orgIds]) } });
             orgById = new Map(list.map((o) => [o.id, o]));
         }
+        let clientAvatarByPhoneKey = new Map();
+        if (!forClient) {
+            const phoneKeys = new Set();
+            for (const r of rows) {
+                const pk = this.usersService.clientPhoneMatchKey(String(r.chatPhone || ''));
+                if (pk)
+                    phoneKeys.add(pk);
+            }
+            clientAvatarByPhoneKey = await this.usersService.mapClientAvatarUrlsByPhoneKeys(phoneKeys);
+        }
         const items = rows.map((r) => {
             const orgFromOrder = r.ord?.organization;
             const orgFromDb = r.rawOrgId ? orgById.get(r.rawOrgId) : undefined;
             const org = orgFromOrder ?? orgFromDb;
-            const orgName = r.isSupportChat ? 'Поддержка AutoHub' : (org?.name ?? '');
+            const orgName = r.isSupportChat ? 'Поддержка MP-Servis' : (org?.name ?? '');
             const businessKind = !r.isSupportChat ? (0, organization_business_kind_1.normalizeOrganizationBusinessKind)(org?.businessKind) : null;
+            const photoUrls = org && Array.isArray(org.photoUrls) ? org.photoUrls : [];
+            const organizationPhotoUrl = !r.isSupportChat && photoUrls.length > 0 ? photoUrls[0] : null;
+            const organizationPhone = !r.isSupportChat && org ? String(org.phone ?? '').trim() || null : null;
+            const clientPhoneKey = this.usersService.clientPhoneMatchKey(String(r.chatPhone || ''));
+            const clientAvatarUrl = !forClient && clientPhoneKey ? clientAvatarByPhoneKey.get(clientPhoneKey) ?? null : null;
             return {
                 id: r.c.id,
                 order_id: r.ord?.id ?? r.c.lastOrderId ?? '',
@@ -697,6 +734,9 @@ let ChatsService = class ChatsService {
                 order_status: r.ord?.status ?? 'pending_confirmation',
                 organization_id: r.isSupportChat ? '' : (r.rawOrgId ?? ''),
                 organization_name: orgName,
+                organization_photo_url: organizationPhotoUrl,
+                organization_phone: organizationPhone,
+                client_avatar_url: clientAvatarUrl,
                 organization_kind: businessKind,
                 business_kind: businessKind,
                 car_info: r.ord?.carInfo ?? (r.isSupportChat ? 'Поддержка' : ''),
@@ -801,7 +841,7 @@ let ChatsService = class ChatsService {
             const limits = await this.subscriptionQuota.getLimitsForOrganization(orgId);
             const max = limits.maxChatImagesPerMessage;
             if (max != null && fileList.length > max) {
-                throw new common_1.BadRequestException(`Не более ${max} изображений в одном сообщении по вашему тарифу.`);
+                throw new common_1.BadRequestException(`Не более ${max} изображений в одном сообщении по тарифу сервиса (не ограничение аккаунта клиента).`);
             }
         }
         const isSupportChat = chat.organizationId == null && !!chat.clientPhone;
@@ -843,7 +883,7 @@ let ChatsService = class ChatsService {
                     chatTitle = (org?.name ?? '').trim() || 'Сервис';
                 }
                 else {
-                    chatTitle = 'Поддержка AutoHub';
+                    chatTitle = 'Поддержка MP-Servis';
                 }
                 await this.notifications.createOrRefreshChatMessageForClientPhone(phoneNorm, {
                     title: chatTitle,
@@ -991,7 +1031,7 @@ let ChatsService = class ChatsService {
                         chatTitle = (org?.name ?? '').trim() || 'Сервис';
                     }
                     else {
-                        chatTitle = 'Поддержка AutoHub';
+                        chatTitle = 'Поддержка MP-Servis';
                     }
                     await this.notifications.createOrRefreshChatMessageForClientPhone(phoneNorm, {
                         title: chatTitle,
@@ -1070,6 +1110,7 @@ exports.ChatsService = ChatsService = __decorate([
         orders_service_1.OrdersService,
         notifications_service_1.NotificationsService,
         media_service_1.MediaService,
-        subscription_quota_service_1.SubscriptionQuotaService])
+        subscription_quota_service_1.SubscriptionQuotaService,
+        users_service_1.UsersService])
 ], ChatsService);
 //# sourceMappingURL=chats.service.js.map

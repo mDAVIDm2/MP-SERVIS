@@ -1,5 +1,18 @@
 import { ServiceCatalogService } from '../reference/service-catalog.service';
 import { OrganizationsService } from './organizations.service';
+type ServicePayloadRow = {
+    id: string;
+    name: string;
+    price_kopecks: number;
+    duration_minutes: number;
+    catalog_item_id?: string;
+    use_body_type_pricing?: boolean;
+    body_type_pricing?: Array<{
+        body_type?: string;
+        price_kopecks?: number;
+        duration_minutes?: number;
+    }>;
+};
 export declare class CatalogController {
     private org;
     private serviceCatalog;
@@ -24,12 +37,7 @@ export declare class CatalogController {
             longitude?: number;
             photo_urls: string[];
             service_ids: string[];
-            services: Array<{
-                id: string;
-                name: string;
-                price_kopecks: number;
-                duration_minutes: number;
-            }>;
+            services: ServicePayloadRow[];
             business_kind: string;
             business_kind_label: string;
             scheduling_mode: string;
@@ -57,6 +65,7 @@ export declare class CatalogController {
             order?: number;
         }[];
         items: {
+            catalog_item_id?: string | undefined;
             id: string;
             category_id: string;
             name: string;
@@ -75,11 +84,14 @@ export declare class CatalogController {
             name: string;
             category_id: string;
             package_price_kopecks: number;
+            package_duration_minutes: number;
             included_service_ids: string[];
             addons: {
-                service_id?: string;
-                extra_price_kopecks?: number;
+                service_id: string | undefined;
+                extra_price_kopecks: number;
+                extra_duration_minutes: number;
             }[];
         }[];
     }>;
 }
+export {};

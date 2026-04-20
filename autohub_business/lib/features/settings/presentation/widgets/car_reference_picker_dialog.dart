@@ -7,7 +7,7 @@ import '../../../../core/theme/desktop_design_system.dart';
 import '../../../../core/theme/desktop_light_theme.dart';
 import '../../../../shared/models/car_reference_models.dart';
 
-/// Диалог выбора марки / модели / поколения из справочника БД AutoHub.
+/// Диалог выбора марки / модели / поколения из справочника БД MP-Servis.
 class CarReferencePickerDialog extends ConsumerStatefulWidget {
   const CarReferencePickerDialog({super.key, required this.onPick});
 

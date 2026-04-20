@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { PushDevice } from './push-device.entity';
 import { Notification, NotificationType } from './notification.entity';
+import { StaffMember } from '../organizations/staff-member.entity';
 import { FcmPushService } from './fcm-push.service';
 import { UsersService } from '../users/users.service';
 import {
@@ -16,6 +17,7 @@ export class NotificationsService {
   constructor(
     @InjectRepository(PushDevice) private pushRepo: Repository<PushDevice>,
     @InjectRepository(Notification) private notificationRepo: Repository<Notification>,
+    @InjectRepository(StaffMember) private staffRepo: Repository<StaffMember>,
     private fcm: FcmPushService,
     @Inject(forwardRef(() => UsersService)) private users: UsersService,
   ) {}
@@ -62,7 +64,7 @@ export class NotificationsService {
       userId: params.userId,
       type: 'organization_invite',
       title: `Приглашение в «${params.organizationName}»`,
-      body: `Роль: ${params.role}. Откройте AutoHub Business → Профиль → Входящие приглашения.`,
+      body: `Роль: ${params.role}. Откройте MP-Servis Business → Профиль → Входящие приглашения.`,
       payload: {
         invitation_id: params.invitationId,
         organization_id: params.organizationId,
@@ -126,6 +128,43 @@ export class NotificationsService {
     const userId = await this.users.findIdByNormalizedPhone(phoneDigits);
     if (!userId) return null;
     return this.create({ userId, ...data });
+  }
+
+  /**
+   * Уведомления сотрудникам организации с привязанным user_id (Business): запись в ленту + FCM на business-токены.
+   * Канал `order` — те же настройки, что у клиентских «обновления по заказам».
+   */
+  async notifyOrganizationStaffOrderEvent(
+    organizationId: string,
+    data: {
+      title: string;
+      body: string;
+      payload: Record<string, unknown> & { order_id: string };
+    },
+  ): Promise<void> {
+    const oid = (organizationId || '').trim();
+    if (!oid) return;
+    const staff = await this.staffRepo.find({
+      where: { organizationId: oid, isActive: true },
+      select: ['userId'],
+    });
+    const userIds = [
+      ...new Set(
+        staff
+          .map((s) => (s.userId ?? '').trim())
+          .filter((id) => id.length > 0),
+      ),
+    ];
+    const basePayload = { ...data.payload, organization_id: oid };
+    for (const userId of userIds) {
+      await this.create({
+        userId,
+        type: 'order',
+        title: data.title,
+        body: data.body,
+        payload: basePayload,
+      });
+    }
   }
 
   /**

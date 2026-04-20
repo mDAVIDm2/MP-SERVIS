@@ -13,12 +13,15 @@ import { ChatMessage } from '../chats/chat-message.entity';
 import { OrganizationsModule } from '../organizations/organizations.module';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 import { MediaModule } from '../media/media.module';
+import { UsersModule } from '../users/users.module';
+import { UserClientHiddenCar } from '../users/user-client-hidden-car.entity';
 
 @Module({
   imports: [
     MediaModule,
+    UsersModule,
     SubscriptionsModule,
-    TypeOrmModule.forFeature([Order, OrderItem, OrderPhoto, StaffMember, Chat, ChatMessage]),
+    TypeOrmModule.forFeature([Order, OrderItem, OrderPhoto, StaffMember, Chat, ChatMessage, UserClientHiddenCar]),
     ChatsModule,
     NotificationsModule,
     OrganizationsModule,

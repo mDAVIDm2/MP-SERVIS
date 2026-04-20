@@ -11,6 +11,9 @@ export declare class StaffMember {
     invitedAt: Date | null;
     organizationId: string;
     skills: string[];
+    canSeeChats: boolean;
+    canWriteChats: boolean;
+    canManageOrgSettings: boolean;
     organization: Organization;
     schedule: MasterSchedule[];
 }

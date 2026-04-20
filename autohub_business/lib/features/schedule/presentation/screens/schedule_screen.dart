@@ -10,6 +10,8 @@ import '../../../../core/repositories/order_repository.dart';
 import '../../../../core/repositories/settings_repository.dart';
 import '../../../../core/repositories/staff_repository.dart';
 import '../../../../core/repositories/organization_repository.dart';
+import '../../../../core/auth/auth_provider.dart';
+import '../../../../core/utils/schedule_masters_filter.dart';
 import '../../../../shared/models/order_model.dart';
 import '../../../../shared/models/settings_models.dart';
 import '../../../../shared/models/staff_model.dart';
@@ -180,16 +182,6 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
         .toList();
   }
 
-  List<StaffEntry> _mastersOnShiftForDate(List<StaffEntry> staff, DateTime date) {
-    final dayOfWeek = date.weekday % 7;
-    return staff
-        .where((e) {
-          if (!e.isActive || e.role != StaffRole.master) return false;
-          final slot = e.schedule.where((s) => s.dayOfWeek == dayOfWeek).firstOrNull;
-          return slot != null && slot.isWorkingDay;
-        })
-        .toList();
-  }
 
   /// Совпадает ли плановое окно «с–по» с уже сохранённым (дата и время до минуты).
   bool _ordersSamePlannedWindow(Order o, DateTime newStart, DateTime newEnd) {
@@ -214,6 +206,7 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
     final orders = ref.watch(orderRepositoryProvider);
     final staff = ref.watch(staffRepositoryProvider);
     final slots = ref.watch(settingsRepositoryProvider).slotsSettings;
+    final authUser = ref.watch(authProvider).user;
 
     final selectedOrderId = isDesktopPlatform ? ref.watch(scheduleSelectedOrderIdProvider) : null;
     final effectiveBackground = isDesktopPlatform ? AppColorsDesktop.background : AppColors.background;
@@ -242,7 +235,11 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
       controller: _dayPageController,
       onPageChanged: (i) {
         final newDate = _dateForDayPage(i);
-        final newMasters = _mastersOnShiftForDate(staff, newDate);
+        final newMasters = filterMastersForScheduleRole(
+          mastersOnShiftForDate(staff, newDate),
+          authUser?.role,
+          authUser?.id,
+        );
         setState(() {
           _selectedDate = newDate;
           if (newMasters.isNotEmpty && _currentMasterIndex >= newMasters.length) {
@@ -265,7 +262,11 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
                     (o.bayId == null || o.bayId!.isEmpty))
                 .toList()
             : dayOrdersForDate.where((o) => o.masterId == null || o.masterId!.isEmpty).toList();
-        final mastersForDate = _mastersOnShiftForDate(staff, date);
+        final mastersForDate = filterMastersForScheduleRole(
+          mastersOnShiftForDate(staff, date),
+          authUser?.role,
+          authUser?.id,
+        );
         final safeMasterIndex = mastersForDate.isEmpty ? 0 : _currentMasterIndex.clamp(0, mastersForDate.length - 1);
         final namedBays = slots.bays;
         final safeBayIndex = namedBays.isEmpty ? 0 : _currentBayIndex.clamp(0, namedBays.length - 1);
@@ -664,7 +665,7 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  ?assignFooter,
+                  if (assignFooter != null) assignFooter,
                   if (assignFooter != null) const SizedBox(height: 3),
                   Center(child: statusFooter),
                 ],
@@ -1487,7 +1488,45 @@ class _ScheduleDayPageState extends State<_ScheduleDayPage> {
     );
   }
 
-  /// Широкая зона для ФИО / названия поста; стрелки — полупрозрачные круги поверх краёв.
+  /// Зона ФИО / поста; компактные стрелки по краям — больше ширины под длинное имя на узком экране.
+  Widget _scheduleColumnNavButton({
+    required IconData icon,
+    required VoidCallback? onPressed,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onPressed,
+        customBorder: const CircleBorder(),
+        child: SizedBox(
+          width: 40,
+          height: 44,
+          child: Center(
+            child: Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: AppColors.cardBg.withValues(alpha: 0.94),
+                border: Border.all(color: AppColors.border.withValues(alpha: 0.65)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.06),
+                    blurRadius: 4,
+                    offset: const Offset(0, 1),
+                  ),
+                ],
+              ),
+              alignment: Alignment.center,
+              child: Icon(icon, size: 16, color: AppColors.textPrimary),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Широкая зона для ФИО / названия поста; стрелки по краям.
   Widget _scheduleColumnTitleNav({
     required String title,
     required String subtitle,
@@ -1497,13 +1536,13 @@ class _ScheduleDayPageState extends State<_ScheduleDayPage> {
     required VoidCallback? onNext,
   }) {
     return SizedBox(
-      height: 86,
+      height: 72,
       child: Stack(
         alignment: Alignment.center,
         clipBehavior: Clip.none,
         children: [
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 44),
+            padding: const EdgeInsets.symmetric(horizontal: 36),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               mainAxisSize: MainAxisSize.min,
@@ -1511,20 +1550,21 @@ class _ScheduleDayPageState extends State<_ScheduleDayPage> {
                 Text(
                   title,
                   style: const TextStyle(
-                    fontSize: 15,
+                    fontSize: 13,
                     fontWeight: FontWeight.w700,
                     color: AppColors.textPrimary,
                     height: 1.2,
+                    letterSpacing: -0.25,
                   ),
                   textAlign: TextAlign.center,
                   maxLines: 4,
                   overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 2),
                 Text(
                   subtitle,
                   style: TextStyle(
-                    fontSize: 12,
+                    fontSize: 10,
                     fontWeight: FontWeight.w500,
                     color: AppColors.textSecondary.withValues(alpha: 0.95),
                   ),
@@ -1540,18 +1580,9 @@ class _ScheduleDayPageState extends State<_ScheduleDayPage> {
             top: 0,
             bottom: 0,
             child: Center(
-              child: Material(
-                color: AppColors.cardBg.withValues(alpha: 0.92),
-                shape: const CircleBorder(),
-                elevation: 1,
-                shadowColor: Colors.black26,
-                child: IconButton(
-                  icon: const Icon(Icons.chevron_left),
-                  onPressed: canPrev ? onPrev : null,
-                  padding: const EdgeInsets.all(4),
-                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                  visualDensity: VisualDensity.compact,
-                ),
+              child: _scheduleColumnNavButton(
+                icon: Icons.chevron_left_rounded,
+                onPressed: canPrev ? onPrev : null,
               ),
             ),
           ),
@@ -1560,18 +1591,9 @@ class _ScheduleDayPageState extends State<_ScheduleDayPage> {
             top: 0,
             bottom: 0,
             child: Center(
-              child: Material(
-                color: AppColors.cardBg.withValues(alpha: 0.92),
-                shape: const CircleBorder(),
-                elevation: 1,
-                shadowColor: Colors.black26,
-                child: IconButton(
-                  icon: const Icon(Icons.chevron_right),
-                  onPressed: canNext ? onNext : null,
-                  padding: const EdgeInsets.all(4),
-                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                  visualDensity: VisualDensity.compact,
-                ),
+              child: _scheduleColumnNavButton(
+                icon: Icons.chevron_right_rounded,
+                onPressed: canNext ? onNext : null,
               ),
             ),
           ),
@@ -1593,8 +1615,8 @@ class _ScheduleDayPageState extends State<_ScheduleDayPage> {
         : (masters.isEmpty ? 0 : widget.dayOrdersForDate.where((o) => o.masterId == masters[currentIndex].id).length);
     final subtitle = orderCount == 0 ? 'Нет заказов' : '$orderCount ${_orderCountLabel(orderCount)}';
     return Container(
-      constraints: const BoxConstraints(minHeight: 88),
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      constraints: const BoxConstraints(minHeight: 76),
+      padding: const EdgeInsets.symmetric(vertical: 2),
       decoration: BoxDecoration(
         color: AppColors.nestedBg,
         border: Border(bottom: BorderSide(color: AppColors.border)),
@@ -1674,10 +1696,6 @@ class _ScheduleDayPageState extends State<_ScheduleDayPage> {
   }
 }
 
-extension _FirstOrNull<T> on Iterable<T> {
-  T? get firstOrNull => isEmpty ? null : first;
-}
-
 /// Кнопка «Назначить мастера» в нижней полосе мини-карточки (не выходит за границы: Row + Flexible, масштаб через FittedBox родителя).
 class _AssignMasterButton extends StatelessWidget {
   const _AssignMasterButton({required this.order, required this.onAssigned});
@@ -1689,7 +1707,12 @@ class _AssignMasterButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer(
       builder: (context, ref, _) {
-        final staff = ref.watch(staffRepositoryProvider).where((e) => e.isActive && e.role == StaffRole.master).toList();
+        final u = ref.watch(authProvider).user;
+        final staff = filterMastersForScheduleRole(
+          ref.watch(staffRepositoryProvider).where((e) => e.isActive && e.role == StaffRole.master).toList(),
+          u?.role,
+          u?.id,
+        );
         final staffMembers = ref.watch(staffListProvider);
         final repo = ref.read(orderRepositoryProvider.notifier);
 

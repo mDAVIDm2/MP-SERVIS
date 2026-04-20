@@ -11,6 +11,7 @@ import { normalizeOrganizationBusinessKind } from '../organizations/organization
 import { OrdersService } from '../orders/orders.service';
 import { MediaService } from '../media/media.service';
 import { SubscriptionQuotaService } from '../subscriptions/subscription-quota.service';
+import { UsersService } from '../users/users.service';
 
 const norm = (s: string) => (s || '').replace(/\D/g, '');
 
@@ -26,6 +27,7 @@ export class ChatsService {
     @Inject(forwardRef(() => NotificationsService)) private notifications: NotificationsService,
     private readonly mediaService: MediaService,
     private readonly subscriptionQuota: SubscriptionQuotaService,
+    private readonly usersService: UsersService,
   ) {}
 
   private apiBaseUrl(): string {
@@ -70,9 +72,19 @@ export class ChatsService {
     await this.chatRepo.save(chat);
     await this.addSystemMessage(
       chat.id,
-      'Добро пожаловать в чат поддержки AutoHub. Опишите вопрос — оператор ответит в ближайшее время.',
+      'Добро пожаловать в чат поддержки MP-Servis. Опишите вопрос — оператор ответит в ближайшее время.',
     );
     return (await this.chatRepo.findOne({ where: { id: chat.id }, relations: ['messages'] }))!;
+  }
+
+  /** Клиентское приложение: открыть диалог с СТО (org должна существовать). */
+  async openOrganizationChatForClient(organizationId: string, clientPhoneRaw: string) {
+    const org = await this.orgRepo.findOne({ where: { id: organizationId } });
+    if (!org) throw new NotFoundException('Организация не найдена');
+    const phoneNorm = norm(clientPhoneRaw);
+    if (!phoneNorm) throw new BadRequestException('В профиле не указан телефон');
+    const chat = await this.getOrCreateForClient(organizationId, clientPhoneRaw);
+    return this.getChatById(chat.id, null, phoneNorm, true);
   }
 
   async getOrCreateForClient(organizationId: string, clientPhoneRaw: string): Promise<Chat> {
@@ -516,6 +528,24 @@ export class ChatsService {
     return this.getLastOrderForChat(c, organizationId, clientPhoneNorm);
   }
 
+  /**
+   * После ответа клиента по API заказов — закрыть «висящие» approval_request в подсчёте непрочитанного.
+   * Иначе computeUnreadForClient вечно считает pending-карточки.
+   */
+  async markApprovalRequestsResolvedForOrder(
+    orderId: string,
+    status: 'accepted' | 'rejected' | 'superseded',
+  ): Promise<void> {
+    await this.msgRepo
+      .createQueryBuilder()
+      .update(ChatMessage)
+      .set({ approvalStatus: status })
+      .where('order_id = :oid', { oid: orderId })
+      .andWhere('message_type = :mt', { mt: 'approval_request' })
+      .andWhere('(approval_status IS NULL OR approval_status = :pending)', { pending: 'pending' })
+      .execute();
+  }
+
   private isPendingApproval(msg: ChatMessage): boolean {
     const mt = (msg as any).messageType ?? (msg as any).message_type;
     if (mt !== 'approval_request') return false;
@@ -741,12 +771,29 @@ export class ChatsService {
       orgById = new Map(list.map((o) => [o.id, o]));
     }
 
+    let clientAvatarByPhoneKey = new Map<string, string | null>();
+    if (!forClient) {
+      const phoneKeys = new Set<string>();
+      for (const r of rows) {
+        const pk = this.usersService.clientPhoneMatchKey(String(r.chatPhone || ''));
+        if (pk) phoneKeys.add(pk);
+      }
+      clientAvatarByPhoneKey = await this.usersService.mapClientAvatarUrlsByPhoneKeys(phoneKeys);
+    }
+
     const items = rows.map((r) => {
       const orgFromOrder = r.ord?.organization as Organization | undefined;
       const orgFromDb = r.rawOrgId ? orgById.get(r.rawOrgId) : undefined;
       const org = orgFromOrder ?? orgFromDb;
-      const orgName = r.isSupportChat ? 'Поддержка AutoHub' : ((org as any)?.name ?? '');
+      const orgName = r.isSupportChat ? 'Поддержка MP-Servis' : ((org as any)?.name ?? '');
       const businessKind = !r.isSupportChat ? normalizeOrganizationBusinessKind((org as any)?.businessKind) : null;
+      const photoUrls = org && Array.isArray((org as any).photoUrls) ? ((org as any).photoUrls as string[]) : [];
+      const organizationPhotoUrl = !r.isSupportChat && photoUrls.length > 0 ? photoUrls[0] : null;
+      const organizationPhone =
+        !r.isSupportChat && org ? String((org as any).phone ?? '').trim() || null : null;
+      const clientPhoneKey = this.usersService.clientPhoneMatchKey(String(r.chatPhone || ''));
+      const clientAvatarUrl =
+        !forClient && clientPhoneKey ? clientAvatarByPhoneKey.get(clientPhoneKey) ?? null : null;
       return {
         id: r.c.id,
         order_id: r.ord?.id ?? (r.c as any).lastOrderId ?? '',
@@ -754,6 +801,9 @@ export class ChatsService {
         order_status: r.ord?.status ?? 'pending_confirmation',
         organization_id: r.isSupportChat ? '' : (r.rawOrgId ?? ''),
         organization_name: orgName,
+        organization_photo_url: organizationPhotoUrl,
+        organization_phone: organizationPhone,
+        client_avatar_url: clientAvatarUrl,
         /** Код вида бизнеса для подписей в клиентском приложении (null — чат поддержки). */
         organization_kind: businessKind,
         /** Дубликат для единообразия с профилем организации (`business_kind`); значение то же, что у organization_kind. */
@@ -881,7 +931,9 @@ export class ChatsService {
       const limits = await this.subscriptionQuota.getLimitsForOrganization(orgId);
       const max = limits.maxChatImagesPerMessage;
       if (max != null && fileList.length > max) {
-        throw new BadRequestException(`Не более ${max} изображений в одном сообщении по вашему тарифу.`);
+        throw new BadRequestException(
+          `Не более ${max} изображений в одном сообщении по тарифу сервиса (не ограничение аккаунта клиента).`,
+        );
       }
     }
 
@@ -927,7 +979,7 @@ export class ChatsService {
           const org = await this.orgRepo.findOne({ where: { id: chatRow.organizationId } });
           chatTitle = (org?.name ?? '').trim() || 'Сервис';
         } else {
-          chatTitle = 'Поддержка AutoHub';
+          chatTitle = 'Поддержка MP-Servis';
         }
         await this.notifications.createOrRefreshChatMessageForClientPhone(phoneNorm, {
           title: chatTitle,
@@ -1086,7 +1138,7 @@ export class ChatsService {
             const org = await this.orgRepo.findOne({ where: { id: chatRow.organizationId } });
             chatTitle = (org?.name ?? '').trim() || 'Сервис';
           } else {
-            chatTitle = 'Поддержка AutoHub';
+            chatTitle = 'Поддержка MP-Servis';
           }
           await this.notifications.createOrRefreshChatMessageForClientPhone(phoneNorm, {
             title: chatTitle,

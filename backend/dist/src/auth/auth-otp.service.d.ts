@@ -23,6 +23,7 @@ export declare class AuthOtpService {
         challenge_id: string;
         expires_in: number;
         resend_after: number;
+        debug_otp?: string;
     }>;
     verifyChallenge(challengeId: string, code: string, expectedRecipient: string, expectedKind: OtpRecipientKind): Promise<AuthOtpChallenge>;
 }

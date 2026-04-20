@@ -120,20 +120,25 @@ class ReferenceApiService {
     String? pendingBrand,
     String? pendingModel,
     String? pendingGeneration,
+    int? referenceBrandId,
+    int? referenceModelId,
   }) async {
     final hasAny = (pendingBrand?.trim().isNotEmpty ?? false) ||
         (pendingModel?.trim().isNotEmpty ?? false) ||
         (pendingGeneration?.trim().isNotEmpty ?? false);
     if (!hasAny) return Result.success(<String, dynamic>{});
     try {
+      final payload = <String, dynamic>{
+        'carId': carId,
+        'pendingBrand': pendingBrand?.trim().isNotEmpty == true ? pendingBrand!.trim() : null,
+        'pendingModel': pendingModel?.trim().isNotEmpty == true ? pendingModel!.trim() : null,
+        'pendingGeneration': pendingGeneration?.trim().isNotEmpty == true ? pendingGeneration!.trim() : null,
+      };
+      if (referenceBrandId != null) payload['referenceBrandId'] = referenceBrandId;
+      if (referenceModelId != null) payload['referenceModelId'] = referenceModelId;
       final res = await _client.post<Map<String, dynamic>>(
         '/reference/pending-car',
-        data: {
-          'carId': carId,
-          'pendingBrand': pendingBrand?.trim().isNotEmpty == true ? pendingBrand!.trim() : null,
-          'pendingModel': pendingModel?.trim().isNotEmpty == true ? pendingModel!.trim() : null,
-          'pendingGeneration': pendingGeneration?.trim().isNotEmpty == true ? pendingGeneration!.trim() : null,
-        },
+        data: payload,
       );
       final data = res.data;
       if (data is! Map<String, dynamic>) return Result.success(<String, dynamic>{});

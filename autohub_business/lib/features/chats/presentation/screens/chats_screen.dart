@@ -8,6 +8,7 @@ import '../../../../core/repositories/chat_repository.dart';
 import '../../../../core/repositories/order_repository.dart';
 import '../../../../shared/widgets/api_failure_banner.dart';
 import 'chat_detail_screen.dart';
+import '../widgets/authenticated_profile_avatar.dart';
 
 /// Порог ширины для переключения в режим «мессенджер» (список слева, чат справа).
 const double _kSplitLayoutBreakpoint = 700;
@@ -52,9 +53,15 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
     final useSplitLayout = isDesktopPlatform || width >= _kSplitLayoutBreakpoint;
 
     if (loadError != null) {
+      final desk = isDesktopPlatform;
       return Scaffold(
-        backgroundColor: AppColors.background,
-        appBar: AppBar(title: const Text('Чаты')),
+        backgroundColor: desk ? AppColorsDesktop.background : AppColors.background,
+        appBar: AppBar(
+          title: const Text('Чаты'),
+          backgroundColor: desk ? AppColorsDesktop.surface : null,
+          foregroundColor: desk ? AppColorsDesktop.textPrimary : null,
+          surfaceTintColor: desk ? Colors.transparent : null,
+        ),
         body: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -62,14 +69,16 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
               message: loadError,
               onRetry: retryApi,
             ),
-            const Expanded(
+            Expanded(
               child: Center(
                 child: Padding(
-                  padding: EdgeInsets.all(20),
+                  padding: const EdgeInsets.all(20),
                   child: Text(
                     'Пока список чатов недоступен. После восстановления связи нажмите «Повторить».',
                     textAlign: TextAlign.center,
-                    style: TextStyle(color: AppColors.textSecondary),
+                    style: TextStyle(
+                      color: desk ? AppColorsDesktop.textSecondary : AppColors.textSecondary,
+                    ),
                   ),
                 ),
               ),
@@ -167,19 +176,22 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
                                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                                 child: Row(
                                   children: [
-                                    CircleAvatar(
-                                      backgroundColor: AppColorsDesktop.primary.withValues(alpha: 0.2),
-                                      child: Text(
-                                        (c.isSupportChat
-                                                ? 'П'
-                                                : (c.clientName.isNotEmpty ? c.clientName[0] : '?'))
-                                            .toUpperCase(),
-                                        style: const TextStyle(
-                                          color: AppColorsDesktop.primary,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ),
+                                    c.isSupportChat
+                                        ? CircleAvatar(
+                                            backgroundColor: AppColorsDesktop.primary.withValues(alpha: 0.2),
+                                            child: const Text(
+                                              'П',
+                                              style: TextStyle(
+                                                color: AppColorsDesktop.primary,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          )
+                                        : AuthenticatedProfileAvatar(
+                                            imageUrl: c.clientAvatarUrl,
+                                            fallbackLetter: c.clientName.isNotEmpty ? c.clientName[0] : '?',
+                                            size: 40,
+                                          ),
                                     const SizedBox(width: 12),
                                     Expanded(
                                       child: Column(
@@ -188,7 +200,7 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
                                         children: [
                                           Text(
                                             c.isSupportChat
-                                                ? 'Поддержка AutoHub'
+                                                ? 'Поддержка MP-Servis'
                                                 : (c.clientName.isNotEmpty ? c.clientName : 'Клиент'),
                                             style: const TextStyle(
                                               fontWeight: FontWeight.w600,
@@ -359,22 +371,25 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
                 return Card(
                   margin: const EdgeInsets.only(bottom: 8),
                   child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: AppColors.primary.withValues(alpha: 0.3),
-                      child: Text(
-                        (c.isSupportChat
-                                ? 'П'
-                                : (c.clientName.isNotEmpty ? c.clientName[0] : '?'))
-                            .toUpperCase(),
-                        style: const TextStyle(
-                          color: AppColors.primary,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
+                    leading: c.isSupportChat
+                        ? CircleAvatar(
+                            backgroundColor: AppColors.primary.withValues(alpha: 0.3),
+                            child: const Text(
+                              'П',
+                              style: TextStyle(
+                                color: AppColors.primary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          )
+                        : AuthenticatedProfileAvatar(
+                            imageUrl: c.clientAvatarUrl,
+                            fallbackLetter: c.clientName.isNotEmpty ? c.clientName[0] : '?',
+                            size: 40,
+                          ),
                     title: Text(
                       c.isSupportChat
-                          ? 'Поддержка AutoHub'
+                          ? 'Поддержка MP-Servis'
                           : (c.clientName.isNotEmpty ? c.clientName : 'Клиент'),
                       style: const TextStyle(fontWeight: FontWeight.w600),
                       overflow: TextOverflow.ellipsis,

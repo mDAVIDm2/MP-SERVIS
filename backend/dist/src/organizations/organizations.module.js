@@ -15,9 +15,12 @@ const staff_member_entity_1 = require("./staff-member.entity");
 const master_schedule_entity_1 = require("./master-schedule.entity");
 const organization_settings_entity_1 = require("./organization-settings.entity");
 const organizations_controller_1 = require("./organizations.controller");
+const organization_public_photos_controller_1 = require("./organization-public-photos.controller");
 const catalog_controller_1 = require("./catalog.controller");
 const organizations_service_1 = require("./organizations.service");
 const service_catalog_item_entity_1 = require("../reference/service-catalog-item.entity");
+const user_entity_1 = require("../users/user.entity");
+const user_organization_membership_entity_1 = require("../users/user-organization-membership.entity");
 const reference_module_1 = require("../reference/reference.module");
 const subscriptions_module_1 = require("../subscriptions/subscriptions.module");
 const organization_invitation_entity_1 = require("./organization-invitation.entity");
@@ -40,12 +43,14 @@ exports.OrganizationsModule = OrganizationsModule = __decorate([
                 organization_settings_entity_1.OrganizationSettings,
                 organization_invitation_entity_1.OrganizationInvitation,
                 service_catalog_item_entity_1.ServiceCatalogItem,
+                user_entity_1.User,
+                user_organization_membership_entity_1.UserOrganizationMembership,
             ]),
             (0, common_1.forwardRef)(() => reference_module_1.ReferenceModule),
             (0, common_1.forwardRef)(() => users_module_1.UsersModule),
             (0, common_1.forwardRef)(() => notifications_module_1.NotificationsModule),
         ],
-        controllers: [organizations_controller_1.OrganizationsController, catalog_controller_1.CatalogController],
+        controllers: [organizations_controller_1.OrganizationsController, organization_public_photos_controller_1.OrganizationPublicPhotosController, catalog_controller_1.CatalogController],
         providers: [organizations_service_1.OrganizationsService, organization_invitations_scheduler_1.OrganizationInvitationsScheduler, transactional_mail_service_1.TransactionalMailService],
         exports: [organizations_service_1.OrganizationsService],
     })

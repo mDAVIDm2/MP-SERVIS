@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/auth/auth_provider.dart';
 import '../../../../core/api/sessions_api_service.dart';
 
@@ -47,17 +47,17 @@ class _ActiveSessionsScreenState extends ConsumerState<ActiveSessionsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.cardBg,
-        title: const Text('Завершить сессию?', style: TextStyle(color: AppColors.textPrimary)),
-        content: const Text(
+        backgroundColor: context.palette.cardBg,
+        title: Text('Завершить сессию?', style: TextStyle(color: context.palette.textPrimary)),
+        content: Text(
           'Устройство выйдет из аккаунта на этом сеансе.',
-          style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
+          style: TextStyle(color: context.palette.textSecondary, fontSize: 14),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('Отмена')),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Завершить', style: TextStyle(color: AppColors.error)),
+            child: Text('Завершить', style: TextStyle(color: context.palette.error)),
           ),
         ],
       ),
@@ -68,12 +68,12 @@ class _ActiveSessionsScreenState extends ConsumerState<ActiveSessionsScreen> {
     r.when(
       success: (_) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Сессия завершена'), backgroundColor: AppColors.success),
+          SnackBar(content: Text('Сессия завершена'), backgroundColor: context.palette.success),
         );
         _load();
       },
       failure: (e) => ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message), backgroundColor: AppColors.error),
+        SnackBar(content: Text(e.message), backgroundColor: context.palette.error),
       ),
     );
   }
@@ -82,17 +82,17 @@ class _ActiveSessionsScreenState extends ConsumerState<ActiveSessionsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.cardBg,
-        title: const Text('Завершить другие сессии?', style: TextStyle(color: AppColors.textPrimary)),
-        content: const Text(
+        backgroundColor: context.palette.cardBg,
+        title: Text('Завершить другие сессии?', style: TextStyle(color: context.palette.textPrimary)),
+        content: Text(
           'Выйдут все устройства, кроме этого.',
-          style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
+          style: TextStyle(color: context.palette.textSecondary, fontSize: 14),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('Отмена')),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Завершить', style: TextStyle(color: AppColors.error)),
+            child: Text('Завершить', style: TextStyle(color: context.palette.error)),
           ),
         ],
       ),
@@ -103,12 +103,12 @@ class _ActiveSessionsScreenState extends ConsumerState<ActiveSessionsScreen> {
     r.when(
       success: (_) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Другие сессии завершены'), backgroundColor: AppColors.success),
+          SnackBar(content: Text('Другие сессии завершены'), backgroundColor: context.palette.success),
         );
         _load();
       },
       failure: (e) => ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message), backgroundColor: AppColors.error),
+        SnackBar(content: Text(e.message), backgroundColor: context.palette.error),
       ),
     );
   }
@@ -116,20 +116,20 @@ class _ActiveSessionsScreenState extends ConsumerState<ActiveSessionsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       appBar: AppBar(
-        backgroundColor: AppColors.background,
-        title: const Text('Активные сессии', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+        backgroundColor: context.palette.background,
+        title: Text('Активные сессии', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
       ),
       body: RefreshIndicator(
-        color: AppColors.primary,
+        color: context.palette.primary,
         onRefresh: _load,
         child: _loading
             ? ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                children: const [
-                  SizedBox(height: 120),
-                  Center(child: CircularProgressIndicator(color: AppColors.primary)),
+                children: [
+                  const SizedBox(height: 120),
+                  Center(child: CircularProgressIndicator(color: context.palette.primary)),
                 ],
               )
             : _error != null
@@ -137,8 +137,8 @@ class _ActiveSessionsScreenState extends ConsumerState<ActiveSessionsScreen> {
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.all(24),
                     children: [
-                      Text(_error!, style: const TextStyle(color: AppColors.error)),
-                      TextButton(onPressed: _load, child: const Text('Повторить')),
+                      Text(_error!, style: TextStyle(color: context.palette.error)),
+                      TextButton(onPressed: _load, child: Text('Повторить')),
                     ],
                   )
                 : ListView(
@@ -151,11 +151,11 @@ class _ActiveSessionsScreenState extends ConsumerState<ActiveSessionsScreen> {
                           child: OutlinedButton(
                             onPressed: _revokeOthers,
                             style: OutlinedButton.styleFrom(
-                              foregroundColor: AppColors.error,
-                              side: const BorderSide(color: AppColors.error),
+                              foregroundColor: context.palette.error,
+                              side: BorderSide(color: context.palette.error),
                               padding: const EdgeInsets.symmetric(vertical: 14),
                             ),
-                            child: const Text('Завершить все, кроме текущей'),
+                            child: Text('Завершить все, кроме текущей'),
                           ),
                         ),
                       ..._items.map((s) => _SessionTile(session: s, onRevoke: () => _revoke(s))),
@@ -187,17 +187,17 @@ class _SessionTile extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
-        color: AppColors.cardBg,
+        color: context.palette.cardBg,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: context.palette.border),
       ),
       child: ListTile(
-        title: Text(title, style: const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w600)),
-        subtitle: Text(sub, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+        title: Text(title, style: TextStyle(color: context.palette.textPrimary, fontWeight: FontWeight.w600)),
+        subtitle: Text(sub, style: TextStyle(color: context.palette.textSecondary, fontSize: 13)),
         trailing: session.isCurrent || session.revoked
             ? null
             : IconButton(
-                icon: const Icon(Icons.logout_rounded, color: AppColors.error),
+                icon: Icon(Icons.logout_rounded, color: context.palette.error),
                 tooltip: 'Завершить',
                 onPressed: onRevoke,
               ),

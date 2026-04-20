@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../shared/models/settings_models.dart';
+import '../../shared/models/service_catalog_models.dart';
 import '../api/services/api_services_providers.dart';
 import '../api/services/settings_api_service.dart';
 import '../auth/auth_provider.dart';
@@ -19,12 +20,12 @@ const _kTemplatesPrefix = 'settings_templates_';
 class SettingsRepository extends StateNotifier<SettingsState> {
   SettingsRepository(this._api, this._prefs, this._ref)
     : super(SettingsState()) {
-    final orgId = _ref.read(authProvider).user?.organizationId;
+    final orgId = _ref.read(authProvider).user?.effectiveOrganizationId;
     _orgId = orgId;
     state = _loadFromPrefs(_prefs, orgId);
     load(orgId);
     _ref.listen<AuthState>(authProvider, (prev, next) {
-      final nextId = next.user?.organizationId;
+      final nextId = next.user?.effectiveOrganizationId;
       if (nextId != _orgId) load(nextId);
     });
   }
@@ -309,6 +310,16 @@ class SettingsRepository extends StateNotifier<SettingsState> {
   }
 
   // Categories
+  /// Категория организации по имени из справочника (совпадение по названию или новая).
+  String categoryIdForCatalogCategory(ServiceCatalogCategoryRef cat) {
+    for (final c in state.categories) {
+      if (c.name.trim().toLowerCase() == cat.categoryName.trim().toLowerCase()) {
+        return c.id;
+      }
+    }
+    return addCategory(cat.categoryName);
+  }
+
   /// Возвращает id созданной категории.
   String addCategory(String name) {
     final id = 'cat_${DateTime.now().millisecondsSinceEpoch}';
@@ -336,7 +347,7 @@ class SettingsRepository extends StateNotifier<SettingsState> {
     required int durationMinutes,
     String? requiredSkill,
   }) {
-    final id = 's_${DateTime.now().millisecondsSinceEpoch}';
+    final id = 's_${DateTime.now().microsecondsSinceEpoch}_$catalogItemId';
     addService(
       ServiceItem(
         id: id,

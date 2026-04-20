@@ -31,6 +31,7 @@ let OrganizationsController = class OrganizationsController {
     }
     async applyPlanWithStaff(id, req, body) {
         this.assertActiveOrganizationAccess(req.user, id);
+        this.org.ensureCallerCanManageOrganizationStaff(req.user);
         const pk = body?.plan_key?.trim();
         if (!pk)
             throw new common_1.BadRequestException('Укажите plan_key');
@@ -69,18 +70,22 @@ let OrganizationsController = class OrganizationsController {
             throw new Error('Not found');
         return result;
     }
-    async getPhotoFile(id, filename, req, res) {
+    async deletePhoto(id, req, body) {
         this.assertActiveOrganizationAccess(req.user, id);
-        const filePath = await this.org.getPhotoPath(id, filename);
-        if (!filePath)
-            return res.status(404).send('Not found');
-        return res.sendFile(filePath);
+        const url = typeof body?.url === 'string' ? body.url.trim() : '';
+        if (!url)
+            throw new common_1.BadRequestException('Укажите url фото');
+        const ok = await this.org.removePhoto(id, url);
+        if (!ok)
+            throw new common_1.NotFoundException('Фото не найдено или уже удалено');
+        return { ok: true };
     }
     async update(id, req, body) {
         this.assertActiveOrganizationAccess(req.user, id);
         const o = await this.org.update(id, body);
         if (!o)
             throw new Error('Not found');
+        const subscription_usage = await this.org.getSubscriptionUsageSummary(id);
         return {
             name: o.name,
             address: o.address,
@@ -91,11 +96,12 @@ let OrganizationsController = class OrganizationsController {
             longitude: o.longitude ?? null,
             business_kind: o.businessKind ?? 'sto',
             scheduling_mode: o.schedulingMode ?? 'staff_based',
+            subscription_usage,
         };
     }
     async getStaff(id, req) {
         this.assertActiveOrganizationAccess(req.user, id);
-        return this.org.getStaff(id);
+        return this.org.getStaffForCaller(id, req.user);
     }
     async addMeAsMaster(id, req) {
         this.assertActiveOrganizationAccess(req.user, id);
@@ -105,23 +111,24 @@ let OrganizationsController = class OrganizationsController {
             name: user.name,
             phone: user.phone,
             organizationId: user.organizationId,
+            role: user.role,
         });
     }
     async inviteStaff(id, req, body) {
         this.assertActiveOrganizationAccess(req.user, id);
-        return this.org.createInvitation(id, req.user.id, body);
+        return this.org.createInvitation(id, req.user, body);
     }
     async updateStaff(id, staffId, req, body) {
         this.assertActiveOrganizationAccess(req.user, id);
-        return this.org.updateStaffMember(id, staffId, body);
+        return this.org.updateStaffMember(id, staffId, body, req.user);
     }
     async getInvitations(id, req, status) {
         this.assertActiveOrganizationAccess(req.user, id);
-        return this.org.listInvitations(id, status);
+        return this.org.listInvitations(id, req.user, status);
     }
     async cancelInvitation(id, invitationId, req) {
         this.assertActiveOrganizationAccess(req.user, id);
-        return this.org.cancelInvitation(id, invitationId);
+        return this.org.cancelInvitation(id, invitationId, req.user);
     }
     async getSettings(id, req) {
         this.assertActiveOrganizationAccess(req.user, id);
@@ -167,15 +174,14 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], OrganizationsController.prototype, "addPhoto", null);
 __decorate([
-    (0, common_1.Get)(':id/photos/:filename'),
+    (0, common_1.Delete)(':id/photos'),
     __param(0, (0, common_1.Param)('id')),
-    __param(1, (0, common_1.Param)('filename')),
-    __param(2, (0, common_1.Req)()),
-    __param(3, (0, common_1.Res)()),
+    __param(1, (0, common_1.Req)()),
+    __param(2, (0, common_1.Body)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, String, Object, Object]),
+    __metadata("design:paramtypes", [String, Object, Object]),
     __metadata("design:returntype", Promise)
-], OrganizationsController.prototype, "getPhotoFile", null);
+], OrganizationsController.prototype, "deletePhoto", null);
 __decorate([
     (0, common_1.Patch)(':id'),
     __param(0, (0, common_1.Param)('id')),

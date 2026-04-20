@@ -40,6 +40,14 @@ __decorate([
     __metadata("design:type", String)
 ], User.prototype, "name", void 0);
 __decorate([
+    (0, typeorm_1.Column)({ name: 'account_realm', type: 'varchar', length: 16, default: 'business' }),
+    __metadata("design:type", String)
+], User.prototype, "accountRealm", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'avatar_url', type: 'varchar', length: 1024, nullable: true }),
+    __metadata("design:type", Object)
+], User.prototype, "avatarUrl", void 0);
+__decorate([
     (0, typeorm_1.Column)({ type: 'varchar', length: 20, default: 'solo' }),
     __metadata("design:type", String)
 ], User.prototype, "role", void 0);
@@ -56,6 +64,14 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'notification_preferences', type: 'jsonb', nullable: true }),
     __metadata("design:type", Object)
 ], User.prototype, "notificationPreferences", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'client_app_state', type: 'jsonb', nullable: true }),
+    __metadata("design:type", Object)
+], User.prototype, "clientAppState", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'client_app_state_updated_at', type: 'timestamptz', nullable: true }),
+    __metadata("design:type", Object)
+], User.prototype, "clientAppStateUpdatedAt", void 0);
 exports.User = User = __decorate([
     (0, typeorm_1.Entity)('users')
 ], User);

@@ -138,6 +138,10 @@ export declare class InternalReferenceController {
         pendingGeneration: string | null;
         status: string;
         createdAt: Date;
+        carSnapshotBrand: string | null;
+        carSnapshotModel: string | null;
+        carBrandId: number | null;
+        carModelId: number | null;
     }[]>;
     approvePending(id: string): Promise<{
         brandId?: number;

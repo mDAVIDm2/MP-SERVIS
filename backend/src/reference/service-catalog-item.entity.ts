@@ -1,6 +1,6 @@
 import { Entity, Column, PrimaryColumn } from 'typeorm';
 
-/** Единый справочник услуг AutoHub: СТО выбирают позиции из списка для единообразия названий. */
+/** Единый справочник услуг MP-Servis: СТО выбирают позиции из списка для единообразия названий. */
 @Entity('service_catalog_items')
 export class ServiceCatalogItem {
   @PrimaryColumn({ type: 'varchar', length: 96 })

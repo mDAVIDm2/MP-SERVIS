@@ -1,6 +1,7 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/theme/app_text_styles.dart';
 import '../../../../core/providers/app_providers.dart';
 import '../../../../core/settings/map_provider_setting.dart';
@@ -8,14 +9,18 @@ import '../../../../core/settings/filter_by_car_setting.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../core/utils/scroll_center.dart';
 import '../../../../core/settings/locale_provider.dart';
+import '../../../../core/settings/theme_mode_provider.dart';
 import '../../../../core/l10n/l10n_scope.dart';
 import '../../../../core/auth/auth_provider.dart';
 import '../../../../core/auth/app_lock_provider.dart';
+import '../../../../core/config/app_config.dart';
+import '../../../../shared/widgets/garage_car_photo_image.dart';
 import '../../../../shared/models/car_document_model.dart' show CarDocument, kCarDocumentTypes;
 import '../../../../shared/models/car_model.dart' show Car;
 import '../../../../shared/models/order_model.dart' show Order;
 import '../../../../shared/models/profile_note_model.dart';
 import '../../../garage/presentation/screens/add_car_screen.dart';
+import '../../../garage/presentation/screens/car_detail_screen.dart';
 import 'edit_profile_screen.dart';
 import 'analytics_screen.dart';
 import 'notes_screen.dart';
@@ -46,13 +51,13 @@ import '../../../chats/presentation/screens/chat_detail_screen.dart';
   final today = DateTime(now.year, now.month, now.day);
   final expiryOnly = DateTime(expiryDate.year, expiryDate.month, expiryDate.day);
   if (expiryOnly.isBefore(today)) {
-    return ('Истек', AppColors.error);
+    return ('Истек', SemanticColors.error);
   }
   final daysLeft = expiryOnly.difference(today).inDays;
   if (daysLeft <= 20) {
-    return ('Истекает', AppColors.warning);
+    return ('Истекает', SemanticColors.warning);
   }
-  return ('Активен', AppColors.success);
+  return ('Активен', SemanticColors.success);
 }
 
 
@@ -62,7 +67,7 @@ class ProfileScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       body: SafeArea(
         child: ListView(
           physics: const BouncingScrollPhysics(),
@@ -74,24 +79,24 @@ class ProfileScreen extends ConsumerWidget {
                 height: 56,
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: Text(L10nScope.of(context).profileTitle, style: AppTextStyles.screenTitle),
+                  child: Text(L10nScope.of(context).profileTitle, style: AppTextStyles.screenTitle(context.palette)),
                 ),
               ),
             ),
             _buildProfileHeader(context, ref),
-            const SizedBox(height: 20),
+            SizedBox(height: 20),
             _buildCarsSection(context, ref),
-            const SizedBox(height: 20),
+            SizedBox(height: 20),
             _buildDocumentsSection(context, ref),
-            const SizedBox(height: 20),
+            SizedBox(height: 20),
             _buildAnalyticsPreview(context, ref),
-            const SizedBox(height: 20),
+            SizedBox(height: 20),
             _buildNotesSection(context, ref),
-            const SizedBox(height: 20),
+            SizedBox(height: 20),
             _buildSettingsSection(context, ref),
-            const SizedBox(height: 16),
+            SizedBox(height: 16),
             _buildSupportSection(context, ref),
-            const SizedBox(height: 16),
+            SizedBox(height: 16),
             _buildLogoutSection(context, ref),
           ],
         ),
@@ -104,41 +109,78 @@ class ProfileScreen extends ConsumerWidget {
     final name = user?.displayName ?? L10nScope.of(context).guest;
     final phone = user?.accountLabel ?? '—';
     final initials = user?.initials ?? '?';
+    final rawAvatar = user?.avatarUrl?.trim() ?? '';
+    final avatarResolved = rawAvatar.isNotEmpty ? AppConfig.resolveProfileAvatarUrl(rawAvatar) : '';
+    final token = ref.watch(authProvider).accessToken;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Container(
         padding: const EdgeInsets.all(24),
         decoration: BoxDecoration(
-          color: AppColors.cardBg,
+          color: context.palette.cardBg,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.border),
+          border: Border.all(color: context.palette.border),
         ),
         child: Column(
           children: [
             Container(
-              width: 80, height: 80,
+              width: 80,
+              height: 80,
               decoration: BoxDecoration(
-                shape: BoxShape.circle, color: AppColors.nestedBg,
-                border: Border.all(color: AppColors.primary, width: 2),
+                shape: BoxShape.circle,
+                color: context.palette.nestedBg,
+                border: Border.all(color: context.palette.primary, width: 2),
               ),
-              child: Center(child: Text(initials, style: const TextStyle(
-                fontSize: 28, fontWeight: FontWeight.w700, color: AppColors.primary,
-              ))),
+              clipBehavior: Clip.antiAlias,
+              child: avatarResolved.isNotEmpty
+                  ? CachedNetworkImage(
+                      imageUrl: avatarResolved,
+                      cacheKey: avatarResolved,
+                      fit: BoxFit.cover,
+                      httpHeaders: token != null ? {'Authorization': 'Bearer $token'} : null,
+                      placeholder: (_, __) => Center(
+                        child: SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: context.palette.primary),
+                        ),
+                      ),
+                      errorWidget: (_, __, ___) => Center(
+                        child: Text(
+                          initials,
+                          style: TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.w700,
+                            color: context.palette.primary,
+                          ),
+                        ),
+                      ),
+                    )
+                  : Center(
+                      child: Text(
+                        initials,
+                        style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.w700,
+                          color: context.palette.primary,
+                        ),
+                      ),
+                    ),
             ),
-            const SizedBox(height: 16),
-            Text(name, style: const TextStyle(
-              fontSize: 20, fontWeight: FontWeight.w600, color: AppColors.textPrimary,
+            SizedBox(height: 16),
+            Text(name, style: TextStyle(
+              fontSize: 20, fontWeight: FontWeight.w600, color: context.palette.textPrimary,
             )),
-            const SizedBox(height: 4),
-            Text(phone, style: const TextStyle(
-              fontSize: 14, color: AppColors.textSecondary,
+            SizedBox(height: 4),
+            Text(phone, style: TextStyle(
+              fontSize: 14, color: context.palette.textSecondary,
             )),
-            const SizedBox(height: 16),
+            SizedBox(height: 16),
             TextButton(
               onPressed: () => Navigator.push(context,
                 MaterialPageRoute(builder: (_) => const EditProfileScreen())),
-              child: Text(L10nScope.of(context).editProfile, style: const TextStyle(
-                fontSize: 14, fontWeight: FontWeight.w500, color: AppColors.primary,
+              child: Text(L10nScope.of(context).editProfile, style: TextStyle(
+                fontSize: 14, fontWeight: FontWeight.w500, color: context.palette.primary,
               )),
             ),
           ],
@@ -159,26 +201,32 @@ class ProfileScreen extends ConsumerWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(L10nScope.of(context).myCars, style: const TextStyle(
-                fontSize: 18, fontWeight: FontWeight.w600, color: AppColors.textPrimary,
+              Text(L10nScope.of(context).myCars, style: TextStyle(
+                fontSize: 18, fontWeight: FontWeight.w600, color: context.palette.textPrimary,
               )),
               TextButton(
                 onPressed: () => Navigator.push(context,
                   MaterialPageRoute(builder: (_) => const AddCarScreen())),
                 style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: Size.zero,
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                child: const Text('+ Добавить', style: TextStyle(
-                  fontSize: 14, fontWeight: FontWeight.w500, color: AppColors.primary,
+                child: Text('+ Добавить', style: TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w500, color: context.palette.primary,
                 )),
               ),
             ],
           ),
         ),
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         _ProfileMyCarsStrip(
           cars: cars,
           activeId: activeId,
-          onSelectCar: (id) => ref.read(selectedCarIdProvider.notifier).set(id),
+          onSelectCar: (id) {
+            ref.read(selectedCarIdProvider.notifier).set(id);
+            Navigator.push<void>(
+              context,
+              MaterialPageRoute<void>(builder: (_) => CarDetailScreen(carId: id)),
+            );
+          },
           onAddCar: () => Navigator.push(context,
               MaterialPageRoute(builder: (_) => const AddCarScreen())),
         ),
@@ -214,17 +262,17 @@ class ProfileScreen extends ConsumerWidget {
                   children: [
                     Text(
                       cars.isEmpty ? 'Добавьте автомобиль, чтобы привязать документы' : 'Нет документов для выбранного авто',
-                      style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+                      style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
                     ),
                     if (carId != null) ...[
-                      const SizedBox(height: 12),
+                      SizedBox(height: 12),
                       OutlinedButton.icon(
                         onPressed: () => _showAddDocumentDialog(context, ref, carId),
-                        icon: const Icon(Icons.add_rounded, size: 18),
-                        label: const Text('Добавить документ'),
+                        icon: Icon(Icons.add_rounded, size: 18),
+                        label: Text('Добавить документ'),
                         style: OutlinedButton.styleFrom(
-                          foregroundColor: AppColors.primary,
-                          side: const BorderSide(color: AppColors.primary),
+                          foregroundColor: context.palette.primary,
+                          side: BorderSide(color: context.palette.primary),
                         ),
                       ),
                     ],
@@ -240,7 +288,7 @@ class ProfileScreen extends ConsumerWidget {
                   detail: selectedCar.vin ?? '',
                   status: 'Указан в профиле авто',
                   expiry: null,
-                  statusColor: AppColors.success,
+                  statusColor: context.palette.success,
                   onTap: () {},
                 ),
               ...docs.map((d) {
@@ -263,11 +311,11 @@ class ProfileScreen extends ConsumerWidget {
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   child: OutlinedButton.icon(
                     onPressed: () => _showAddDocumentDialog(context, ref, carId),
-                    icon: const Icon(Icons.add_rounded, size: 18),
-                    label: const Text('Добавить документ'),
+                    icon: Icon(Icons.add_rounded, size: 18),
+                    label: Text('Добавить документ'),
                     style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.primary,
-                      side: const BorderSide(color: AppColors.primary),
+                      foregroundColor: context.palette.primary,
+                      side: BorderSide(color: context.palette.primary),
                     ),
                   ),
                 ),
@@ -283,54 +331,54 @@ class ProfileScreen extends ConsumerWidget {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
-          backgroundColor: AppColors.cardBg,
-          title: const Text('Добавить документ', style: TextStyle(color: AppColors.textPrimary)),
+          backgroundColor: context.palette.cardBg,
+          title: Text('Добавить документ', style: TextStyle(color: context.palette.textPrimary)),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Тип', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-                const SizedBox(height: 4),
+                Text('Тип', style: TextStyle(fontSize: 12, color: context.palette.textSecondary)),
+                SizedBox(height: 4),
                 DropdownButtonFormField<String>(
                   value: selectedType,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     border: OutlineInputBorder(),
                     contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   ),
-                  dropdownColor: AppColors.cardBg,
+                  dropdownColor: context.palette.cardBg,
                   items: kCarDocumentTypes.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
                   onChanged: (v) => setDialogState(() => selectedType = v ?? selectedType),
                 ),
-                const SizedBox(height: 16),
+                SizedBox(height: 16),
                 TextField(
                   controller: detailController,
                   decoration: InputDecoration(
                     labelText: selectedType == 'VIN' ? 'VIN (17 символов)' : 'Номер / данные',
                     hintText: selectedType == 'ОСАГО' ? 'XXX 1234567890' : (selectedType == 'VIN' ? 'WBA...' : ''),
-                    border: const OutlineInputBorder(),
-                    labelStyle: const TextStyle(color: AppColors.textSecondary),
+                    border: OutlineInputBorder(),
+                    labelStyle: TextStyle(color: context.palette.textSecondary),
                   ),
-                  style: const TextStyle(color: AppColors.textPrimary),
+                  style: TextStyle(color: context.palette.textPrimary),
                   maxLines: selectedType == 'VIN' ? 1 : 2,
                 ),
                 if (selectedType == 'ОСАГО' || selectedType == 'Техосмотр') ...[
-                  const SizedBox(height: 12),
+                  SizedBox(height: 12),
                   TextField(
                     controller: expiryController,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: 'Срок действия (например: до 15 марта 2026)',
                       border: OutlineInputBorder(),
-                      labelStyle: TextStyle(color: AppColors.textSecondary),
+                      labelStyle: TextStyle(color: context.palette.textSecondary),
                     ),
-                    style: const TextStyle(color: AppColors.textPrimary),
+                    style: TextStyle(color: context.palette.textPrimary),
                   ),
                 ],
               ],
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+            TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Отмена')),
             FilledButton(
               onPressed: () {
                 final detail = detailController.text.trim();
@@ -341,13 +389,13 @@ class ProfileScreen extends ConsumerWidget {
                   detail: detail,
                   expiry: expiryController.text.trim().isEmpty ? null : expiryController.text.trim(),
                   status: 'Активен',
-                  statusColor: AppColors.success,
+                  statusColor: context.palette.success,
                 );
                 ref.read(carDocumentsProvider.notifier).addDocument(doc);
                 Navigator.pop(ctx);
               },
-              style: FilledButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: const Color(0xFF0D0D0D)),
-              child: const Text('Добавить'),
+              style: FilledButton.styleFrom(backgroundColor: context.palette.primary, foregroundColor: context.palette.onAccent),
+              child: Text('Добавить'),
             ),
           ],
         ),
@@ -362,8 +410,8 @@ class ProfileScreen extends ConsumerWidget {
     final displayColor = resolved?.$2 ?? doc.statusColor;
     showModalBottomSheet(
       context: context,
-      backgroundColor: AppColors.cardBg,
-      shape: const RoundedRectangleBorder(
+      backgroundColor: context.palette.cardBg,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) => SafeArea(
@@ -373,21 +421,21 @@ class ProfileScreen extends ConsumerWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(doc.type, style: const TextStyle(
-                fontSize: 22, fontWeight: FontWeight.w700, color: AppColors.textPrimary,
+              Text(doc.type, style: TextStyle(
+                fontSize: 22, fontWeight: FontWeight.w700, color: context.palette.textPrimary,
               )),
-              const SizedBox(height: 12),
-              Text(doc.detail, style: const TextStyle(
-                fontSize: 16, color: AppColors.textSecondary,
+              SizedBox(height: 12),
+              Text(doc.detail, style: TextStyle(
+                fontSize: 16, color: context.palette.textSecondary,
               )),
               if (doc.expiry != null) ...[
-                const SizedBox(height: 8),
-                Text(doc.expiry!, style: const TextStyle(
-                  fontSize: 14, color: AppColors.textSecondary,
+                SizedBox(height: 8),
+                Text(doc.expiry!, style: TextStyle(
+                  fontSize: 14, color: context.palette.textSecondary,
                 )),
               ],
               if (displayStatus != null && displayColor != null) ...[
-                const SizedBox(height: 12),
+                SizedBox(height: 12),
                 Row(
                   children: [
                     Container(
@@ -397,23 +445,23 @@ class ProfileScreen extends ConsumerWidget {
                         shape: BoxShape.circle,
                       ),
                     ),
-                    const SizedBox(width: 8),
+                    SizedBox(width: 8),
                     Text(displayStatus, style: TextStyle(
                       fontSize: 14, fontWeight: FontWeight.w600, color: displayColor,
                     )),
                   ],
                 ),
               ],
-              const SizedBox(height: 20),
+              SizedBox(height: 20),
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(
                   onPressed: () => _showEditDocumentDialog(ctx, ref, doc, () => Navigator.pop(ctx)),
-                  icon: const Icon(Icons.edit_rounded, size: 20),
-                  label: const Text('Редактировать'),
+                  icon: Icon(Icons.edit_rounded, size: 20),
+                  label: Text('Редактировать'),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.primary,
-                    side: const BorderSide(color: AppColors.primary),
+                    foregroundColor: context.palette.primary,
+                    side: BorderSide(color: context.palette.primary),
                     padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
                 ),
@@ -437,46 +485,46 @@ class ProfileScreen extends ConsumerWidget {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.cardBg,
-        title: Text('Редактировать ${doc.type}', style: const TextStyle(color: AppColors.textPrimary)),
+        backgroundColor: context.palette.cardBg,
+        title: Text('Редактировать ${doc.type}', style: TextStyle(color: context.palette.textPrimary)),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Тип документа', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-              const SizedBox(height: 4),
-              Text(doc.type, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
-              const SizedBox(height: 16),
+              Text('Тип документа', style: TextStyle(fontSize: 12, color: context.palette.textSecondary)),
+              SizedBox(height: 4),
+              Text(doc.type, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: context.palette.textPrimary)),
+              SizedBox(height: 16),
               TextField(
                 controller: detailController,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: 'Данные (номер полиса, описание и т.д.)',
                   border: OutlineInputBorder(),
-                  labelStyle: TextStyle(color: AppColors.textSecondary),
+                  labelStyle: TextStyle(color: context.palette.textSecondary),
                 ),
-                style: const TextStyle(color: AppColors.textPrimary),
+                style: TextStyle(color: context.palette.textPrimary),
                 maxLines: 2,
               ),
-              const SizedBox(height: 12),
+              SizedBox(height: 12),
               TextField(
                 controller: statusController,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: 'Статус (например: Активен)',
                   border: OutlineInputBorder(),
-                  labelStyle: TextStyle(color: AppColors.textSecondary),
+                  labelStyle: TextStyle(color: context.palette.textSecondary),
                 ),
-                style: const TextStyle(color: AppColors.textPrimary),
+                style: TextStyle(color: context.palette.textPrimary),
               ),
-              const SizedBox(height: 12),
+              SizedBox(height: 12),
               TextField(
                 controller: expiryController,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: 'Срок (например: до 15 марта 2026)',
                   border: OutlineInputBorder(),
-                  labelStyle: TextStyle(color: AppColors.textSecondary),
+                  labelStyle: TextStyle(color: context.palette.textSecondary),
                 ),
-                style: const TextStyle(color: AppColors.textPrimary),
+                style: TextStyle(color: context.palette.textPrimary),
               ),
             ],
           ),
@@ -484,7 +532,7 @@ class ProfileScreen extends ConsumerWidget {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Отмена', style: TextStyle(color: AppColors.textSecondary)),
+            child: Text('Отмена', style: TextStyle(color: context.palette.textSecondary)),
           ),
           FilledButton(
             onPressed: () {
@@ -498,14 +546,14 @@ class ProfileScreen extends ConsumerWidget {
                 detail: detail,
                 status: status.isEmpty ? null : status,
                 expiry: expiry.isEmpty ? null : expiry,
-                statusColor: status.isNotEmpty ? AppColors.success : doc.statusColor,
+                statusColor: status.isNotEmpty ? context.palette.success : doc.statusColor,
               );
               ref.read(carDocumentsProvider.notifier).updateDocument(updated);
               Navigator.pop(ctx);
               onSaved();
             },
-            style: FilledButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: const Color(0xFF0D0D0D)),
-            child: const Text('Сохранить'),
+            style: FilledButton.styleFrom(backgroundColor: context.palette.primary, foregroundColor: context.palette.onAccent),
+            child: Text('Сохранить'),
           ),
         ],
       ),
@@ -526,7 +574,8 @@ class ProfileScreen extends ConsumerWidget {
     final carOrders = c != null ? orders.where((o) => o.carId == c.id).toList() : <Order>[];
     final totalSpent = carOrders.fold(0, (sum, o) => sum + o.totalKopecks);
     final avgCheck = carOrders.isNotEmpty ? totalSpent ~/ carOrders.length : 0;
-    final carLabel = car != null ? '${car.brand} ${car.model}' : 'Авто';
+    final l10n = L10nScope.of(context);
+    final carLabel = car != null ? '${car.brand} ${car.model}' : l10n.carShortLabel;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: GestureDetector(
@@ -535,9 +584,9 @@ class ProfileScreen extends ConsumerWidget {
         child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            gradient: AppColors.cardGradient,
+            gradient: context.palette.cardGradient,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.border),
+            border: Border.all(color: context.palette.border),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -545,53 +594,53 @@ class ProfileScreen extends ConsumerWidget {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('Аналитика', style: TextStyle(
-                    fontSize: 18, fontWeight: FontWeight.w600, color: AppColors.textPrimary,
+                  Text(l10n.analyticsPreviewTitle, style: TextStyle(
+                    fontSize: 18, fontWeight: FontWeight.w600, color: context.palette.textPrimary,
                   )),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     decoration: BoxDecoration(
-                      color: AppColors.nestedBg,
+                      color: context.palette.nestedBg,
                       borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: AppColors.border),
+                      border: Border.all(color: context.palette.border),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(carLabel, style: const TextStyle(fontSize: 12, color: AppColors.textPrimary)),
-                        const SizedBox(width: 4),
-                        const Icon(Icons.keyboard_arrow_down_rounded, size: 16, color: AppColors.textSecondary),
+                        Text(carLabel, style: TextStyle(fontSize: 12, color: context.palette.textPrimary)),
+                        SizedBox(width: 4),
+                        Icon(Icons.keyboard_arrow_down_rounded, size: 16, color: context.palette.textSecondary),
                       ],
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 16),
+              SizedBox(height: 16),
               Row(
                 children: [
                   Expanded(child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Общие расходы', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-                      const SizedBox(height: 4),
-                      Text(Formatters.money(totalSpent), style: const TextStyle(
-                        fontSize: 22, fontWeight: FontWeight.w700, color: AppColors.textPrimary, fontFamily: 'monospace',
+                      Text(l10n.analyticsPreviewTotalSpend, style: TextStyle(fontSize: 12, color: context.palette.textSecondary)),
+                      SizedBox(height: 4),
+                      Text(Formatters.money(totalSpent), style: TextStyle(
+                        fontSize: 22, fontWeight: FontWeight.w700, color: context.palette.textPrimary, fontFamily: 'monospace',
                       )),
                     ],
                   )),
                   Expanded(child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Средний чек', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-                      const SizedBox(height: 4),
-                      Text(Formatters.money(avgCheck), style: const TextStyle(
-                        fontSize: 22, fontWeight: FontWeight.w700, color: AppColors.textPrimary, fontFamily: 'monospace',
+                      Text(l10n.analyticsPreviewAvgCheck, style: TextStyle(fontSize: 12, color: context.palette.textSecondary)),
+                      SizedBox(height: 4),
+                      Text(Formatters.money(avgCheck), style: TextStyle(
+                        fontSize: 22, fontWeight: FontWeight.w700, color: context.palette.textPrimary, fontFamily: 'monospace',
                       )),
                     ],
                   )),
                 ],
               ),
-              const SizedBox(height: 12),
+              SizedBox(height: 12),
               SizedBox(
                 height: 60,
                 child: Row(
@@ -603,7 +652,7 @@ class ProfileScreen extends ConsumerWidget {
                         child: Container(
                           height: 60 * h,
                           decoration: BoxDecoration(
-                            color: AppColors.primary.withValues(alpha: 0.6),
+                            color: context.palette.primary.withValues(alpha: 0.6),
                             borderRadius: BorderRadius.circular(3),
                           ),
                         ),
@@ -612,12 +661,23 @@ class ProfileScreen extends ConsumerWidget {
                   }).toList(),
                 ),
               ),
-              const SizedBox(height: 8),
-              const Align(
+              SizedBox(height: 8),
+              Align(
                 alignment: Alignment.centerRight,
-                child: Text('Подробнее →', style: TextStyle(
-                  fontSize: 14, fontWeight: FontWeight.w500, color: AppColors.primary,
-                )),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    l10n.analyticsPreviewSeeMore,
+                    maxLines: 1,
+                    softWrap: false,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: context.palette.primary,
+                    ),
+                  ),
+                ),
               ),
             ],
           ),
@@ -647,8 +707,8 @@ class ProfileScreen extends ConsumerWidget {
               Expanded(
                 child: Text(
                 carName != null ? 'Заметки · $carName' : 'Заметки',
-                style: const TextStyle(
-                  fontSize: 18, fontWeight: FontWeight.w600, color: AppColors.textPrimary,
+                style: TextStyle(
+                  fontSize: 18, fontWeight: FontWeight.w600, color: context.palette.textPrimary,
                 ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -657,7 +717,7 @@ class ProfileScreen extends ConsumerWidget {
             ],
           ),
         ),
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Column(
@@ -667,7 +727,7 @@ class ProfileScreen extends ConsumerWidget {
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   child: Text(
                     cars.isEmpty ? 'Добавьте автомобиль для заметок' : 'Нет заметок для выбранного авто',
-                    style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+                    style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
                   ),
                 )
               else
@@ -683,16 +743,16 @@ class ProfileScreen extends ConsumerWidget {
                         )),
                   ],
                 ),
-              const SizedBox(height: 6),
+              SizedBox(height: 6),
               Center(
                 child: TextButton(
                   onPressed: () => Navigator.push(
                     context,
                     MaterialPageRoute(builder: (_) => NotesScreen(selectedCarId: carId)),
                   ),
-                  child: const Text(
+                  child: Text(
                     'Все заметки',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: AppColors.primary),
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: context.palette.primary),
                   ),
                 ),
               ),
@@ -708,8 +768,14 @@ class ProfileScreen extends ConsumerWidget {
     final filterByCar = ref.watch(filterByCarSettingProvider);
     ref.watch(localeProvider);
     final currentLocale = ref.read(localeProvider.notifier).currentAppLocale;
+    final themeMode = ref.watch(themeModeProvider);
     final l10n = L10nScope.of(context);
     final localeLabel = currentLocale == AppLocale.ru ? l10n.languageRussian : l10n.languageEnglish;
+    final themeLabel = switch (themeMode) {
+      ThemeMode.light => l10n.themeLight,
+      ThemeMode.dark => l10n.themeDark,
+      ThemeMode.system => l10n.themeSystem,
+    };
     return _SectionGroup(title: l10n.settings, children: [
       _SettingsSwitchRow(
         icon: Icons.directions_car_rounded,
@@ -729,8 +795,12 @@ class ProfileScreen extends ConsumerWidget {
           MaterialPageRoute(builder: (_) => const MaintenanceRemindersScreen()))),
       _SettingsRow(icon: Icons.straighten_rounded, label: l10n.units,
         onTap: () => _showSnack(context, l10n.unitsSetting)),
-      _SettingsRow(icon: Icons.palette_rounded, label: l10n.theme, trailing: l10n.themeDark,
-        onTap: () => _showSnack(context, l10n.themeSetting)),
+      _SettingsRow(
+        icon: Icons.palette_rounded,
+        label: l10n.theme,
+        trailing: themeLabel,
+        onTap: () => _showThemeSheet(context, ref),
+      ),
       _SettingsRow(icon: Icons.language_rounded, label: l10n.language, trailing: localeLabel,
         onTap: () => _showLanguageSheet(context, ref)),
       _SettingsRow(icon: Icons.lock_outline_rounded, label: l10n.security,
@@ -765,7 +835,7 @@ class ProfileScreen extends ConsumerWidget {
             },
             failure: (e) {
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(e.message), backgroundColor: AppColors.error),
+                SnackBar(content: Text(e.message), backgroundColor: context.palette.error),
               );
             },
           );
@@ -788,20 +858,20 @@ class ProfileScreen extends ConsumerWidget {
           final ok = await showDialog<bool>(
             context: context,
             builder: (ctx) => AlertDialog(
-              backgroundColor: AppColors.cardBg,
-              title: Text(l10n.logoutConfirmTitle, style: const TextStyle(color: AppColors.textPrimary)),
+              backgroundColor: context.palette.cardBg,
+              title: Text(l10n.logoutConfirmTitle, style: TextStyle(color: context.palette.textPrimary)),
               content: Text(
                 l10n.logoutConfirmMessage,
-                style: const TextStyle(color: AppColors.textSecondary, fontSize: 14),
+                style: TextStyle(color: context.palette.textSecondary, fontSize: 14),
               ),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(ctx, false),
-                  child: Text(l10n.cancel, style: const TextStyle(color: AppColors.textSecondary)),
+                  child: Text(l10n.cancel, style: TextStyle(color: context.palette.textSecondary)),
                 ),
                 TextButton(
                   onPressed: () => Navigator.pop(ctx, true),
-                  child: Text(l10n.logoutButton, style: const TextStyle(color: AppColors.error)),
+                  child: Text(l10n.logoutButton, style: TextStyle(color: context.palette.error)),
                 ),
               ],
             ),
@@ -811,34 +881,27 @@ class ProfileScreen extends ConsumerWidget {
             await ref.read(authProvider.notifier).logout();
             if (context.mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(l10n.logoutDone), backgroundColor: AppColors.success),
+                SnackBar(content: Text(l10n.logoutDone), backgroundColor: context.palette.success),
               );
             }
           }
         },
-      ),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-        child: Text(
-          l10n.authDataNote,
-          style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
-        ),
       ),
     ]);
   }
 
   void _showSnack(BuildContext context, String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: AppColors.info, duration: const Duration(seconds: 1)));
+      SnackBar(content: Text(msg), backgroundColor: context.palette.info, duration: const Duration(seconds: 1)));
   }
 
-  void _showLanguageSheet(BuildContext context, WidgetRef ref) {
+  void _showThemeSheet(BuildContext context, WidgetRef ref) {
     final l10n = L10nScope.of(context);
-    final notifier = ref.read(localeProvider.notifier);
-    final current = notifier.currentAppLocale;
+    final current = ref.read(themeModeProvider);
+    const modes = [ThemeMode.dark, ThemeMode.light, ThemeMode.system];
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: AppColors.cardBg,
+      backgroundColor: context.palette.cardBg,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -850,25 +913,95 @@ class ProfileScreen extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                l10n.language,
-                style: const TextStyle(
+                l10n.theme,
+                style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary,
+                  color: context.palette.textPrimary,
                 ),
               ),
               const SizedBox(height: 12),
+              ...modes.map((mode) {
+                final title = switch (mode) {
+                  ThemeMode.light => l10n.themeLight,
+                  ThemeMode.dark => l10n.themeDark,
+                  ThemeMode.system => l10n.themeSystem,
+                };
+                return ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: context.palette.textPrimary,
+                    ),
+                  ),
+                  trailing: current == mode
+                      ? Icon(Icons.check_circle_rounded, color: context.palette.primary, size: 24)
+                      : null,
+                  onTap: () async {
+                    await ref.read(themeModeProvider.notifier).setMode(mode);
+                    if (!ctx.mounted) return;
+                    Navigator.pop(ctx);
+                    if (!context.mounted) return;
+                    final msg = switch (mode) {
+                      ThemeMode.light => l10n.themeSetLight,
+                      ThemeMode.dark => l10n.themeSetDark,
+                      ThemeMode.system => l10n.themeSetSystem,
+                    };
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(msg),
+                        backgroundColor: context.palette.success,
+                      ),
+                    );
+                  },
+                );
+              }),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showLanguageSheet(BuildContext context, WidgetRef ref) {
+    final l10n = L10nScope.of(context);
+    final notifier = ref.read(localeProvider.notifier);
+    final current = notifier.currentAppLocale;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: context.palette.cardBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                l10n.language,
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: context.palette.textPrimary,
+                ),
+              ),
+              SizedBox(height: 12),
               ...AppLocale.values.map((loc) => ListTile(
                 contentPadding: EdgeInsets.zero,
                 title: Text(
                   loc == AppLocale.ru ? l10n.languageRussian : l10n.languageEnglish,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 16,
-                    color: AppColors.textPrimary,
+                    color: context.palette.textPrimary,
                   ),
                 ),
                 trailing: current == loc
-                    ? const Icon(Icons.check_circle_rounded, color: AppColors.primary, size: 24)
+                    ? Icon(Icons.check_circle_rounded, color: context.palette.primary, size: 24)
                     : null,
                 onTap: () async {
                   await notifier.setLocale(loc);
@@ -877,7 +1010,7 @@ class ProfileScreen extends ConsumerWidget {
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: Text(loc == AppLocale.ru ? l10n.languageSetRu : l10n.languageSetEn),
-                        backgroundColor: AppColors.success,
+                        backgroundColor: context.palette.success,
                       ),
                     );
                   }
@@ -887,6 +1020,20 @@ class ProfileScreen extends ConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _ProfileStripGaragePhoto extends ConsumerWidget {
+  const _ProfileStripGaragePhoto({required this.photoUrl});
+
+  final String photoUrl;
+
+  @override
+  Widget build(BuildContext context, WidgetRef _) {
+    return GarageCarPhotoImage(
+      photoUrl: photoUrl,
+      fit: BoxFit.cover,
     );
   }
 }
@@ -911,6 +1058,23 @@ class _ProfileMyCarsStrip extends StatefulWidget {
 class _ProfileMyCarsStripState extends State<_ProfileMyCarsStrip> {
   String? _lastCenteredId;
 
+  Widget _profileStripCarPhoto(String? photoUrl) {
+    final raw = (photoUrl ?? '').trim();
+    if (raw.isEmpty) {
+      return ColoredBox(
+        color: context.palette.nestedBg,
+        child: Center(
+          child: Icon(
+            Icons.directions_car_rounded,
+            size: 28,
+            color: context.palette.textTertiary.withValues(alpha: 0.3),
+          ),
+        ),
+      );
+    }
+    return _ProfileStripGaragePhoto(photoUrl: raw);
+  }
+
   @override
   Widget build(BuildContext context) {
     final activeId = widget.activeId;
@@ -930,7 +1094,7 @@ class _ProfileMyCarsStripState extends State<_ProfileMyCarsStrip> {
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         itemCount: widget.cars.length + 1,
-        separatorBuilder: (_, __) => const SizedBox(width: 12),
+        separatorBuilder: (_, __) => SizedBox(width: 12),
         itemBuilder: (_, i) {
           if (i == widget.cars.length) {
             return GestureDetector(
@@ -938,16 +1102,16 @@ class _ProfileMyCarsStripState extends State<_ProfileMyCarsStrip> {
               child: Container(
                 width: 120,
                 decoration: BoxDecoration(
-                  color: AppColors.cardBg,
+                  color: context.palette.cardBg,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.border),
+                  border: Border.all(color: context.palette.border),
                 ),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.add_rounded, size: 28, color: AppColors.primary),
-                    const SizedBox(height: 6),
-                    Text(L10nScope.of(context).add, style: const TextStyle(fontSize: 12, color: AppColors.primary)),
+                    Icon(Icons.add_rounded, size: 28, color: context.palette.primary),
+                    SizedBox(height: 6),
+                    Text(L10nScope.of(context).add, style: TextStyle(fontSize: 12, color: context.palette.primary)),
                   ],
                 ),
               ),
@@ -962,42 +1126,37 @@ class _ProfileMyCarsStripState extends State<_ProfileMyCarsStrip> {
               width: 120,
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: isActive ? AppColors.primary.withValues(alpha: 0.08) : AppColors.cardBg,
+                color: isActive ? context.palette.primary.withValues(alpha: 0.08) : context.palette.cardBg,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: isActive ? AppColors.primary : AppColors.border,
+                  color: isActive ? context.palette.primary : context.palette.border,
                   width: isActive ? 2 : 1,
                 ),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: 100,
-                    height: 50,
-                    decoration: BoxDecoration(
-                      color: AppColors.nestedBg,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Icon(
-                      Icons.directions_car_rounded,
-                      size: 28,
-                      color: AppColors.textTertiary.withValues(alpha: 0.3),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: SizedBox(
+                      width: 100,
+                      height: 50,
+                      child: _profileStripCarPhoto(car.photoUrl),
                     ),
                   ),
                   const Spacer(),
                   Text(
                     '${car.brand} ${car.model}',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
+                      color: context.palette.textPrimary,
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
                   if (car.plateNumber != null)
-                    Text(car.plateNumber!, style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+                    Text(car.plateNumber!, style: TextStyle(fontSize: 11, color: context.palette.textSecondary)),
                 ],
               ),
             ),
@@ -1020,18 +1179,18 @@ class _SectionGroup extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Text(title, style: const TextStyle(
-            fontSize: 18, fontWeight: FontWeight.w600, color: AppColors.textPrimary,
+          child: Text(title, style: TextStyle(
+            fontSize: 18, fontWeight: FontWeight.w600, color: context.palette.textPrimary,
           )),
         ),
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Container(
             decoration: BoxDecoration(
-              color: AppColors.cardBg,
+              color: context.palette.cardBg,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppColors.border),
+              border: Border.all(color: context.palette.border),
             ),
             child: Column(children: children),
           ),
@@ -1059,21 +1218,21 @@ class _SettingsSwitchRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: AppColors.border, width: 0.5)),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: context.palette.border, width: 0.5)),
       ),
       child: Row(
         children: [
-          Icon(icon, size: 22, color: AppColors.textSecondary),
-          const SizedBox(width: 14),
+          Icon(icon, size: 22, color: context.palette.textSecondary),
+          SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(label, style: const TextStyle(fontSize: 16, color: AppColors.textPrimary)),
+                Text(label, style: TextStyle(fontSize: 16, color: context.palette.textPrimary)),
                 if (subtitle != null) ...[
-                  const SizedBox(height: 2),
-                  Text(subtitle!, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                  SizedBox(height: 2),
+                  Text(subtitle!, style: TextStyle(fontSize: 12, color: context.palette.textSecondary)),
                 ],
               ],
             ),
@@ -1102,18 +1261,18 @@ class _SettingsRow extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        decoration: const BoxDecoration(
-          border: Border(bottom: BorderSide(color: AppColors.border, width: 0.5)),
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: context.palette.border, width: 0.5)),
         ),
         child: Row(
           children: [
-            Icon(icon, size: 22, color: AppColors.textSecondary),
-            const SizedBox(width: 14),
-            Expanded(child: Text(label, style: const TextStyle(fontSize: 16, color: AppColors.textPrimary))),
+            Icon(icon, size: 22, color: context.palette.textSecondary),
+            SizedBox(width: 14),
+            Expanded(child: Text(label, style: TextStyle(fontSize: 16, color: context.palette.textPrimary))),
             if (trailing != null)
-              Text(trailing!, style: const TextStyle(fontSize: 14, color: AppColors.textSecondary)),
-            const SizedBox(width: 8),
-            const Icon(Icons.chevron_right_rounded, size: 20, color: AppColors.textTertiary),
+              Text(trailing!, style: TextStyle(fontSize: 14, color: context.palette.textSecondary)),
+            SizedBox(width: 8),
+            Icon(Icons.chevron_right_rounded, size: 20, color: context.palette.textTertiary),
           ],
         ),
       ),
@@ -1133,39 +1292,39 @@ class _DocumentCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final child = Row(
       children: [
-        Text(icon, style: const TextStyle(fontSize: 24)),
-        const SizedBox(width: 14),
+        Text(icon, style: TextStyle(fontSize: 24)),
+        SizedBox(width: 14),
         Expanded(child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(type, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
-            const SizedBox(height: 2),
-            Text(detail, style: const TextStyle(fontSize: 14, color: AppColors.textSecondary)),
+            Text(type, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: context.palette.textPrimary)),
+            SizedBox(height: 2),
+            Text(detail, style: TextStyle(fontSize: 14, color: context.palette.textSecondary)),
             if (expiry != null) ...[
-              const SizedBox(height: 2),
-              Text(expiry!, style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+              SizedBox(height: 2),
+              Text(expiry!, style: TextStyle(fontSize: 13, color: context.palette.textSecondary)),
             ],
             if (status != null && statusColor != null) ...[
-              const SizedBox(height: 4),
+              SizedBox(height: 4),
               Row(children: [
                 Container(width: 8, height: 8, decoration: BoxDecoration(
                   color: statusColor, shape: BoxShape.circle)),
-                const SizedBox(width: 6),
+                SizedBox(width: 6),
                 Text(status!, style: TextStyle(fontSize: 12, color: statusColor)),
               ]),
             ],
           ],
         )),
-        const Icon(Icons.chevron_right_rounded, size: 20, color: AppColors.textTertiary),
+        Icon(Icons.chevron_right_rounded, size: 20, color: context.palette.textTertiary),
       ],
     );
     return InkWell(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        decoration: const BoxDecoration(
-          border: Border(bottom: BorderSide(color: AppColors.border, width: 0.5)),
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: context.palette.border, width: 0.5)),
         ),
         child: child,
       ),
@@ -1182,21 +1341,21 @@ class _NoteCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.cardBg,
+        color: context.palette.cardBg,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: context.palette.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            Expanded(child: Text(title, style: const TextStyle(
-              fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textPrimary,
+            Expanded(child: Text(title, style: TextStyle(
+              fontSize: 16, fontWeight: FontWeight.w600, color: context.palette.textPrimary,
             ), maxLines: 1, overflow: TextOverflow.ellipsis)),
-            Text(date, style: const TextStyle(fontSize: 12, color: AppColors.textTertiary)),
+            Text(date, style: TextStyle(fontSize: 12, color: context.palette.textTertiary)),
           ]),
-          const SizedBox(height: 6),
-          Text(body, style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+          SizedBox(height: 6),
+          Text(body, style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
             maxLines: 2, overflow: TextOverflow.ellipsis),
         ],
       ),

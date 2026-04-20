@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const typeorm_1 = require("typeorm");
 const dataSource = new typeorm_1.DataSource({
     type: 'postgres',
-    url: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/autohub',
+    url: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/mp_servis',
     entities: [],
     synchronize: false,
 });

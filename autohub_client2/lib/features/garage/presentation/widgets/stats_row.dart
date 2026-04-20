@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/theme/app_text_styles.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../shared/models/order_model.dart';
@@ -25,12 +25,12 @@ class StatsRow extends StatelessWidget {
           suffix: ' ${_orderWord(activeCount)}',
           label: 'активных',
         )),
-        const SizedBox(width: 8),
+        SizedBox(width: 8),
         Expanded(child: _StatBlock(
           value: Formatters.money(monthTotal),
           label: 'за месяц',
         )),
-        const SizedBox(width: 8),
+        SizedBox(width: 8),
         Expanded(child: _StatBlock(
           value: lastStatus?.label ?? '—',
           label: 'последний',
@@ -71,9 +71,9 @@ class _StatBlock extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
       decoration: BoxDecoration(
-        color: AppColors.cardBg,
+        color: context.palette.cardBg,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: context.palette.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -85,11 +85,11 @@ class _StatBlock extends StatelessWidget {
                   width: 8, height: 8,
                   decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
                 ),
-                const SizedBox(width: 6),
+                SizedBox(width: 6),
                 Expanded(
                   child: Text(
                     value,
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white),
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: context.palette.textPrimary),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -105,19 +105,19 @@ class _StatBlock extends StatelessWidget {
                   TextSpan(
                     text: value,
                     style: isSmallValue
-                        ? const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white)
-                        : AppTextStyles.numberLarge,
+                        ? TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: context.palette.textPrimary)
+                        : AppTextStyles.numberLarge(context.palette),
                   ),
                   if (suffix != null)
                     TextSpan(
                       text: suffix,
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w400, color: AppColors.textSecondary),
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w400, color: context.palette.textSecondary),
                     ),
                 ],
               ),
             ),
-          const SizedBox(height: 4),
-          Text(label, style: AppTextStyles.small),
+          SizedBox(height: 4),
+          Text(label, style: AppTextStyles.small(context.palette)),
         ],
       ),
     );

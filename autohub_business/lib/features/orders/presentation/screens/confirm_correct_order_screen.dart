@@ -98,7 +98,16 @@ class _ConfirmCorrectOrderScreenState extends ConsumerState<ConfirmCorrectOrderS
     }
     if (order != null && order.items.isNotEmpty) {
       _existingRows = order.items.map((i) => _ConfirmRow(
-        item: OrderItem(id: i.id, name: i.name, priceKopecks: i.priceKopecks, estimatedMinutes: i.estimatedMinutes, isCompleted: false, isAdditional: false),
+        item: OrderItem(
+          id: i.id,
+          name: i.name,
+          priceKopecks: i.priceKopecks,
+          estimatedMinutes: i.estimatedMinutes,
+          isCompleted: false,
+          isAdditional: false,
+          serviceId: i.serviceId,
+          catalogItemId: i.catalogItemId,
+        ),
         priceController: TextEditingController(text: (i.priceKopecks ?? 0) ~/ 100 == 0 ? '' : '${(i.priceKopecks! ~/ 100)}'),
         minutesController: TextEditingController(text: '${i.estimatedMinutes}'),
       )).toList();
@@ -131,7 +140,16 @@ class _ConfirmCorrectOrderScreenState extends ConsumerState<ConfirmCorrectOrderS
   void _addFromCatalog(ServiceItem s) {
     setState(() {
       _newRows.add(_ConfirmRow(
-        item: OrderItem(id: s.id, name: s.name, priceKopecks: s.priceKopecks, estimatedMinutes: s.durationMinutes, isCompleted: false, isAdditional: false),
+        item: OrderItem(
+          id: s.id,
+          name: s.name,
+          priceKopecks: s.priceKopecks,
+          estimatedMinutes: s.durationMinutes,
+          isCompleted: false,
+          isAdditional: false,
+          serviceId: s.id,
+          catalogItemId: s.catalogItemId,
+        ),
         priceController: TextEditingController(text: '${s.priceKopecks ~/ 100}'),
         minutesController: TextEditingController(text: '${s.durationMinutes}'),
       ));

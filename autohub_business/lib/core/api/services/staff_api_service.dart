@@ -28,6 +28,10 @@ class StaffApiService {
       invitedAt: j['invited_at'] != null ? DateTime.tryParse(j['invited_at'] as String) : (j['invitedAt'] != null ? DateTime.tryParse(j['invitedAt'] as String) : null),
       skills: skills,
       schedule: schedule,
+      canSeeChats: j['can_see_chats'] as bool? ?? j['canSeeChats'] as bool? ?? false,
+      canWriteChats: j['can_write_chats'] as bool? ?? j['canWriteChats'] as bool? ?? false,
+      canManageOrgSettings:
+          j['can_manage_org_settings'] as bool? ?? j['canManageOrgSettings'] as bool? ?? false,
     );
   }
 
@@ -165,6 +169,9 @@ class StaffApiService {
         'is_active': entry.isActive,
         'skills': entry.skills,
         'schedule': entry.schedule.map((s) => s.toJson()).toList(),
+        'can_see_chats': entry.canSeeChats,
+        'can_write_chats': entry.canWriteChats,
+        'can_manage_org_settings': entry.canManageOrgSettings,
       };
       final res = await _client.patch(ApiEndpoints.organizationStaffMember(orgId, staffId), data: body);
       final data = res.data as Map<String, dynamic>?;

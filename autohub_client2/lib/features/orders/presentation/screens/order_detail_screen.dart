@@ -2,14 +2,17 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/pdf/order_worksheet_pdf.dart';
 import '../../../../core/navigation/app_routes.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/navigation/driving_route_launcher.dart';
+import '../../../../core/l10n/app_l10n.dart';
+import '../../../../core/l10n/l10n_scope.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../core/providers/app_providers.dart';
-import '../../../../core/settings/map_provider_setting.dart';
+import '../../../../core/catalog/client_catalog_service_ids.dart';
+import '../../../../core/settings/filter_by_car_setting.dart';
 import '../../../../shared/models/order_model.dart';
 import '../../../../shared/models/car_model.dart';
 import '../../../../shared/models/chat_model.dart';
@@ -17,6 +20,7 @@ import '../../../../shared/models/sto_model.dart';
 import '../../../../shared/org_business_kind.dart';
 import '../../../../shared/widgets/common_widgets.dart';
 import '../../../chats/presentation/screens/chat_detail_screen.dart';
+import '../widgets/order_avatars.dart';
 import '../../../search/presentation/screens/sto_detail_screen.dart';
 
 class OrderDetailScreen extends ConsumerStatefulWidget {
@@ -31,81 +35,26 @@ class OrderDetailScreen extends ConsumerStatefulWidget {
   static Future<void> _openRouteToStoImpl(BuildContext context, WidgetRef ref, STO? sto) async {
     if (sto == null || sto.latitude == null || sto.longitude == null) {
       if (context.mounted) {
+        final l10n = L10nScope.of(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Адрес сервиса не привязан к карте'),
-            backgroundColor: AppColors.warning,
+          SnackBar(
+            content: Text(l10n.orderStoNotOnMap),
+            backgroundColor: context.palette.warning,
           ),
         );
       }
       return;
     }
-    final mapProvider = ref.read(mapProviderSettingProvider);
-    String url;
-    try {
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled && context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Включите геолокацию для построения маршрута'),
-            backgroundColor: AppColors.warning,
-          ),
-        );
-      }
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-      if (permission == LocationPermission.deniedForever && context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Доступ к местоположению запрещён. Маршрут откроется до точки назначения.'),
-            backgroundColor: AppColors.info,
-          ),
-        );
-      }
-      Position? position;
-      if (permission == LocationPermission.whileInUse || permission == LocationPermission.always) {
-        position = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium),
-        );
-      }
-      if (mapProvider == MapProvider.google) {
-        if (position != null) {
-          url = 'https://www.google.com/maps/dir/?api=1&origin=${position.latitude},${position.longitude}&destination=${sto.latitude},${sto.longitude}&travelmode=driving';
-        } else {
-          url = 'https://www.google.com/maps/dir/?api=1&origin=current+location&destination=${sto.latitude},${sto.longitude}&travelmode=driving';
-        }
-      } else if (mapProvider == MapProvider.yandex) {
-        if (position != null) {
-          url = 'https://yandex.ru/maps/?rtext=${position.latitude},${position.longitude}~${sto.latitude},${sto.longitude}&rtt=auto';
-        } else {
-          url = 'https://yandex.ru/maps/?pt=${sto.longitude},${sto.latitude}&z=16';
-        }
-      } else {
-        if (position != null) {
-          url = 'https://www.openstreetmap.org/directions?from=${position.latitude},${position.longitude}&to=${sto.latitude},${sto.longitude}';
-        } else {
-          url = 'https://www.openstreetmap.org/?mlat=${sto.latitude}&mlon=${sto.longitude}#map=16/${sto.latitude}/${sto.longitude}';
-        }
-      }
-      final stamp = DateTime.now().millisecondsSinceEpoch;
-      final sep = url.contains('?') ? '&' : '?';
-      final idx = url.indexOf('#');
-      final urlWithStamp = idx >= 0
-          ? url.substring(0, idx) + sep + '_t=$stamp' + url.substring(idx)
-          : url + sep + '_t=$stamp';
-      await launchUrl(Uri.parse(urlWithStamp), mode: LaunchMode.externalApplication);
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Не удалось построить маршрут: $e'),
-            backgroundColor: AppColors.error,
-          ),
-        );
-      }
-    }
+    final position = await tryCurrentUserPositionForRoute();
+    if (!context.mounted) return;
+    await launchDrivingRoute(
+      context,
+      ref,
+      destLat: sto.latitude!,
+      destLng: sto.longitude!,
+      destinationTitle: sto.name,
+      userPosition: position,
+    );
   }
 
   @override
@@ -122,9 +71,14 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     final resolvedChatId = chatIdResult.dataOrNull;
     if (resolvedChatId == null || resolvedChatId.isEmpty) {
       if (context.mounted) {
+        final l10n = L10nScope.of(context);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(chatIdResult.errorOrNull?.message ?? 'Чат по заказу не найден'),
-          backgroundColor: AppColors.error,
+          content: Text(() {
+            final e = chatIdResult.errorOrNull;
+            if (e == null) return l10n.chatByOrderNotFound;
+            return e.message.toString();
+          }()),
+          backgroundColor: context.palette.error,
         ));
       }
       return;
@@ -148,16 +102,21 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
       chat = oneResult.dataOrNull;
       if (chat == null) {
         if (context.mounted) {
+          final l10n = L10nScope.of(context);
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(oneResult.errorOrNull?.message ?? 'Не удалось открыть чат'),
-            backgroundColor: AppColors.error,
+            content: Text(() {
+              final e = oneResult.errorOrNull;
+              if (e == null) return l10n.openChatFailed;
+              return e.message.toString();
+            }()),
+            backgroundColor: context.palette.error,
           ));
         }
         return;
       }
     }
     if (context.mounted) {
-      pushCupertino(context, ChatDetailScreen(chat: chat!, currentOrderId: order.id));
+      pushCupertino(context, ChatDetailScreen(chat: chat, currentOrderId: order.id));
     }
   }
 
@@ -178,26 +137,27 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
             (c) => c.id == displayOrder.carId,
             orElse: () => cars.first,
           );
+    final l10n = L10nScope.of(context);
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       body: CustomScrollView(
         physics: const BouncingScrollPhysics(),
         slivers: [
           SliverAppBar(
-            backgroundColor: AppColors.background,
+            backgroundColor: context.palette.background,
             pinned: true,
-            title: Text('Заказ #${displayOrder.orderNumber}',
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+            title: Text(l10n.orderDetailTitle(displayOrder.orderNumber),
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
             actions: [
               IconButton(
                 onPressed: () => printOrderWorksheet(context, displayOrder, car: car.id == displayOrder.carId ? car : null),
-                icon: const Icon(Icons.picture_as_pdf_outlined, size: 22),
-                tooltip: 'Заказ-наряд (PDF)',
+                icon: Icon(Icons.picture_as_pdf_outlined, size: 22),
+                tooltip: l10n.orderWorksheetPdfTooltip,
               ),
               IconButton(
                 onPressed: () => _openChat(context, ref, displayOrder),
-                icon: const Icon(Icons.chat_bubble_outline_rounded, size: 22),
-                tooltip: 'Открыть чат',
+                icon: Icon(Icons.chat_bubble_outline_rounded, size: 22),
+                tooltip: l10n.orderOpenChatTooltip,
               ),
             ],
           ),
@@ -208,69 +168,77 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
   }
 
   Widget _buildContent(BuildContext context, WidgetRef ref, Car car, Order order) {
+    final l10n = L10nScope.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildStatusBanner(order),
-          const SizedBox(height: 16),
+          _buildStatusBanner(context, order, l10n),
+          SizedBox(height: 16),
 
           if (order.status == OrderStatus.pendingApproval)
-            _buildApprovalBanner(context, ref, order),
+            _buildApprovalBanner(context, ref, order, l10n),
 
-          _buildSection('Автомобиль', child: _buildCarInfo(car)),
-          const SizedBox(height: 12),
+          _buildSection(context, l10n.orderSectionVehicle, child: _buildCarInfo(context, car, order, l10n)),
+          SizedBox(height: 12),
 
-          _buildSection('Сервис', child: _buildSTOInfo(context, ref, order)),
-          const SizedBox(height: 12),
+          _buildSection(context, l10n.orderSectionService, child: _buildSTOInfo(context, ref, order, l10n)),
+          SizedBox(height: 12),
 
-          _buildSection('Дата и время', child: _buildDateTime(order)),
-          const SizedBox(height: 12),
+          _buildSection(context, l10n.orderSectionDateTime, child: _buildDateTime(context, order, l10n)),
+          SizedBox(height: 12),
 
           // Состав: при pending_approval — черновик из approval_preview (см. Order.itemsForDisplay).
-          _buildSection('Работы', child: _buildWorkItems(order)),
+          _buildSection(context, l10n.orderSectionWorks, child: _buildWorkItems(order)),
 
           if (order.itemsForDisplay.any((i) => i.isAdditional)) ...[
-            const SizedBox(height: 12),
+            SizedBox(height: 12),
             _buildSection(
+              context,
               order.status == OrderStatus.pendingApproval
-                  ? 'Дополнительно (на согласовании)'
-                  : 'Добавлено (после согласования)',
+                  ? l10n.orderAdditionalPending
+                  : l10n.orderAdditionalAfterApproval,
               child: _buildAdditionalItems(order),
             ),
           ],
 
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
 
           // Общее время
-          _buildTimeEstimate(order),
-          const SizedBox(height: 12),
+          _buildTimeEstimate(context, order, l10n),
+          SizedBox(height: 12),
 
-          _buildTotalSection(order),
-          const SizedBox(height: 12),
+          _buildTotalSection(context, order, l10n),
+          SizedBox(height: 12),
 
-          _buildPhotosSection(),
-          const SizedBox(height: 12),
+          _buildPhotosSection(context, l10n),
+          SizedBox(height: 12),
 
           if (order.comment != null && order.comment!.isNotEmpty) ...[
-            _buildSection('Комментарий', child: Padding(
+            _buildSection(context, l10n.orderSectionComment, child: Padding(
               padding: const EdgeInsets.all(16),
-              child: Text('"${order.comment}"', style: const TextStyle(
-                fontSize: 14, color: AppColors.textSecondary, fontStyle: FontStyle.italic,
+              child: Text('"${order.comment}"', style: TextStyle(
+                fontSize: 14, color: context.palette.textSecondary, fontStyle: FontStyle.italic,
               )),
             )),
-            const SizedBox(height: 12),
+            SizedBox(height: 12),
           ],
 
-          _buildActions(context, ref, order),
+          _buildActions(context, ref, order, l10n),
         ],
       ),
     );
   }
 
-  Widget _buildStatusBanner(Order order) {
-    final steps = ['Записан', 'Подтверждён', 'В работе', 'Готов', 'Завершён'];
+  Widget _buildStatusBanner(BuildContext context, Order order, AppL10n l10n) {
+    final steps = [
+      l10n.orderStepBooked,
+      l10n.orderStepConfirmed,
+      l10n.orderStepInProgress,
+      l10n.orderStepReady,
+      l10n.orderStepDone,
+    ];
     final currentStep = _statusStep(order);
 
     return Container(
@@ -289,64 +257,92 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
                 width: 10, height: 10,
                 decoration: BoxDecoration(color: order.displayStatus.color, shape: BoxShape.circle),
               ),
-              const SizedBox(width: 8),
+              SizedBox(width: 8),
               Text(order.displayStatus.label.toUpperCase(), style: TextStyle(
                 fontSize: 14, fontWeight: FontWeight.w700,
                 color: order.displayStatus.color, letterSpacing: 0.5,
               )),
             ],
           ),
-          const SizedBox(height: 16),
+          SizedBox(height: 16),
           ClipRRect(
             borderRadius: BorderRadius.circular(4),
             child: LinearProgressIndicator(
               value: order.displayStatus.progress,
               minHeight: 6,
-              backgroundColor: AppColors.nestedBg,
+              backgroundColor: context.palette.nestedBg,
               valueColor: AlwaysStoppedAnimation(order.displayStatus.color),
             ),
           ),
-          const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: List.generate(steps.length, (i) {
-              final isCompleted = i < currentStep;
-              final isCurrent = i == currentStep;
-              return Expanded(
-                child: Column(
-                  children: [
-                    Container(
-                      width: 20, height: 20,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: isCompleted
-                            ? AppColors.success
-                            : isCurrent ? order.status.color : AppColors.nestedBg,
-                        border: Border.all(
-                          color: isCompleted || isCurrent ? Colors.transparent : AppColors.border,
-                        ),
-                      ),
-                      child: isCompleted
-                          ? const Icon(Icons.check, size: 12, color: Colors.white)
-                          : isCurrent
-                              ? Container(
-                                  margin: const EdgeInsets.all(5),
-                                  decoration: const BoxDecoration(
-                                    color: Colors.white, shape: BoxShape.circle,
-                                  ),
-                                )
-                              : null,
+          SizedBox(height: 10),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: List.generate(steps.length, (i) {
+                final isCompleted = i < currentStep;
+                final isCurrent = i == currentStep;
+                return Expanded(
+                  child: Padding(
+                    padding: EdgeInsets.only(
+                      left: i == 0 ? 0 : 1,
+                      right: i == steps.length - 1 ? 0 : 1,
                     ),
-                    const SizedBox(height: 4),
-                    Text(steps[i], style: TextStyle(
-                      fontSize: 10,
-                      color: isCompleted || isCurrent ? AppColors.textPrimary : AppColors.textTertiary,
-                      fontWeight: isCurrent ? FontWeight.w600 : FontWeight.w400,
-                    ), textAlign: TextAlign.center),
-                  ],
-                ),
-              );
-            }),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Center(
+                          child: Container(
+                            width: 20,
+                            height: 20,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: isCompleted
+                                  ? context.palette.success
+                                  : isCurrent ? order.status.color : context.palette.nestedBg,
+                              border: Border.all(
+                                color: isCompleted || isCurrent ? Colors.transparent : context.palette.border,
+                              ),
+                            ),
+                            child: isCompleted
+                                ? Icon(Icons.check, size: 12, color: Colors.white)
+                                : isCurrent
+                                    ? Container(
+                                        margin: const EdgeInsets.all(5),
+                                        decoration: const BoxDecoration(
+                                          color: Colors.white,
+                                          shape: BoxShape.circle,
+                                        ),
+                                      )
+                                    : null,
+                          ),
+                        ),
+                        SizedBox(height: 6),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.center,
+                            child: Text(
+                              steps[i],
+                              style: TextStyle(
+                                fontSize: 10,
+                                height: 1.0,
+                                color: isCompleted || isCurrent ? context.palette.textPrimary : context.palette.textTertiary,
+                                fontWeight: isCurrent ? FontWeight.w600 : FontWeight.w400,
+                              ),
+                              maxLines: 1,
+                              softWrap: false,
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+            ),
           ),
         ],
       ),
@@ -365,42 +361,42 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     }
   }
 
-  Widget _buildApprovalBanner(BuildContext context, WidgetRef ref, Order order) {
+  Widget _buildApprovalBanner(BuildContext context, WidgetRef ref, Order order, AppL10n l10n) {
     return GestureDetector(
       onTap: () => _openChat(context, ref, order),
       child: Container(
         margin: const EdgeInsets.only(bottom: 16),
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: AppColors.statusApproval.withValues(alpha: 0.12),
+          color: context.palette.statusApproval.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppColors.statusApproval.withValues(alpha: 0.4)),
+          border: Border.all(color: context.palette.statusApproval.withValues(alpha: 0.4)),
         ),
         child: Row(
           children: [
-            const Text('⚠️', style: TextStyle(fontSize: 24)),
-            const SizedBox(width: 12),
-            const Expanded(
+            Text('⚠️', style: TextStyle(fontSize: 24)),
+            SizedBox(width: 12),
+            Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Требуется согласование доп.работ',
+                  Text(l10n.orderApprovalExtraTitle,
                     style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600,
-                      color: AppColors.statusApproval)),
+                      color: context.palette.statusApproval)),
                   const SizedBox(height: 2),
-                  const Text('Подтвердите или отклоните в чате',
-                    style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+                  Text(l10n.orderApprovalExtraSubtitle,
+                    style: TextStyle(fontSize: 13, color: context.palette.textSecondary)),
                 ],
               ),
             ),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
-                gradient: AppColors.primaryGradient,
+                gradient: context.palette.primaryGradient,
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: const Text('Перейти в чат', style: TextStyle(
-                fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF0D0D0D),
+              child: Text(l10n.orderGoToChat, style: TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w600, color: context.palette.onAccent,
               )),
             ),
           ],
@@ -409,19 +405,19 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     );
   }
 
-  Widget _buildSection(String title, {required Widget child}) {
+  Widget _buildSection(BuildContext context, String title, {required Widget child}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: const TextStyle(
-          fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textSecondary,
+        Text(title, style: TextStyle(
+          fontSize: 14, fontWeight: FontWeight.w600, color: context.palette.textSecondary,
         )),
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         Container(
           decoration: BoxDecoration(
-            color: AppColors.cardBg,
+            color: context.palette.cardBg,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.border),
+            border: Border.all(color: context.palette.border),
           ),
           child: child,
         ),
@@ -429,31 +425,31 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     );
   }
 
-  Widget _buildCarInfo(Car car) {
+  Widget _buildCarInfo(BuildContext context, Car car, Order order, AppL10n l10n) {
+    final photoRaw = resolveCarPhotoRawForOrder(order, car);
+    final thumbRadius = BorderRadius.circular(12);
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Container(
-            width: 56, height: 56,
-            decoration: BoxDecoration(
-              color: AppColors.nestedBg, borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(Icons.directions_car_rounded, size: 28,
-              color: AppColors.textTertiary.withValues(alpha: 0.5)),
+          OrderCarAvatar(
+            rawPhoto: photoRaw,
+            size: 64,
+            borderRadius: thumbRadius,
           ),
-          const SizedBox(width: 12),
+          SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('${car.brand} ${car.model}, ${car.year}', style: const TextStyle(
-                  fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textPrimary,
+                Text('${car.brand} ${car.model}, ${car.year}', style: TextStyle(
+                  fontSize: 16, fontWeight: FontWeight.w600, color: context.palette.textPrimary,
                 )),
-                const SizedBox(height: 2),
+                SizedBox(height: 2),
                 Text(
-                  '${car.plateNumber ?? ''} | ${Formatters.mileage(car.mileage)}',
-                  style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+                  '${car.plateNumber ?? ''} | ${Formatters.mileageLocalized(car.mileage, l10n.intlLocale)}',
+                  style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
                 ),
               ],
             ),
@@ -463,41 +459,32 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     );
   }
 
-  Widget _buildSTOInfo(BuildContext context, WidgetRef ref, Order order) {
+  Widget _buildSTOInfo(BuildContext context, WidgetRef ref, Order order, AppL10n l10n) {
     final phones = order.stoPhone != null ? [order.stoPhone!] : <String>[];
     final stoAsync = ref.watch(stoByIdProvider(order.stoId));
     final sto = stoAsync.valueOrNull;
+    final logoUrl = resolveOrganizationLogoUrl(sto);
+    final thumbRadius = BorderRadius.circular(12);
 
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: sto != null
-            ? () => pushCupertino(context, STODetailScreen(sto: sto))
+            ? () => pushStoDetailScreen(context, STODetailScreen(sto: sto))
             : null,
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Container(
-                width: 56,
-                height: 56,
-                decoration: BoxDecoration(
-                  color: AppColors.nestedBg,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Center(
-                  child: Text(
-                    order.stoName.isNotEmpty ? order.stoName[0] : '?',
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                ),
+              OrderOrganizationAvatar(
+                imageUrl: logoUrl,
+                name: order.stoName,
+                size: 64,
+                borderRadius: thumbRadius,
               ),
-              const SizedBox(width: 12),
+              SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -507,51 +494,51 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
                         Expanded(
                           child: Text(
                             order.stoName,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.w600,
-                              color: AppColors.textPrimary,
+                              color: context.palette.textPrimary,
                             ),
                           ),
                         ),
                       ],
                     ),
                     if (order.stoAddress != null) ...[
-                      const SizedBox(height: 2),
+                      SizedBox(height: 2),
                       Text(
                         order.stoAddress!,
-                        style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+                        style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
                       ),
                     ],
-                    if (OrgBusinessKind.labelForOrderSnapshot(order.organizationBusinessKind).isNotEmpty ||
-                        OrgBusinessKind.schedulingModeShortLabel(order.organizationSchedulingMode).isNotEmpty) ...[
-                      const SizedBox(height: 6),
-                      if (OrgBusinessKind.labelForOrderSnapshot(order.organizationBusinessKind).isNotEmpty)
+                    if (OrgBusinessKind.labelForOrderSnapshot(order.organizationBusinessKind, english: l10n.isEn).isNotEmpty ||
+                        OrgBusinessKind.schedulingModeShortLabel(order.organizationSchedulingMode, english: l10n.isEn).isNotEmpty) ...[
+                      SizedBox(height: 6),
+                      if (OrgBusinessKind.labelForOrderSnapshot(order.organizationBusinessKind, english: l10n.isEn).isNotEmpty)
                         Text(
-                          OrgBusinessKind.labelForOrderSnapshot(order.organizationBusinessKind),
-                          style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                          OrgBusinessKind.labelForOrderSnapshot(order.organizationBusinessKind, english: l10n.isEn),
+                          style: TextStyle(fontSize: 13, color: context.palette.textSecondary),
                         ),
-                      if (OrgBusinessKind.schedulingModeShortLabel(order.organizationSchedulingMode).isNotEmpty) ...[
-                        if (OrgBusinessKind.labelForOrderSnapshot(order.organizationBusinessKind).isNotEmpty)
-                          const SizedBox(height: 2),
+                      if (OrgBusinessKind.schedulingModeShortLabel(order.organizationSchedulingMode, english: l10n.isEn).isNotEmpty) ...[
+                        if (OrgBusinessKind.labelForOrderSnapshot(order.organizationBusinessKind, english: l10n.isEn).isNotEmpty)
+                          SizedBox(height: 2),
                         Text(
-                          'Запись: ${OrgBusinessKind.schedulingModeShortLabel(order.organizationSchedulingMode)}',
-                          style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
+                          l10n.bookingWithMode(OrgBusinessKind.schedulingModeShortLabel(order.organizationSchedulingMode, english: l10n.isEn)),
+                          style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
                         ),
                       ],
                     ],
-                    const SizedBox(height: 8),
+                    SizedBox(height: 8),
                     Row(
                       children: [
                         _SmallAction(
                           icon: Icons.phone_rounded,
-                          label: 'Позвонить',
+                          label: l10n.callService,
                           onTap: () => _openPhone(context, phones),
                         ),
-                        const SizedBox(width: 12),
+                        SizedBox(width: 12),
                         _SmallAction(
                           icon: Icons.directions_rounded,
-                          label: 'Маршрут',
+                          label: l10n.directionsToService,
                           onTap: () => OrderDetailScreen._openRouteToStoImpl(context, ref, sto),
                         ),
                       ],
@@ -567,10 +554,11 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
   }
 
   static Future<void> _openPhone(BuildContext context, List<String> phones) async {
+    final l10n = L10nScope.of(context);
     if (phones.isEmpty) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Номер не указан'), backgroundColor: AppColors.warning),
+          SnackBar(content: Text(l10n.phoneNotListed), backgroundColor: context.palette.warning),
         );
       }
       return;
@@ -586,13 +574,13 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     final selected = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.cardBg,
-        title: const Text('Выберите номер', style: TextStyle(color: AppColors.textPrimary)),
+        backgroundColor: context.palette.cardBg,
+        title: Text(l10n.pickPhoneNumber, style: TextStyle(color: context.palette.textPrimary)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: phones
               .map((n) => ListTile(
-                    title: Text(Formatters.phone(n), style: const TextStyle(color: AppColors.textPrimary)),
+                    title: Text(Formatters.phone(n), style: TextStyle(color: context.palette.textPrimary)),
                     onTap: () => Navigator.pop(ctx, n),
                   ))
               .toList(),
@@ -607,7 +595,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     }
   }
 
-  Widget _buildDateTime(Order order) {
+  Widget _buildDateTime(BuildContext context, Order order, AppL10n l10n) {
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -615,23 +603,23 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
         children: [
           Row(
             children: [
-              const Icon(Icons.calendar_today_rounded, size: 20, color: AppColors.primary),
-              const SizedBox(width: 12),
+              Icon(Icons.calendar_today_rounded, size: 20, color: context.palette.primary),
+              SizedBox(width: 12),
               Text(
-                '${Formatters.dateFullRu(order.dateTime)}, ${Formatters.time(order.dateTime)}',
-                style: const TextStyle(fontSize: 16, color: AppColors.textPrimary),
+                '${Formatters.dateFullLocalized(order.dateTime, l10n.intlLocale)}, ${Formatters.time(order.dateTime)}',
+                style: TextStyle(fontSize: 16, color: context.palette.textPrimary),
               ),
             ],
           ),
           if (order.status.isActive && order.plannedEndTime != null) ...[
-            const SizedBox(height: 10),
+            SizedBox(height: 10),
             Row(
               children: [
-                Icon(Icons.schedule_rounded, size: 18, color: AppColors.textSecondary),
-                const SizedBox(width: 10),
+                Icon(Icons.schedule_rounded, size: 18, color: context.palette.textSecondary),
+                SizedBox(width: 10),
                 Text(
-                  'Ориентировочное окончание: ${Formatters.time(order.plannedEndTime!)}',
-                  style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+                  l10n.orderEstimatedEnd(Formatters.time(order.plannedEndTime!)),
+                  style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
                 ),
               ],
             ),
@@ -656,35 +644,35 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
   }
 
   /// Блок с оценкой общего времени
-  Widget _buildTimeEstimate(Order order) {
+  Widget _buildTimeEstimate(BuildContext context, Order order, AppL10n l10n) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.cardBg,
+        color: context.palette.cardBg,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: context.palette.border),
       ),
       child: Row(
         children: [
           Container(
             width: 40, height: 40,
             decoration: BoxDecoration(
-              color: AppColors.info.withValues(alpha: 0.15),
+              color: context.palette.info.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: const Icon(Icons.schedule_rounded, size: 22, color: AppColors.info),
+            child: Icon(Icons.schedule_rounded, size: 22, color: context.palette.info),
           ),
-          const SizedBox(width: 12),
+          SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Ожидаемое время', style: TextStyle(
-                  fontSize: 12, color: AppColors.textSecondary,
+                Text(l10n.orderExpectedTimeLabel, style: TextStyle(
+                  fontSize: 12, color: context.palette.textSecondary,
                 )),
-                const SizedBox(height: 2),
-                Text(order.displayDurationLabel, style: const TextStyle(
-                  fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.textPrimary,
+                SizedBox(height: 2),
+                Text(order.displayDurationLabel, style: TextStyle(
+                  fontSize: 18, fontWeight: FontWeight.w700, color: context.palette.textPrimary,
                 )),
               ],
             ),
@@ -697,14 +685,14 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
                 order.hasApprovalPreview
                     ? '0/${order.itemsForDisplay.length}'
                     : '${order.completedCount}/${order.totalCount}',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary,
+                  color: context.palette.textPrimary,
                 ),
               ),
-              const Text('работ выполнено', style: TextStyle(
-                fontSize: 11, color: AppColors.textTertiary,
+              Text(l10n.orderJobsDoneLabel, style: TextStyle(
+                fontSize: 11, color: context.palette.textTertiary,
               )),
             ],
           ),
@@ -713,7 +701,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     );
   }
 
-  Widget _buildTotalSection(Order order) {
+  Widget _buildTotalSection(BuildContext context, Order order, AppL10n l10n) {
     final disp = order.itemsForDisplay;
     final workTotal = disp.where((i) => !i.isAdditional).fold(0, (sum, i) => sum + i.priceKopecks);
     final addTotal = disp.where((i) => i.isAdditional).fold(0, (sum, i) => sum + i.priceKopecks);
@@ -722,26 +710,26 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [AppColors.cardBg, AppColors.primary.withValues(alpha: 0.08)],
+          colors: [context.palette.cardBg, context.palette.primary.withValues(alpha: 0.08)],
         ),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+        border: Border.all(color: context.palette.primary.withValues(alpha: 0.3)),
       ),
       child: Column(
         children: [
-          _TotalRow('Работы:', Formatters.money(workTotal)),
+          _TotalRow(l10n.orderSubtotalWorks, Formatters.money(workTotal)),
           if (addTotal > 0)
-            _TotalRow('Дополнительно:', Formatters.money(addTotal)),
-          const Divider(color: AppColors.border, height: 20),
+            _TotalRow(l10n.orderSubtotalAdditional, Formatters.money(addTotal)),
+          Divider(color: context.palette.border, height: 20),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Итого', style: TextStyle(
-                fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.textPrimary,
+              Text(l10n.orderGrandTotal, style: TextStyle(
+                fontSize: 18, fontWeight: FontWeight.w700, color: context.palette.textPrimary,
               )),
-              Text(Formatters.money(order.totalKopecksForDisplay), style: const TextStyle(
+              Text(Formatters.money(order.totalKopecksForDisplay), style: TextStyle(
                 fontSize: 22, fontWeight: FontWeight.w700,
-                color: AppColors.primary, fontFamily: 'monospace',
+                color: context.palette.primary, fontFamily: 'monospace',
               )),
             ],
           ),
@@ -750,28 +738,28 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     );
   }
 
-  Widget _buildPhotosSection() {
+  Widget _buildPhotosSection(BuildContext context, AppL10n l10n) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('Фото работ', style: TextStyle(
-          fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textSecondary,
+        Text(l10n.orderWorkPhotos, style: TextStyle(
+          fontSize: 14, fontWeight: FontWeight.w600, color: context.palette.textSecondary,
         )),
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         SizedBox(
           height: 80,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             itemCount: 4,
-            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            separatorBuilder: (_, __) => SizedBox(width: 8),
             itemBuilder: (_, i) => Container(
               width: 80, height: 80,
               decoration: BoxDecoration(
-                color: AppColors.cardBg,
+                color: context.palette.cardBg,
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppColors.border),
+                border: Border.all(color: context.palette.border),
               ),
-              child: const Icon(Icons.photo_camera_rounded, color: AppColors.textTertiary),
+              child: Icon(Icons.photo_camera_rounded, color: context.palette.textTertiary),
             ),
           ),
         ),
@@ -779,34 +767,33 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     );
   }
 
-  Widget _buildActions(BuildContext context, WidgetRef ref, Order order) {
+  Widget _buildActions(BuildContext context, WidgetRef ref, Order order, AppL10n l10n) {
     return Column(
       children: [
         if (order.status == OrderStatus.pendingApproval)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: GoldButton(text: 'Перейти к согласованию',
+            child: GoldButton(text: l10n.orderGoToApproval,
               onPressed: () => _openChat(context, ref, order)),
           ),
         if (order.status == OrderStatus.done) ...[
-          GoldButton(text: 'Оставить отзыв', onPressed: () {}),
-          const SizedBox(height: 8),
+          GoldButton(text: l10n.orderLeaveReview, onPressed: () {}),
+          SizedBox(height: 8),
         ],
         OutlinedButton(
-          onPressed: () {},
+          onPressed: () => _repeatOrder(context, ref, order),
           style: OutlinedButton.styleFrom(
             minimumSize: const Size(double.infinity, 48),
-            side: const BorderSide(color: AppColors.primary),
+            side: BorderSide(color: context.palette.primary),
           ),
-          child: const Text('Повторить заказ'),
+          child: Text(l10n.orderRepeat),
         ),
-        if (order.status == OrderStatus.pendingConfirmation ||
-            order.status == OrderStatus.confirmed) ...[
-          const SizedBox(height: 8),
+        if (_canClientCancelOrder(order)) ...[
+          SizedBox(height: 8),
           TextButton(
             onPressed: () => _showCancelDialog(context, ref, order),
-            child: const Text('Отменить запись', style: TextStyle(
-              fontSize: 14, color: AppColors.error,
+            child: Text(l10n.orderCancelBooking, style: TextStyle(
+              fontSize: 14, color: context.palette.error,
             )),
           ),
         ],
@@ -814,45 +801,131 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     );
   }
 
+  bool _canClientCancelOrder(Order order) {
+    return order.status == OrderStatus.pendingConfirmation ||
+        order.status == OrderStatus.confirmed;
+  }
+
+  /// Id услуг для предвыбора на карточке СТО: из заказа + сопоставление по имени с прайсом точки.
+  Future<List<String>> _serviceIdsForRepeatOrder(WidgetRef ref, STO sto, Order order) async {
+    final services = await ref.read(stoServicesProvider(sto.id).future);
+    final raw = <String>{};
+    for (final item in order.itemsForDisplay) {
+      final sid = item.serviceId?.trim();
+      if (sid != null && sid.isNotEmpty) {
+        raw.add(sid);
+        continue;
+      }
+      final n = item.name.split('\n').first.trim().toLowerCase();
+      if (n.isEmpty) continue;
+      STOService? match;
+      for (final s in services) {
+        if (s.name.trim().toLowerCase() == n) {
+          match = s;
+          break;
+        }
+      }
+      if (match == null) {
+        for (final s in services) {
+          final sn = s.name.trim().toLowerCase();
+          if (sn.contains(n) || n.contains(sn)) {
+            match = s;
+            break;
+          }
+        }
+      }
+      if (match != null) raw.add(match.id);
+    }
+    return normalizeClientServiceFilterIds(raw.toList());
+  }
+
+  Future<void> _repeatOrder(BuildContext context, WidgetRef ref, Order order) async {
+    HapticFeedback.lightImpact();
+    try {
+      final sto = await ref.read(stoByIdProvider(order.stoId).future);
+      if (!context.mounted) return;
+      if (sto == null) {
+        final l10n = L10nScope.of(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(l10n.orderLoadStoFailed),
+            backgroundColor: context.palette.error,
+          ),
+        );
+        return;
+      }
+      final cars = ref.read(carsProvider).valueOrNull ?? [];
+      if (cars.any((c) => c.id == order.carId)) {
+        await ref.read(selectedCarIdProvider.notifier).set(order.carId);
+      }
+      final initialIds = await _serviceIdsForRepeatOrder(ref, sto, order);
+      if (!context.mounted) return;
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => STODetailScreen(
+            sto: sto,
+            initialServiceIds: initialIds.isEmpty ? null : initialIds,
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!context.mounted) return;
+      final l10n = L10nScope.of(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(l10n.orderOpenStoFailed),
+          backgroundColor: context.palette.error,
+        ),
+      );
+    }
+  }
+
   void _showCancelDialog(BuildContext context, WidgetRef ref, Order order) {
+    if (!_canClientCancelOrder(order)) return;
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.cardBg,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Отменить запись?', style: TextStyle(color: AppColors.textPrimary)),
-        content: const Text('Эту операцию нельзя отменить.',
-          style: TextStyle(color: AppColors.textSecondary)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Нет', style: TextStyle(color: AppColors.textSecondary)),
-          ),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(ctx);
-              HapticFeedback.mediumImpact();
-              final ok = await ref.read(ordersProvider.notifier).cancelOrder(order.id);
-              if (!context.mounted) return;
-              if (ok) {
-                ref.invalidate(ordersProvider);
-                ref.invalidate(orderByIdProvider(order.id));
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                  content: Text('Запись отменена'),
-                  backgroundColor: AppColors.primary,
-                ));
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                  content: Text('Не удалось отменить запись. Проверьте сеть.'),
-                  backgroundColor: AppColors.error,
-                ));
-              }
-            },
-            child: const Text('Отменить запись', style: TextStyle(color: AppColors.error)),
-          ),
-        ],
-      ),
+      builder: (ctx) {
+        final l10n = L10nScope.of(ctx);
+        return AlertDialog(
+          backgroundColor: context.palette.cardBg,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text(l10n.orderCancelConfirmTitle, style: TextStyle(color: context.palette.textPrimary)),
+          content: Text(l10n.orderCancelCannotUndo,
+            style: TextStyle(color: context.palette.textSecondary)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(l10n.orderNo, style: TextStyle(color: context.palette.textSecondary)),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                HapticFeedback.mediumImpact();
+                final ok = await ref.read(ordersProvider.notifier).cancelOrder(order.id);
+                if (!context.mounted) return;
+                if (ok) {
+                  ref.invalidate(ordersProvider);
+                  ref.invalidate(orderByIdProvider(order.id));
+                  Navigator.pop(context);
+                  final l = L10nScope.of(context);
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    content: Text(l.orderCancelledToast),
+                    backgroundColor: context.palette.primary,
+                  ));
+                } else {
+                  final l = L10nScope.of(context);
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    content: Text(l.orderCancelFailed),
+                    backgroundColor: context.palette.error,
+                  ));
+                }
+              },
+              child: Text(l10n.orderCancelBooking, style: TextStyle(color: context.palette.error)),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -882,11 +955,11 @@ class _WorkItemRow extends StatelessWidget {
                       : Icons.radio_button_unchecked_rounded,
               size: 20,
               color: item.isCompleted
-                  ? AppColors.success
-                  : isRejected ? AppColors.error : AppColors.textTertiary,
+                  ? context.palette.success
+                  : isRejected ? context.palette.error : context.palette.textTertiary,
             ),
           ),
-          const SizedBox(width: 12),
+          SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -895,17 +968,18 @@ class _WorkItemRow extends StatelessWidget {
                   item.name,
                   style: TextStyle(
                     fontSize: 14,
-                    color: isRejected ? AppColors.textTertiary : AppColors.textPrimary,
+                    height: 1.35,
+                    color: isRejected ? context.palette.textTertiary : context.palette.textPrimary,
                     decoration: isRejected ? TextDecoration.lineThrough : null,
                   ),
                 ),
-                const SizedBox(height: 2),
+                SizedBox(height: 2),
                 // Время выполнения
                 Text(
                   '⏱ ${item.durationLabel}',
                   style: TextStyle(
                     fontSize: 12,
-                    color: isRejected ? AppColors.textTertiary : AppColors.textSecondary,
+                    color: isRejected ? context.palette.textTertiary : context.palette.textSecondary,
                   ),
                 ),
               ],
@@ -913,7 +987,7 @@ class _WorkItemRow extends StatelessWidget {
           ),
           Text(Formatters.money(item.priceKopecks), style: TextStyle(
             fontSize: 14, fontWeight: FontWeight.w600,
-            color: isRejected ? AppColors.textTertiary : AppColors.textPrimary,
+            color: isRejected ? context.palette.textTertiary : context.palette.textPrimary,
           )),
         ],
       ),
@@ -933,8 +1007,8 @@ class _TotalRow extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: const TextStyle(fontSize: 14, color: AppColors.textSecondary)),
-          Text(value, style: const TextStyle(fontSize: 14, color: AppColors.textPrimary)),
+          Text(label, style: TextStyle(fontSize: 14, color: context.palette.textSecondary)),
+          Text(value, style: TextStyle(fontSize: 14, color: context.palette.textPrimary)),
         ],
       ),
     );
@@ -954,16 +1028,16 @@ class _SmallAction extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: AppColors.nestedBg,
+          color: context.palette.nestedBg,
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: AppColors.border),
+          border: Border.all(color: context.palette.border),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 14, color: AppColors.primary),
-            const SizedBox(width: 6),
-            Text(label, style: const TextStyle(fontSize: 12, color: AppColors.primary)),
+            Icon(icon, size: 14, color: context.palette.primary),
+            SizedBox(width: 6),
+            Text(label, style: TextStyle(fontSize: 12, color: context.palette.primary)),
           ],
         ),
       ),

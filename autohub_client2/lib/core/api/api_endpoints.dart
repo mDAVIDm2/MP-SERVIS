@@ -1,8 +1,8 @@
 import '../config/app_config.dart';
 
-/// Все API endpoints экосистемы AutoHub.
+/// Все API endpoints экосистемы MP-Servis.
 /// Соответствует спецификации из промта (Часть 4: Backend API).
-/// Базовый URL задаётся в AppConfig (переменная окружения AUTOHUB_API_HOST или defaultValue).
+/// Базовый URL задаётся в AppConfig (переменная окружения MP_SERVIS_API_HOST или defaultValue).
 class ApiEndpoints {
   ApiEndpoints._();
 
@@ -26,8 +26,14 @@ class ApiEndpoints {
   // ═══════════════════════════════════════
   static const String profile = '/profile';
   static const String profileNotificationPreferences = '/profile/notification-preferences';
+  static const String profileClientAppState = '/profile/client-app-state';
   static const String profileAvatar = '/profile/avatar';
   static const String profileDelete = '/profile/delete';
+
+  /// Гараж клиента (сервер: [ClientCarsController]).
+  static const String profileCars = '/profile/cars';
+  static String profileCar(String carId) => '/profile/cars/$carId';
+  static String profileCarPhoto(String carId) => '/profile/cars/$carId/photo';
 
   // ═══════════════════════════════════════
   // CARS
@@ -75,6 +81,8 @@ class ApiEndpoints {
   // ═══════════════════════════════════════
   static const String chats = '/chats';
   static const String chatsSupportOpen = '/chats/support/open';
+  /// Создать/открыть общий чат клиента с СТО (только Client app + телефон в профиле).
+  static const String chatsOpenOrganization = '/chats/open-organization';
   static String chat(String id) => '/chats/$id';
   static String chatMessages(String chatId) => '/chats/$chatId/messages';
   static String chatMessagesWithMedia(String chatId) => '/chats/$chatId/messages/with-media';

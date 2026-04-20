@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/l10n/l10n_scope.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/theme/app_design_system.dart';
 import '../../../../core/theme/app_text_styles.dart';
 import '../../../../core/providers/app_providers.dart';
@@ -22,6 +23,7 @@ import '../../../orders/presentation/screens/all_orders_screen.dart';
 import '../../../orders/presentation/screens/order_detail_screen.dart';
 import '../../../search/presentation/screens/sto_detail_screen.dart';
 import '../screens/add_car_screen.dart';
+import '../screens/car_detail_screen.dart';
 import '../screens/car_photo_detail_screen.dart';
 import '../widgets/car_card.dart';
 import '../widgets/reminder_card.dart';
@@ -65,8 +67,6 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
     list.sort((a, b) => b.dateTime.compareTo(a.dateTime));
     return list;
   }
-
-  int get totalActiveOrders => _ordersForFilter.where((o) => o.status.isActive).length;
 
   int get monthExpenses => _ordersForFilter
       .where((o) => o.status == OrderStatus.done &&
@@ -129,6 +129,7 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = L10nScope.of(context);
     final carsAsync = ref.watch(carsProvider);
     final carsList = carsAsync.valueOrNull ?? [];
     if (carsList.isNotEmpty) {
@@ -140,7 +141,7 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
       });
     }
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       body: SafeArea(
         child: carsAsync.when(
           data: (_) => CustomScrollView(
@@ -164,8 +165,8 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
               const SliverToBoxAdapter(child: SizedBox(height: 24)),
             ],
           ),
-          loading: () => const Center(child: CircularProgressIndicator(color: AppColors.primary)),
-          error: (_, __) => Center(child: Text('Ошибка загрузки', style: TextStyle(color: AppColors.error))),
+          loading: () => Center(child: CircularProgressIndicator(color: context.palette.primary)),
+          error: (_, __) => Center(child: Text(l10n.errorLoading, style: TextStyle(color: context.palette.error))),
         ),
       ),
     );
@@ -176,6 +177,7 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
   }
 
   Widget _buildHeader() {
+    final l10n = L10nScope.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(AppDesignSystem.pagePaddingH, 12, AppDesignSystem.pagePaddingH, 0),
       child: SizedBox(
@@ -195,9 +197,9 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.directions_car_rounded, color: AppColors.textPrimary, size: 24),
-                          const SizedBox(width: 12),
-                          Text('Гараж', style: AppTextStyles.screenTitle),
+                          Icon(Icons.directions_car_rounded, color: context.palette.textPrimary, size: 24),
+                          SizedBox(width: 12),
+                          Text(l10n.garageScreenTitle, style: AppTextStyles.screenTitle(context.palette)),
                         ],
                       ),
                     ),
@@ -211,7 +213,7 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
               onTap: () => Navigator.push(context,
                 MaterialPageRoute(builder: (_) => NotificationsScreen(initialCarId: ref.read(selectedCarIdProvider)))),
             ),
-            const SizedBox(width: 8),
+            SizedBox(width: 8),
             _HeaderButton(
               icon: Icons.add_rounded,
               onTap: _openAddCar,
@@ -280,9 +282,9 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: AppColors.cardBg,
+          color: context.palette.cardBg,
           borderRadius: BorderRadius.circular(AppDesignSystem.radiusSmall),
-          border: Border.all(color: AppColors.strokeGold.withValues(alpha: 0.35)),
+          border: Border.all(color: context.palette.strokeGold.withValues(alpha: 0.35)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -290,27 +292,27 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.notifications_active_outlined, color: AppColors.gold1, size: 22),
-                const SizedBox(width: 10),
+                Icon(Icons.notifications_active_outlined, color: context.palette.gold1, size: 22),
+                SizedBox(width: 10),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
+                      Text(
                         'Настроить напоминания о ТО?',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w700,
-                          color: AppColors.textPrimary,
+                          color: context.palette.textPrimary,
                         ),
                       ),
-                      const SizedBox(height: 6),
+                      SizedBox(height: 6),
                       Text(
                         'Для $name можно задать интервалы замены масла и других работ — удобно следить за обслуживанием.',
                         style: TextStyle(
                           fontSize: 13,
                           height: 1.35,
-                          color: AppColors.textSecondary,
+                          color: context.palette.textSecondary,
                         ),
                       ),
                     ],
@@ -320,7 +322,7 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
                   visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                  icon: const Icon(Icons.close_rounded, size: 20, color: AppColors.textTertiary),
+                  icon: Icon(Icons.close_rounded, size: 20, color: context.palette.textTertiary),
                   onPressed: () {
                     final cid = id;
                     ref.read(garageMaintenanceOnboardingSeenProvider.notifier).markSeen(cid);
@@ -330,7 +332,7 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
                 ),
               ],
             ),
-            const SizedBox(height: 14),
+            SizedBox(height: 14),
             Row(
               children: [
                 Expanded(
@@ -339,15 +341,15 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
                       ref.read(garageMaintenanceOnboardingSeenProvider.notifier).markSeen(id);
                       setState(() => _remindersOnboardingCarId = null);
                     },
-                    child: const Text('Позже'),
+                    child: Text('Позже'),
                   ),
                 ),
-                const SizedBox(width: 10),
+                SizedBox(width: 10),
                 Expanded(
                   flex: 2,
                   child: FilledButton(
                     onPressed: _openMaintenanceFromOnboardingBanner,
-                    child: const Text('Настроить'),
+                    child: Text('Настроить'),
                   ),
                 ),
               ],
@@ -388,7 +390,7 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
     return Column(
       children: [
         SizedBox(
-          height: 200,
+          height: 180,
           child: PageView.builder(
             controller: _carPageController,
             physics: const BouncingScrollPhysics(),
@@ -404,10 +406,18 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
               child: CarCard(
                 car: cars[i],
                 unreadNotificationsCount: ref.watch(unreadByCarProvider).whenOrNull(data: (m) => m[cars[i].id] ?? 0) ?? 0,
+                onFixReferenceTap: cars[i].hasManualReferencePending
+                    ? () => Navigator.push<void>(
+                          context,
+                          MaterialPageRoute<void>(
+                            builder: (_) => AddCarScreen(editCarId: cars[i].id),
+                          ),
+                        )
+                    : null,
                 onCardTap: () => Navigator.push<void>(
                   context,
                   MaterialPageRoute<void>(
-                    builder: (_) => CarPhotoDetailScreen(carId: cars[i].id),
+                    builder: (_) => CarDetailScreen(carId: cars[i].id),
                   ),
                 ),
                 onImageTap: () => Navigator.push<void>(
@@ -441,7 +451,7 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
                 height: i == _currentCarIndex ? 8 : 6,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: i == _currentCarIndex ? AppColors.gold1 : AppColors.textMuted,
+                  color: i == _currentCarIndex ? context.palette.gold1 : context.palette.textMuted,
                 ),
               )),
             ),
@@ -454,38 +464,40 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
     final last = lastOrder;
     return Padding(
       padding: const EdgeInsets.fromLTRB(AppDesignSystem.pagePaddingH, AppDesignSystem.blockSpacing, AppDesignSystem.pagePaddingH, 0),
-      child: Row(
-        children: [
-          StatBlock(
-            value: '${_ordersForFilter.length}',
-            label: 'всего операций',
-            onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const AllOrdersScreen())),
-          ),
-          const SizedBox(width: 10),
-          StatBlock(value: Formatters.money(monthExpenses), label: 'за месяц'),
-          const SizedBox(width: 10),
-          StatBlock(
-            value: last != null ? last.status.shortLabel : '—',
-            label: 'последний заказ',
-            subtitle: last != null ? '#${last.orderNumber}' : null,
-            dotColor: last?.status.color,
-            onTap: last != null
-                ? () => pushCupertino(context, OrderDetailScreen(order: last))
-                : null,
-          ),
-        ],
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            StatBlock(
+              value: '${_ordersForFilter.length}',
+              label: 'всего\nопераций',
+              onTap: () => Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const AllOrdersScreen())),
+            ),
+            SizedBox(width: 10),
+            StatBlock(value: Formatters.money(monthExpenses), label: 'за\nмесяц'),
+            SizedBox(width: 10),
+            StatBlock(
+              value: last != null ? last.status.shortLabel : '—',
+              // Номер заказа в подписи, без отдельной строки — высота как у блоков 1–2.
+              label: last != null ? 'последний\nзаказ · #${last.orderNumber}' : 'последний\nзаказ',
+              dotColor: last?.status.color,
+              onTap: last != null ? () => pushCupertino(context, OrderDetailScreen(order: last)) : null,
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildReminders() {
+    final l10n = L10nScope.of(context);
     final reminders = currentCar.reminders.where((r) => !r.isDismissed).toList()
       ..sort((a, b) => a.status.index.compareTo(b.status.index));
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SectionHeader(title: 'Рекомендации по обслуживанию'),
+        SectionHeader(title: l10n.maintenanceRecommendations),
         ...reminders.map((r) => Padding(
           padding: const EdgeInsets.fromLTRB(AppDesignSystem.pagePaddingH, 0, AppDesignSystem.pagePaddingH, 10),
           child: ReminderCard(reminder: r),
@@ -495,14 +507,15 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
   }
 
   Widget _buildRecentOrders() {
+    final l10n = L10nScope.of(context);
     final orders = recentOrders.take(5).toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SectionHeader(
-          title: 'Последняя активность',
+          title: l10n.lastActivity,
           compact: true,
-          actionText: 'Показать все →',
+          actionText: l10n.showAllArrow,
           onAction: () => Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AllOrdersScreen())),
         ),
@@ -513,12 +526,12 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
               padding: const EdgeInsets.symmetric(vertical: 24),
               child: Row(
                 children: [
-                  Icon(Icons.receipt_long_rounded, size: 20, color: AppColors.textTertiary),
-                  const SizedBox(width: 10),
+                  Icon(Icons.receipt_long_rounded, size: 20, color: context.palette.textTertiary),
+                  SizedBox(width: 10),
                   Text(
-                    'Нет заказов по этому автомобилю',
+                    l10n.noOrdersForThisCar,
                     style: TextStyle(
-                      color: AppColors.textSecondary,
+                      color: context.palette.textSecondary,
                       fontSize: 14,
                     ),
                   ),
@@ -599,22 +612,22 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: AppDesignSystem.pagePaddingH),
             itemCount: recommended.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 12),
+            separatorBuilder: (_, __) => SizedBox(width: 12),
             itemBuilder: (_, i) {
               final sto = recommended[i];
               return GestureDetector(
-                onTap: () => pushCupertino(context, STODetailScreen(sto: sto)),
+                onTap: () => pushStoDetailScreen(context, STODetailScreen(sto: sto)),
                 child: Container(
                   width: 160,
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    gradient: const LinearGradient(
+                    gradient: LinearGradient(
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                       colors: [Color(0xFF1A191E), Color(0xFF111115)],
                     ),
                     borderRadius: BorderRadius.circular(AppDesignSystem.radiusSmall),
-                    border: Border.all(color: AppColors.strokeGold.withValues(alpha: 0.14)),
+                    border: Border.all(color: context.palette.strokeGold.withValues(alpha: 0.14)),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -624,40 +637,40 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
                         decoration: BoxDecoration(
                           color: Colors.white.withValues(alpha: 0.08),
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: AppColors.strokeSoft),
+                          border: Border.all(color: context.palette.strokeSoft),
                         ),
                         child: Center(
-                          child: Text(sto.name[0], style: const TextStyle(
-                            fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.gold1,
+                          child: Text(sto.name[0], style: TextStyle(
+                            fontSize: 20, fontWeight: FontWeight.w700, color: context.palette.gold1,
                           )),
                         ),
                       ),
-                      const SizedBox(height: 8),
+                      SizedBox(height: 8),
                       Text(
                         sto.name,
-                        style: const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textPrimary,
+                        style: TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w600, color: context.palette.textPrimary,
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
-                      const SizedBox(height: 4),
+                      SizedBox(height: 4),
                       Row(
                         children: [
-                          const Icon(Icons.star_rounded, size: 14, color: AppColors.gold1),
-                          const SizedBox(width: 2),
-                          Text(Formatters.rating(sto.rating), style: const TextStyle(
-                            fontSize: 14, color: AppColors.textPrimary)),
+                          Icon(Icons.star_rounded, size: 14, color: context.palette.gold1),
+                          SizedBox(width: 2),
+                          Text(Formatters.rating(sto.rating), style: TextStyle(
+                            fontSize: 14, color: context.palette.textPrimary)),
                         ],
                       ),
                       if (sto.distanceKm != null) ...[
-                        const SizedBox(height: 2),
-                        Text(Formatters.distance(sto.distanceKm!), style: const TextStyle(
-                          fontSize: 12, color: AppColors.textSecondary)),
+                        SizedBox(height: 2),
+                        Text(Formatters.distance(sto.distanceKm!), style: TextStyle(
+                          fontSize: 12, color: context.palette.textSecondary)),
                       ],
                       const Spacer(),
-                      const Text('Записаться →', style: TextStyle(
-                        fontSize: 12, fontWeight: FontWeight.w500, color: AppColors.gold1,
+                      Text('Записаться →', style: TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w500, color: context.palette.gold1,
                       )),
                     ],
                   ),
@@ -684,22 +697,22 @@ class _HeaderButton extends StatelessWidget {
       child: Container(
         width: 40, height: 40,
         decoration: BoxDecoration(
-          color: AppColors.bgCard,
+          color: context.palette.bgCard,
           borderRadius: BorderRadius.circular(AppDesignSystem.radiusSmall),
-          border: Border.all(color: AppColors.strokeSoft),
+          border: Border.all(color: context.palette.strokeSoft),
         ),
         child: Stack(
           alignment: Alignment.center,
           children: [
-            Icon(icon, size: 22, color: AppColors.textPrimary),
+            Icon(icon, size: 22, color: context.palette.textPrimary),
             if (badgeCount > 0)
               Positioned(
                 right: 6, top: 6,
                 child: Container(
                   width: 16, height: 16,
-                  decoration: const BoxDecoration(color: AppColors.error, shape: BoxShape.circle),
+                  decoration: BoxDecoration(color: context.palette.error, shape: BoxShape.circle),
                   child: Center(
-                    child: Text('$badgeCount', style: const TextStyle(
+                    child: Text('$badgeCount', style: TextStyle(
                       color: Colors.white, fontSize: 9, fontWeight: FontWeight.w600,
                     )),
                   ),

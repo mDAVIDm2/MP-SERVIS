@@ -34,6 +34,10 @@ __decorate([
     __metadata("design:type", String)
 ], Order.prototype, "carInfo", void 0);
 __decorate([
+    (0, typeorm_1.Column)({ name: 'car_photo_url', type: 'varchar', length: 1024, nullable: true }),
+    __metadata("design:type", Object)
+], Order.prototype, "carPhotoUrl", void 0);
+__decorate([
     (0, typeorm_1.Column)({ name: 'vin', type: 'varchar', length: 32, nullable: true }),
     __metadata("design:type", Object)
 ], Order.prototype, "vin", void 0);

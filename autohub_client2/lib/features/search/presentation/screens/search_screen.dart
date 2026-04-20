@@ -7,26 +7,107 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:map_launcher/map_launcher.dart';
 import 'package:url_launcher/url_launcher.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/auth/auth_provider.dart' show sharedPreferencesProvider;
+import '../../../../core/catalog/client_catalog_service_ids.dart';
+import '../../../../core/l10n/app_l10n.dart';
+import '../../../../core/l10n/l10n_scope.dart';
+import '../../../../core/map/in_app_map_tiles.dart';
+import '../../../../core/settings/map_provider_setting.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/theme/app_text_styles.dart';
 import '../../../../core/providers/app_providers.dart';
 import '../../../../core/settings/filter_by_car_setting.dart';
 import '../../../../core/settings/favorite_sto_ids_provider.dart';
-import '../../../../core/settings/preferred_directions_map_provider.dart';
 import '../../../../core/settings/sto_reviews_provider.dart';
 import '../../../../shared/models/car_model.dart';
 import '../../../../shared/models/external_poi.dart';
 import '../../../../core/navigation/app_routes.dart';
+import '../../../../core/navigation/driving_route_launcher.dart';
 import '../../../../core/navigation/shell_navigation_provider.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../shared/models/sto_model.dart';
-import '../../../../shared/organization_ui_copy.dart';
 import '../../data/external_poi_cache.dart';
 import '../../data/overpass_poi_service.dart';
+import '../widgets/location_preview_card.dart';
 import '../widgets/sto_osm_map.dart';
 import 'sto_detail_screen.dart';
+
+/// Главный ряд фильтров: один пункт «Мойка»; подтипы мойки — [WashSubtype] и [_washExternalMatchUnion].
+List<({String? kind, String label})> _mainOrgKindChips(AppL10n l10n) => [
+      (kind: null, label: l10n.searchFilterAll),
+      (kind: 'sto', label: l10n.searchKindSto),
+      (kind: 'car_wash', label: l10n.searchKindCarWashGroup),
+      (kind: 'detailing', label: l10n.searchKindDetailing),
+      (kind: 'tire_service', label: l10n.searchKindTire),
+      (kind: 'body_shop', label: l10n.searchKindBody),
+      (kind: 'car_audio', label: l10n.searchKindCarAudio),
+      (kind: 'other', label: l10n.searchKindOther),
+    ];
+
+/// Подтипы мойки (доп. чипы при выбранной «Мойка»).
+enum WashSubtype {
+  classic,
+  selfService,
+  robot,
+}
+
+const Set<String> _washMatchClassic = {'Мойка (классическая)', 'Мойка'};
+const Set<String> _washMatchSelf = {'Мойка (самообслуживание)'};
+const Set<String> _washMatchRobot = {'Мойка (робот)'};
+
+Set<String> _washExternalMatchUnion(Set<WashSubtype> selected) {
+  final out = <String>{};
+  if (selected.contains(WashSubtype.classic)) out.addAll(_washMatchClassic);
+  if (selected.contains(WashSubtype.selfService)) out.addAll(_washMatchSelf);
+  if (selected.contains(WashSubtype.robot)) out.addAll(_washMatchRobot);
+  return out;
+}
+
+Set<String>? _externalMatchForMainKind(String? kind) {
+  switch (kind) {
+    case 'sto':
+      return {'Автосервис'};
+    case 'detailing':
+      return {'Детейлинг'};
+    case 'tire_service':
+      return {'Шиномонтаж'};
+    case 'body_shop':
+      return {'Кузовной'};
+    case 'car_audio':
+      return {'Автозвук'};
+    case 'other':
+      return <String>{};
+    default:
+      return null;
+  }
+}
+
+/// Расширяет видимый bbox для Overpass: чуть больше радиус, по долготе (в стороны) в 2 раза шире, чем по широте (север–юг).
+({double minLat, double minLng, double maxLat, double maxLng}) _expandBoundsForExternalFetch(
+  double minLat,
+  double minLng,
+  double maxLat,
+  double maxLng,
+) {
+  final cLat = (minLat + maxLat) / 2;
+  final cLng = (minLng + maxLng) / 2;
+  final halfLatVis = (maxLat - minLat) / 2;
+  final halfLngVis = (maxLng - minLng) / 2;
+  const minHalfLat = 0.055;
+  const maxHalfLat = 0.125;
+  // Запас по долготе к запасу по широте (в стороны шире), соотношение 2:1.
+  const lngPerLat = 2.0;
+  const maxHalfLng = 0.26;
+  var halfLat = (halfLatVis * 2.85).clamp(minHalfLat, maxHalfLat);
+  var halfLng = (lngPerLat * halfLat).clamp(math.max(halfLngVis * 2.5, lngPerLat * minHalfLat * 0.9), maxHalfLng);
+  return (
+    minLat: (cLat - halfLat).clamp(-85.0, 85.0),
+    minLng: (cLng - halfLng).clamp(-180.0, 180.0),
+    maxLat: (cLat + halfLat).clamp(-85.0, 85.0),
+    maxLng: (cLng + halfLng).clamp(-180.0, 180.0),
+  );
+}
 
 /// Расстояние между двумя точками в км (формула гаверсинусов).
 double _distanceKm(double lat1, double lon1, double lat2, double lon2) {
@@ -53,12 +134,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     with TickerProviderStateMixin {
   bool _isMapView = true;
   int _selectedFilter = 0;
+  /// При фильтре «Мойка»: какие подтипы внешних POI показывать (мультивыбор; по умолчанию — классика).
+  Set<WashSubtype> _washSubtypesSelected = {WashSubtype.classic};
   final _searchController = TextEditingController();
+  final FocusNode _searchFocus = FocusNode();
   Position? _userPosition;
   bool _locationRequested = false;
   /// При включённой «Сортировать по машине» — false = только точки по выбранной машине, true = показать все.
   bool _showAllOrganizations = false;
-  /// Показывать ли на карте недобавленные организации (красные метки).
+  /// Показывать ли на карте недобавленные организации (цветные капли по типу).
   bool _showExternalPOIsOnMap = false;
   /// Фильтр по расстоянию (км), null — не ограничивать. Применяется из модалки «Фильтры».
   double? _maxDistanceKm;
@@ -75,58 +159,65 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   bool _showMyLocationButton = false;
   bool _locationWaitTimerStarted = false;
 
-  /// Внешние POI (красные метки). Загружаются по видимой области из кэша или Overpass. При 429/ошибке список не очищается.
+  /// Внешние POI (непартнёрские). Загружаются по видимой области из кэша или Overpass. При 429/ошибке список не очищается.
   List<ExternalPOI> _externalPOIs = [];
   bool _externalPOIsLoading = false;
   Timer? _debounceTimer;
   final _overpassPoi = OverpassPoiService();
   final _externalPoiCache = ExternalPOICache();
+  /// Счётчик запросов внешних POI: ответы от устаревших запросов не трогают UI.
+  int _externalFetchGeneration = 0;
+  Timer? _externalSessionSaveDebounce;
+
+  void _scheduleSaveExternalSession() {
+    _externalSessionSaveDebounce?.cancel();
+    _externalSessionSaveDebounce = Timer(const Duration(milliseconds: 800), () async {
+      if (!mounted || !_showExternalPOIsOnMap || _externalPOIs.isEmpty) return;
+      final prefs = await ref.read(sharedPreferencesProvider.future);
+      await ExternalPoiSessionStore.save(prefs, _externalPOIs);
+    });
+  }
 
   /// Текущий зум карты для масштабирования размера маркеров (меньше при отдалении).
   double _currentZoom = 14.0;
   /// Текущий центр карты (для плавной анимации к выбранной точке).
   LatLng? _lastMapCenter;
 
-  /// Чипы типа организации — совпадают с `business_kind` на бэкенде (фильтр уходит в API).
-  static const List<({String? kind, String label})> _orgKindChips = [
-    (kind: null, label: 'Все'),
-    (kind: 'sto', label: 'Автосервис'),
-    (kind: 'car_wash', label: 'Мойка'),
-    (kind: 'detailing', label: 'Детейлинг'),
-    (kind: 'tire_service', label: 'Шиномонтаж'),
-    (kind: 'body_shop', label: 'Кузовной'),
-    (kind: 'car_audio', label: 'Автозвук'),
-    (kind: 'glass', label: 'Стёкла'),
-    (kind: 'ev_service', label: 'EV'),
-    (kind: 'tuning', label: 'Тюнинг'),
-    (kind: 'other', label: 'Другое'),
-  ];
-
   /// Базовый список точек из API/поиска; затем применяются локальные фильтры (машина, рейтинг, расстояние, услуги).
   /// [skipCarFilter] — чтобы понять, скрыла ли пустой список именно привязка к марке авто.
   List<STO> _getFilteredSTOs(WidgetRef ref, List<STO> baseList, {bool skipCarFilter = false}) {
     var list = List<STO>.from(baseList);
-    if (_selectedServiceIds.isNotEmpty) {
-      list = list.where((s) => _selectedServiceIds.every((id) => s.serviceIds.contains(id))).toList();
+    final serviceFilterIds = normalizeClientServiceFilterIds(_selectedServiceIds);
+    if (serviceFilterIds.isNotEmpty) {
+      list = list.where((s) => stoMatchesAllCatalogServiceFilters(s, serviceFilterIds)).toList();
       list = list.map((s) {
-        int price = 0;
-        int duration = 0;
-        for (final svc in s.services) {
-          if (_selectedServiceIds.contains(svc.id)) {
-            price += svc.priceKopecks;
-            duration += svc.durationMinutes;
-          }
+        var price = 0;
+        var duration = 0;
+        for (final fid in serviceFilterIds) {
+          price += priceKopecksForCatalogFilterLine(s, fid);
+          duration += durationMinutesForCatalogFilterLine(s, fid);
         }
         return s.copyWith(totalSelectedPriceKopecks: price, totalSelectedDurationMinutes: duration);
       }).toList();
     }
     final query = _searchController.text.trim().toLowerCase();
     if (query.isNotEmpty) {
-      list = list.where((s) =>
-        s.name.toLowerCase().contains(query) ||
-        s.address.toLowerCase().contains(query) ||
-        s.specializations.any((sp) => sp.toLowerCase().contains(query))
-      ).toList();
+      final catData = ref.watch(catalogServicesProvider(null)).valueOrNull;
+      list = list.where((s) {
+        if (s.name.toLowerCase().contains(query) ||
+            s.address.toLowerCase().contains(query) ||
+            s.specializations.any((sp) => sp.toLowerCase().contains(query))) {
+          return true;
+        }
+        if (catData == null || catData.items.isEmpty) return false;
+        final matchingIds = catData.items
+            .where((i) => i.name.toLowerCase().contains(query))
+            .map((i) => i.id)
+            .toList();
+        if (matchingIds.isEmpty) return false;
+        final offered = effectiveOfferedServiceIds(s);
+        return matchingIds.any((id) => offered.contains(id));
+      }).toList();
     }
     final filterByCar = ref.watch(filterByCarSettingProvider);
     final selectedId = ref.watch(selectedCarIdProvider);
@@ -157,21 +248,24 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   void initState() {
     super.initState();
     _searchController.addListener(() => setState(() {}));
+    _searchFocus.addListener(() => setState(() {}));
   }
 
-  String? get _selectedOrgKindForCatalog {
-    final i = _selectedFilter.clamp(0, _orgKindChips.length - 1);
-    return _orgKindChips[i].kind;
+  String? _catalogOrgKind(AppL10n l10n) {
+    final chips = _mainOrgKindChips(l10n);
+    final i = _selectedFilter.clamp(0, chips.length - 1);
+    return chips[i].kind;
   }
 
   Future<void> _showServiceFilterSheet(BuildContext context, WidgetRef ref) async {
-    final catalog = await ref.read(catalogServicesProvider(_selectedOrgKindForCatalog).future);
+    final l10n = L10nScope.of(context);
+    final catalog = await ref.read(catalogServicesProvider(_catalogOrgKind(l10n)).future);
     if (!mounted) return;
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: AppColors.cardBg,
+      backgroundColor: context.palette.cardBg,
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       builder: (ctx) => DraggableScrollableSheet(
         initialChildSize: 0.7,
         minChildSize: 0.4,
@@ -182,7 +276,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           items: catalog.items,
           initialSelectedIds: List.from(_selectedServiceIds),
           onApply: (ids) {
-            setState(() => _selectedServiceIds = ids);
+            setState(() => _selectedServiceIds = normalizeClientServiceFilterIds(ids));
             Navigator.pop(ctx);
           },
           onReset: () {
@@ -253,12 +347,16 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   void dispose() {
     _locationWaitTimer?.cancel();
     _debounceTimer?.cancel();
+    _externalSessionSaveDebounce?.cancel();
+    _searchFocus.dispose();
     _searchController.dispose();
     super.dispose();
   }
 
   /// Максимум POI в сессии, чтобы не раздувать память при долгом перемещении по карте.
-  static const int _maxSessionPOIs = 800;
+  static const int _maxSessionPOIs = 1500;
+  /// После этого времени кэш на диске ещё валиден, но фоном подтягиваем свежие данные Overpass.
+  static const Duration _externalCacheSoftRefreshAfter = Duration(hours: 6);
 
   /// Объединяет уже загруженные POI с новыми по id (без дубликатов). Ограничение по количеству.
   static List<ExternalPOI> _mergeSessionPOIs(List<ExternalPOI> existing, List<ExternalPOI> incoming) {
@@ -272,32 +370,107 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     return merged;
   }
 
-  /// Загрузить внешние организации по заданным границам карты.
-  /// Кэш + Overpass. Результаты мержатся в сессионный список.
-  Future<void> _fetchExternalPOIsForBounds(double minLat, double minLng, double maxLat, double maxLng) async {
-    if (!mounted) return;
+  /// Фоновое обновление области без спиннера (после показа кэша).
+  Future<void> _refreshExternalFromNetworkQuiet(
+    ({double minLat, double minLng, double maxLat, double maxLng}) ex,
+  ) async {
     try {
-      List<ExternalPOI> list = await _externalPoiCache.get(minLat, minLng, maxLat, maxLng) ?? [];
+      final list = await _overpassPoi.searchInBounds(
+        minLat: ex.minLat,
+        minLng: ex.minLng,
+        maxLat: ex.maxLat,
+        maxLng: ex.maxLng,
+      );
+      if (list.isEmpty) return;
+      await _externalPoiCache.put(ex.minLat, ex.minLng, ex.maxLat, ex.maxLng, list);
+      if (!mounted || !_showExternalPOIsOnMap) return;
+      setState(() {
+        _externalPOIs = _mergeSessionPOIs(_externalPOIs, list);
+      });
+      _scheduleSaveExternalSession();
+    } catch (_) {}
+  }
 
-      if (list.isNotEmpty) {
-        if (mounted) setState(() {
-          _externalPOIs = _mergeSessionPOIs(_externalPOIs, list);
-          _externalPOIsLoading = false;
-        });
+  static bool _poiInExpandedBounds(ExternalPOI p, ({double minLat, double minLng, double maxLat, double maxLng}) ex) =>
+      p.lat >= ex.minLat && p.lat <= ex.maxLat && p.lng >= ex.minLng && p.lng <= ex.maxLng;
+
+  /// Загрузить внешние организации по заданным границам карты.
+  /// Сначала диск/память (точный bbox, пересечение областей, сессия), затем при необходимости сеть.
+  Future<void> _fetchExternalPOIsForBounds(double minLat, double minLng, double maxLat, double maxLng) async {
+    if (!mounted || !_showExternalPOIsOnMap) return;
+
+    final gen = ++_externalFetchGeneration;
+    final ex = _expandBoundsForExternalFetch(minLat, minLng, maxLat, maxLng);
+
+    try {
+      await _externalPoiCache.ensureLoaded();
+
+      if (_externalPOIs.isEmpty) {
+        final prefs = await ref.read(sharedPreferencesProvider.future);
+        final snap = await ExternalPoiSessionStore.load(prefs);
+        if (snap != null && snap.isNotEmpty) {
+          final inView = snap.where((p) => _poiInExpandedBounds(p, ex)).toList();
+          if (inView.isNotEmpty && mounted && gen == _externalFetchGeneration) {
+            setState(() {
+              _externalPOIs = _mergeSessionPOIs(_externalPOIs, inView);
+              _externalPOIsLoading = false;
+            });
+            _scheduleSaveExternalSession();
+          }
+        }
+      }
+
+      final hit = await _externalPoiCache.lookup(ex.minLat, ex.minLng, ex.maxLat, ex.maxLng);
+
+      if (hit != null) {
+        if (mounted && gen == _externalFetchGeneration) {
+          setState(() {
+            _externalPOIs = _mergeSessionPOIs(_externalPOIs, hit.pois);
+            _externalPOIsLoading = false;
+          });
+          _scheduleSaveExternalSession();
+        }
+        if (DateTime.now().difference(hit.fetchedAt) > _externalCacheSoftRefreshAfter) {
+          unawaited(_refreshExternalFromNetworkQuiet(ex));
+        }
         return;
       }
 
-      if (mounted) setState(() => _externalPOIsLoading = true);
+      final mergedHit = await _externalPoiCache.lookupMergeOverlapping(
+        ex.minLat,
+        ex.minLng,
+        ex.maxLat,
+        ex.maxLng,
+      );
+      if (mergedHit != null && mergedHit.pois.isNotEmpty) {
+        if (mounted && gen == _externalFetchGeneration) {
+          setState(() {
+            _externalPOIs = _mergeSessionPOIs(_externalPOIs, mergedHit.pois);
+            _externalPOIsLoading = false;
+          });
+          _scheduleSaveExternalSession();
+        }
+        if (DateTime.now().difference(mergedHit.fetchedAt) > _externalCacheSoftRefreshAfter) {
+          unawaited(_refreshExternalFromNetworkQuiet(ex));
+        }
+        return;
+      }
 
-      list = await _overpassPoi.searchInBounds(
-        minLat: minLat,
-        minLng: minLng,
-        maxLat: maxLat,
-        maxLng: maxLng,
+      if (mounted && gen == _externalFetchGeneration) {
+        setState(() => _externalPOIsLoading = _externalPOIs.isEmpty);
+      }
+
+      final list = await _overpassPoi.searchInBounds(
+        minLat: ex.minLat,
+        minLng: ex.minLng,
+        maxLat: ex.maxLat,
+        maxLng: ex.maxLng,
       );
 
+      if (gen != _externalFetchGeneration) return;
+
       if (list.isNotEmpty) {
-        await _externalPoiCache.put(minLat, minLng, maxLat, maxLng, list);
+        await _externalPoiCache.put(ex.minLat, ex.minLng, ex.maxLat, ex.maxLng, list);
       }
 
       if (mounted) {
@@ -305,23 +478,51 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           if (list.isNotEmpty) _externalPOIs = _mergeSessionPOIs(_externalPOIs, list);
           _externalPOIsLoading = false;
         });
+        if (list.isNotEmpty) _scheduleSaveExternalSession();
       }
     } catch (_) {
-      if (mounted) setState(() => _externalPOIsLoading = false);
+      if (mounted && gen == _externalFetchGeneration) {
+        setState(() => _externalPOIsLoading = false);
+      }
     }
   }
 
   /// Внешние POI для карты с учётом выбранного фильтра категории.
-  List<ExternalPOI> _getFilteredExternalPOIs() {
-    if (_selectedFilter == 0) return _externalPOIs;
-    final idx = _selectedFilter.clamp(0, _orgKindChips.length - 1);
-    final label = _orgKindChips[idx].label;
-    return _externalPOIs.where((p) => p.types.contains(label)).toList();
+  List<ExternalPOI> _getFilteredExternalPOIs(AppL10n l10n) {
+    final chips = _mainOrgKindChips(l10n);
+    final idx = _selectedFilter.clamp(0, chips.length - 1);
+    final kind = chips[idx].kind;
+    if (kind == null) return _externalPOIs;
+    if (kind == 'car_wash') {
+      final union = _washExternalMatchUnion(_washSubtypesSelected);
+      if (union.isEmpty) return [];
+      return _externalPOIs.where((p) => p.types.any(union.contains)).toList();
+    }
+    final match = _externalMatchForMainKind(kind);
+    if (match == null) return _externalPOIs;
+    if (match.isEmpty) return [];
+    return _externalPOIs.where((p) => p.types.any(match.contains)).toList();
+  }
+
+  /// Повторная загрузка внешних POI по текущему центру/зуму (после включения слоя «непартнёрские»).
+  void _refetchExternalPoisForCurrentMapView() {
+    final center = _lastMapCenter;
+    if (center == null) return;
+    final zoom = _currentZoom;
+    final scale = 180 / (math.pow(2, zoom) * 256);
+    final dLat = 0.5 * scale * 256;
+    final dLng = scale * 256;
+    unawaited(_fetchExternalPOIsForBounds(
+      center.latitude - dLat,
+      center.longitude - dLng,
+      center.latitude + dLat,
+      center.longitude + dLng,
+    ));
   }
 
   /// Внешние POI для отображения на карте: без дубликатов партнёров (в радиусе 50 м).
-  List<ExternalPOI> _getExternalPOIsForMap(List<STO> withCoords) {
-    return _getFilteredExternalPOIs()
+  List<ExternalPOI> _getExternalPOIsForMap(List<STO> withCoords, AppL10n l10n) {
+    return _getFilteredExternalPOIs(l10n)
         .where((p) => !withCoords.any((s) =>
             _distanceKm(p.lat, p.lng, s.latitude!, s.longitude!) < 0.05))
         .toList();
@@ -339,6 +540,23 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
 
     if (startCenter.latitude == target.latitude && startCenter.longitude == target.longitude && (startZoom - targetZoom).abs() < 0.2) {
       onComplete?.call();
+      return;
+    }
+
+    // Системные анимации / тикеры выключены: не крутим AnimationController (иначе карточка и карта расходятся по времени).
+    if (MediaQuery.of(context).disableAnimations || !TickerMode.of(context)) {
+      controller.move(target, targetZoom);
+      if (mounted) {
+        setState(() {
+          _lastMapCenter = target;
+          _currentZoom = targetZoom;
+        });
+        if (onComplete != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) onComplete();
+          });
+        }
+      }
       return;
     }
 
@@ -388,13 +606,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
 
   /// Плавно смещаем карту к точке, затем приближаем и открываем экран детали (общая длительность ~2–2.5 с).
   void _animateToStoAndOpen(STO sto) {
-    final initialIds = _selectedServiceIds.isNotEmpty ? _selectedServiceIds : null;
+    final initialIds = _selectedServiceIds.isNotEmpty
+        ? normalizeClientServiceFilterIds(_selectedServiceIds)
+        : null;
     if (sto.latitude == null || sto.longitude == null) {
-      pushCupertino(context, STODetailScreen(sto: sto, initialServiceIds: initialIds));
+      pushStoDetailScreen(context, STODetailScreen(sto: sto, initialServiceIds: initialIds));
       return;
     }
     if (!_mapReady || _osmMapController == null) {
-      pushCupertino(context, STODetailScreen(sto: sto, initialServiceIds: initialIds));
+      pushStoDetailScreen(context, STODetailScreen(sto: sto, initialServiceIds: initialIds));
       return;
     }
     final target = LatLng(sto.latitude!, sto.longitude!);
@@ -403,12 +623,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     final startZoom = _currentZoom;
 
     if (startCenter.latitude == target.latitude && startCenter.longitude == target.longitude && (startZoom - targetZoom).abs() < 0.2) {
-      pushCupertino(context, STODetailScreen(sto: sto, initialServiceIds: initialIds));
+      pushStoDetailScreen(context, STODetailScreen(sto: sto, initialServiceIds: initialIds));
       return;
     }
 
     _animateMapToCenterAndZoom(target, targetZoom, onComplete: () {
-      if (mounted) pushCupertino(context, STODetailScreen(sto: sto, initialServiceIds: initialIds));
+      if (mounted) pushStoDetailScreen(context, STODetailScreen(sto: sto, initialServiceIds: initialIds));
     });
   }
 
@@ -416,7 +636,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   Widget build(BuildContext context) {
     ref.listen<List<String>?>(searchServiceFilterBootstrapProvider, (prev, next) {
       if (next == null || next.isEmpty) return;
-      final copy = List<String>.from(next);
+      final copy = normalizeClientServiceFilterIds(next);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         ref.read(searchServiceFilterBootstrapProvider.notifier).state = null;
@@ -424,59 +644,142 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
       });
     });
 
+    final l10n = L10nScope.of(context);
+    final orgChips = _mainOrgKindChips(l10n);
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       body: SafeArea(
         child: Column(
           children: [
             // Header
-            const Padding(
+            Padding(
               padding: EdgeInsets.fromLTRB(20, 12, 20, 0),
               child: SizedBox(
                 height: 56,
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: Text('Поиск сервиса', style: AppTextStyles.screenTitle),
+                  child: Text(l10n.searchScreenTitle, style: AppTextStyles.screenTitle(context.palette)),
                 ),
               ),
             ),
-            // Строка поиска
+            // Строка поиска + подсказки услуг из каталога (до 2 строк, дальше прокрутка)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-              child: Container(
-                height: 48,
-                decoration: BoxDecoration(
-                  color: AppColors.cardBg,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.border),
-                ),
-                child: Row(
-                  children: [
-                    const SizedBox(width: 14),
-                    const Icon(Icons.search_rounded, size: 22, color: AppColors.textSecondary),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: TextField(
-                        controller: _searchController,
-                        style: const TextStyle(fontSize: 14, color: AppColors.textPrimary),
-                        decoration: const InputDecoration(
-                          hintText: 'Название, адрес или услуга',
-                          hintStyle: TextStyle(color: AppColors.textPlaceholder, fontSize: 14),
-                          border: InputBorder.none,
-                          contentPadding: EdgeInsets.zero,
-                          isDense: true,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: context.palette.cardBg,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: context.palette.border),
+                    ),
+                    child: Row(
+                      children: [
+                        SizedBox(width: 14),
+                        Icon(Icons.search_rounded, size: 22, color: context.palette.textSecondary),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: TextField(
+                            controller: _searchController,
+                            focusNode: _searchFocus,
+                            style: TextStyle(fontSize: 14, color: context.palette.textPrimary),
+                            decoration: InputDecoration(
+                              hintText: l10n.searchFieldHint,
+                              hintStyle: TextStyle(color: context.palette.textPlaceholder, fontSize: 14),
+                              border: InputBorder.none,
+                              contentPadding: EdgeInsets.zero,
+                              isDense: true,
+                            ),
+                          ),
                         ),
-                      ),
+                        GestureDetector(
+                          onTap: () => _showServiceFilterSheet(context, ref),
+                          child: Padding(
+                            padding: EdgeInsets.all(12),
+                            child: Icon(Icons.filter_list_rounded, size: 22, color: context.palette.textSecondary),
+                          ),
+                        ),
+                      ],
                     ),
-                    GestureDetector(
-                      onTap: () => _showServiceFilterSheet(context, ref),
-                      child: const Padding(
-                        padding: EdgeInsets.all(12),
-                        child: Icon(Icons.filter_list_rounded, size: 22, color: AppColors.textSecondary),
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                  Consumer(
+                    builder: (context, ref, _) {
+                      final q = _searchController.text.trim();
+                      if (q.length < 2 || !_searchFocus.hasFocus) return const SizedBox.shrink();
+                      final cat = ref.watch(catalogServicesProvider(null));
+                      return cat.when(
+                        data: (data) {
+                          final ql = q.toLowerCase();
+                          final matches = data.items.where((i) => i.name.toLowerCase().contains(ql)).take(40).toList();
+                          if (matches.isEmpty) return const SizedBox.shrink();
+                          String catName(String catId) {
+                            for (final c in data.categories) {
+                              if (c.id == catId) return c.name;
+                            }
+                            return '';
+                          }
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 6),
+                            child: Material(
+                              color: context.palette.cardBg,
+                              elevation: 8,
+                              shadowColor: Colors.black54,
+                              borderRadius: BorderRadius.circular(12),
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(maxHeight: 112),
+                                child: ListView.separated(
+                                  shrinkWrap: true,
+                                  padding: const EdgeInsets.symmetric(vertical: 4),
+                                  itemCount: matches.length,
+                                  separatorBuilder: (_, _) => Divider(height: 1, color: context.palette.border),
+                                  itemBuilder: (ctx, i) {
+                                    final it = matches[i];
+                                    final cn = catName(it.categoryId);
+                                    return ListTile(
+                                      dense: true,
+                                      visualDensity: VisualDensity.compact,
+                                      title: Text(
+                                        it.name,
+                                        style: TextStyle(fontSize: 14, color: context.palette.textPrimary),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      subtitle: cn.isEmpty
+                                          ? null
+                                          : Text(
+                                              cn,
+                                              style: TextStyle(fontSize: 11, color: context.palette.textSecondary),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                      onTap: () {
+                                        final add = normalizeClientServiceFilterIds([it.id]);
+                                        var merged = normalizeClientServiceFilterIds([..._selectedServiceIds, ...add]);
+                                        if (merged.length > 2) {
+                                          merged = merged.sublist(merged.length - 2);
+                                        }
+                                        setState(() {
+                                          _selectedServiceIds = merged;
+                                          _searchController.clear();
+                                        });
+                                        _searchFocus.unfocus();
+                                      },
+                                    );
+                                  },
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                        loading: () => const SizedBox.shrink(),
+                        error: (_, _) => const SizedBox.shrink(),
+                      );
+                    },
+                  ),
+                ],
               ),
             ),
             // Чипы выбранных услуг (при активном фильтре)
@@ -494,14 +797,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                           ..._selectedServiceIds.map((id) => Padding(
                             padding: const EdgeInsets.only(right: 8),
                             child: Chip(
-                              label: Text(names[id] ?? id, style: const TextStyle(fontSize: 12)),
-                              deleteIcon: const Icon(Icons.close, size: 16),
+                              label: Text(names[id] ?? id, style: TextStyle(fontSize: 12)),
+                              deleteIcon: Icon(Icons.close, size: 16),
                               onDeleted: () => setState(() => _selectedServiceIds = _selectedServiceIds.where((x) => x != id).toList()),
                             ),
                           )),
                           TextButton(
                             onPressed: () => setState(() => _selectedServiceIds = []),
-                            child: const Text('Сбросить всё'),
+                            child: Text(l10n.searchResetAll),
                           ),
                         ],
                       ),
@@ -516,68 +819,136 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                 height: 40,
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: AppColors.border),
+                  border: Border.all(color: context.palette.border),
                 ),
                 child: Row(
                   children: [
-                    _SegmentBtn(label: 'Карта', active: _isMapView,
+                    _SegmentBtn(label: l10n.searchViewMap, active: _isMapView,
                       onTap: () => setState(() => _isMapView = true)),
-                    _SegmentBtn(label: 'Список', active: !_isMapView,
+                    _SegmentBtn(label: l10n.searchViewList, active: !_isMapView,
                       onTap: () => setState(() => _isMapView = false)),
                   ],
                 ),
               ),
             ),
-            // Фильтры
+            // Фильтры (главный ряд)
             SizedBox(
               height: 40,
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                itemCount: _orgKindChips.length + 1,
-                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                itemCount: orgChips.length + 1,
+                separatorBuilder: (_, _) => SizedBox(width: 8),
                 itemBuilder: (_, i) {
-                  if (i == _orgKindChips.length) {
+                  if (i == orgChips.length) {
                     return GestureDetector(
                       onTap: () => _showFilters(context),
                       child: Container(
                         width: 36, height: 36,
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: AppColors.border),
+                          border: Border.all(color: context.palette.border),
                         ),
-                        child: const Icon(Icons.tune_rounded, size: 18, color: AppColors.textSecondary),
+                        child: Icon(Icons.tune_rounded, size: 18, color: context.palette.textSecondary),
                       ),
                     );
                   }
                   final isActive = i == _selectedFilter;
                   return GestureDetector(
-                    onTap: () => setState(() => _selectedFilter = i),
+                    onTap: () {
+                      setState(() {
+                        final prevKind = orgChips[_selectedFilter.clamp(0, orgChips.length - 1)].kind;
+                        _selectedFilter = i;
+                        final newKind = orgChips[i].kind;
+                        if (prevKind == 'car_wash' && newKind != 'car_wash') {
+                          _washSubtypesSelected = {WashSubtype.classic};
+                        }
+                        if (newKind == 'car_wash' && _washSubtypesSelected.isEmpty) {
+                          _washSubtypesSelected = {WashSubtype.classic};
+                        }
+                      });
+                    },
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       decoration: BoxDecoration(
-                        color: isActive ? AppColors.primary : Colors.transparent,
+                        color: isActive ? context.palette.primary : Colors.transparent,
                         borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: isActive ? AppColors.primary : AppColors.border),
+                        border: Border.all(color: isActive ? context.palette.primary : context.palette.border),
                       ),
                       alignment: Alignment.center,
-                      child: Text(_orgKindChips[i].label, style: TextStyle(
+                      child: Text(orgChips[i].label, style: TextStyle(
                         fontSize: 13, fontWeight: FontWeight.w500,
-                        color: isActive ? const Color(0xFF0D0D0D) : AppColors.textSecondary,
+                        color: isActive ? context.palette.onAccent : context.palette.textSecondary,
                       )),
                     ),
                   );
                 },
               ),
             ),
-            const SizedBox(height: 12),
+            // Подтипы мойки (справа в том же стиле — вторая строка, только при выбранной «Мойка»)
+            Builder(
+              builder: (context) {
+                final idx = _selectedFilter.clamp(0, orgChips.length - 1);
+                if (orgChips[idx].kind != 'car_wash') return const SizedBox.shrink();
+                Widget chip(WashSubtype st, String label) {
+                  final on = _washSubtypesSelected.contains(st);
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: GestureDetector(
+                      onTap: () {
+                        setState(() {
+                          if (_washSubtypesSelected.contains(st)) {
+                            if (_washSubtypesSelected.length > 1) _washSubtypesSelected = Set<WashSubtype>.from(_washSubtypesSelected)..remove(st);
+                          } else {
+                            _washSubtypesSelected = Set<WashSubtype>.from(_washSubtypesSelected)..add(st);
+                          }
+                        });
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: on ? context.palette.primary.withValues(alpha: 0.2) : context.palette.cardBg,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: on ? context.palette.primary : context.palette.border),
+                        ),
+                        child: Text(
+                          label,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: on ? FontWeight.w600 : FontWeight.w500,
+                            color: on ? context.palette.primary : context.palette.textSecondary,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                }
+                return Padding(
+                  padding: const EdgeInsets.only(left: 16, top: 8, right: 16),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          chip(WashSubtype.classic, l10n.searchWashSubtypeClassic),
+                          chip(WashSubtype.selfService, l10n.searchWashSubtypeSelfService),
+                          chip(WashSubtype.robot, l10n.searchWashSubtypeRobot),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+            SizedBox(height: 12),
             // Контент: список точек с сервера (поиск) + локальные фильтры
             Expanded(
               child: Builder(
                 builder: (context) {
                   final searchQuery = _searchController.text.trim();
-                  final chipIdx = _selectedFilter.clamp(0, _orgKindChips.length - 1);
-                  final businessKind = _orgKindChips[chipIdx].kind;
+                  final chipIdx = _selectedFilter.clamp(0, orgChips.length - 1);
+                  final businessKind = orgChips[chipIdx].kind;
                   final searchAsync = ref.watch(stoSearchProvider((
                     query: searchQuery.isEmpty ? null : searchQuery,
                     businessKind: businessKind,
@@ -585,8 +956,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                   final baseList = searchAsync.valueOrNull ?? [];
                   final list = _getFilteredSTOs(ref, baseList);
                   return _isMapView
-                      ? _buildMapView(list, ref)
-                      : _buildList(list, ref, baseList: baseList, searchAsync: searchAsync);
+                      ? _buildMapView(list, ref, l10n)
+                      : _buildList(context, ref, l10n, list, baseList: baseList, searchAsync: searchAsync);
                 },
               ),
             ),
@@ -596,18 +967,25 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     );
   }
 
-  Widget _buildList(List<STO> stos, WidgetRef ref, {required List<STO> baseList, required AsyncValue<List<STO>> searchAsync}) {
+  Widget _buildList(
+    BuildContext context,
+    WidgetRef ref,
+    AppL10n l10n,
+    List<STO> stos, {
+    required List<STO> baseList,
+    required AsyncValue<List<STO>> searchAsync,
+  }) {
     if (searchAsync.isLoading && baseList.isEmpty) {
-      return const Center(child: CircularProgressIndicator(color: AppColors.primary));
+      return Center(child: CircularProgressIndicator(color: context.palette.primary));
     }
     if (searchAsync.hasError && baseList.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Text(
-            OrganizationUiCopy.listLoadError(),
+            l10n.searchListLoadError,
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 15, color: AppColors.textSecondary),
+            style: TextStyle(fontSize: 15, color: context.palette.textSecondary),
           ),
         ),
       );
@@ -634,47 +1012,47 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.search_off_rounded, size: 64, color: AppColors.textTertiary),
-              const SizedBox(height: 16),
+              Icon(Icons.search_off_rounded, size: 64, color: context.palette.textTertiary),
+              SizedBox(height: 16),
               Text(
                 isServiceFilter
-                    ? OrganizationUiCopy.emptyAllServicesSelected()
+                    ? l10n.searchEmptyAllServices
                     : (hiddenByCarFilter
-                        ? OrganizationUiCopy.emptyCarBrandHidden()
-                        : 'Ничего не найдено'),
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                        ? l10n.searchEmptyCarBrand
+                        : l10n.searchNothingFound),
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: context.palette.textSecondary),
                 textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 8),
+              SizedBox(height: 8),
               Text(
                 isServiceFilter
-                    ? 'Попробуйте изменить набор услуг или сбросить фильтр'
+                    ? l10n.searchEmptyTryFilters
                     : (hiddenByCarFilter
-                        ? 'Нажмите «Показать все» ниже или отключите «Сортировать по машине» в профиле'
-                        : 'Измените фильтр или поисковый запрос'),
-                style: const TextStyle(fontSize: 14, color: AppColors.textTertiary),
+                        ? l10n.searchEmptyCarFilterHint
+                        : l10n.searchEmptyChangeQuery),
+                style: TextStyle(fontSize: 14, color: context.palette.textTertiary),
                 textAlign: TextAlign.center,
               ),
               if (hiddenByCarFilter) ...[
-                const SizedBox(height: 16),
+                SizedBox(height: 16),
                 FilledButton(
                   onPressed: () => setState(() => _showAllOrganizations = true),
-                  child: Text(OrganizationUiCopy.showAllOrganizations()),
+                  child: Text(l10n.searchShowAll),
                 ),
               ],
               if (isServiceFilter) ...[
-                const SizedBox(height: 16),
+                SizedBox(height: 16),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     OutlinedButton(
                       onPressed: () => setState(() => _selectedServiceIds = []),
-                      child: const Text('Сбросить фильтр'),
+                      child: Text(l10n.searchClearFilter),
                     ),
-                    const SizedBox(width: 12),
+                    SizedBox(width: 12),
                     FilledButton(
                       onPressed: () => _showServiceFilterSheet(context, ref),
-                      child: const Text('Изменить набор услуг'),
+                      child: Text(l10n.searchEditServices),
                     ),
                   ],
                 ),
@@ -693,15 +1071,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Text(
-              OrganizationUiCopy.foundOrganizations(stos.length),
-              style: const TextStyle(fontSize: 13, color: AppColors.textSecondary, fontWeight: FontWeight.w500),
+              l10n.searchFoundOrganizations(stos.length),
+              style: TextStyle(fontSize: 13, color: context.palette.textSecondary, fontWeight: FontWeight.w500),
             ),
           ),
         ListView.separated(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           itemCount: itemCount,
-          separatorBuilder: (_, __) => const SizedBox(height: 8),
+          separatorBuilder: (_, __) => SizedBox(height: 8),
           itemBuilder: (_, i) {
             if (i == stos.length) {
               return Padding(
@@ -710,11 +1088,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                   child: GestureDetector(
                     onTap: () => setState(() => _showAllOrganizations = !_showAllOrganizations),
                     child: Text(
-                      _showAllOrganizations ? 'Скрыть все' : 'Показать все',
-                      style: const TextStyle(
+                      _showAllOrganizations ? l10n.searchHideAll : l10n.searchShowAll,
+                      style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.primary,
+                        color: context.palette.primary,
                       ),
                     ),
                   ),
@@ -740,14 +1118,19 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                 );
             HapticFeedback.lightImpact();
           },
-          onTap: () => pushCupertino(context, STODetailScreen(
-            sto: sto,
-            initialServiceIds: _selectedServiceIds.isNotEmpty ? _selectedServiceIds : null,
-          )),
+          onTap: () => pushStoDetailScreen(
+            context,
+            STODetailScreen(
+              sto: sto,
+              initialServiceIds: _selectedServiceIds.isNotEmpty
+                  ? normalizeClientServiceFilterIds(_selectedServiceIds)
+                  : null,
+            ),
+          ),
           onCall: (s) => _openCallForSto(context, s),
           onRoute: (s) => _openRouteToSto(context, s),
           onShare: (_) => ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Поделиться — в следующей версии')),
+            SnackBar(content: Text(l10n.searchShareSoon)),
           ),
             );
           },
@@ -756,7 +1139,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     );
   }
 
-  Widget _buildMapView(List<STO> stos, WidgetRef ref) {
+  Widget _buildMapView(List<STO> stos, WidgetRef ref, AppL10n l10n) {
     final withCoords = stos.where((s) => s.latitude != null && s.longitude != null).toList();
     const krasnodar = LatLng(45.0355, 38.9753);
     final userLat = _userPosition?.latitude;
@@ -783,6 +1166,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
 
     final showShowAllOnMap = ref.watch(filterByCarSettingProvider) &&
         ref.watch(selectedCarIdProvider) != null;
+    final mapProvider = ref.watch(mapProviderSettingProvider);
+    final showExternalMapLauncher =
+        mapProvider == MapProvider.google || mapProvider == MapProvider.yandex;
+    final hasMapLocButton = _showMyLocationButton || _userPosition != null;
 
     return Stack(
       children: [
@@ -790,7 +1177,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           initialCenter: initialCenter,
           initialZoom: initialZoom,
           partners: withCoords,
-          externals: _showExternalPOIsOnMap ? _getExternalPOIsForMap(withCoords) : [],
+          externals: _showExternalPOIsOnMap ? _getExternalPOIsForMap(withCoords, l10n) : [],
+          tileUrlTemplate: InAppMapTiles.urlTemplateFor(mapProvider),
+          tileSubdomains: InAppMapTiles.subdomainsFor(mapProvider),
           userLocation: userLocation,
           onPartnerTap: _animateToStoAndOpen,
           onExternalTap: (poi) => _showExternalPOICard(context, poi),
@@ -806,6 +1195,20 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           onControllerReady: (c) => setState(() => _osmMapController = c),
           onVisibleBoundsChanged: _fetchExternalPOIsForBounds,
         ),
+        if (_showExternalPOIsOnMap && _externalPOIsLoading)
+          Positioned(
+            left: 0,
+            right: 0,
+            top: 0,
+            child: SafeArea(
+              bottom: false,
+              child: LinearProgressIndicator(
+                minHeight: 2,
+                color: context.palette.primary,
+                backgroundColor: Colors.transparent,
+              ),
+            ),
+          ),
         // Рекомендованные точки — горизонтальная полоса сверху (как было изначально)
         Positioned(
           left: 0,
@@ -825,14 +1228,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                         scrollDirection: Axis.horizontal,
                         padding: const EdgeInsets.symmetric(horizontal: 12),
                         itemCount: recommended.length,
-                        separatorBuilder: (_, __) => const SizedBox(width: 8),
+                        separatorBuilder: (_, __) => SizedBox(width: 8),
                         itemBuilder: (_, i) {
                           final sto = recommended[i];
                           final distKm = (userLat != null && userLon != null && sto.latitude != null && sto.longitude != null)
                               ? _distanceKm(userLat, userLon, sto.latitude!, sto.longitude!)
                               : sto.distanceKm;
                           return Material(
-                            color: AppColors.cardBg.withValues(alpha: 0.96),
+                            color: context.palette.cardBg.withValues(alpha: 0.96),
                             borderRadius: BorderRadius.circular(12),
                             child: InkWell(
                               onTap: () => _animateToStoAndOpen(sto),
@@ -842,52 +1245,52 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Icon(Icons.location_on_rounded, size: 20, color: AppColors.primary),
-                                    const SizedBox(width: 8),
+                                    Icon(Icons.location_on_rounded, size: 20, color: context.palette.primary),
+                                    SizedBox(width: 8),
                                     Column(
                                       mainAxisSize: MainAxisSize.min,
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
                                         Text(
                                           sto.name,
-                                          style: const TextStyle(
+                                          style: TextStyle(
                                             fontSize: 13,
                                             fontWeight: FontWeight.w600,
-                                            color: AppColors.textPrimary,
+                                            color: context.palette.textPrimary,
                                           ),
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                         ),
-                                        const SizedBox(height: 2),
+                                        SizedBox(height: 2),
                                         Row(
                                           children: [
-                                            Icon(Icons.star_rounded, size: 12, color: AppColors.primary),
-                                            const SizedBox(width: 2),
+                                            Icon(Icons.star_rounded, size: 12, color: context.palette.primary),
+                                            SizedBox(width: 2),
                                             Text(
                                               Formatters.rating(sto.rating),
-                                              style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                                              style: TextStyle(fontSize: 12, color: context.palette.textSecondary),
                                             ),
                                             if (distKm != null) ...[
-                                              const SizedBox(width: 6),
+                                              SizedBox(width: 6),
                                               Text(
                                                 Formatters.distance(distKm),
-                                                style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                                                style: TextStyle(fontSize: 12, color: context.palette.textSecondary),
                                               ),
                                             ],
                                           ],
                                         ),
                                       ],
                                     ),
-                                    const SizedBox(width: 6),
+                                    SizedBox(width: 6),
                                     Material(
-                                      color: AppColors.nestedBg,
+                                      color: context.palette.nestedBg,
                                       borderRadius: BorderRadius.circular(8),
                                       child: InkWell(
                                         onTap: () => _openRouteToSto(context, sto),
                                         borderRadius: BorderRadius.circular(8),
-                                        child: const Padding(
+                                        child: Padding(
                                           padding: EdgeInsets.all(6),
-                                          child: Icon(Icons.directions_rounded, size: 18, color: AppColors.primary),
+                                          child: Icon(Icons.directions_rounded, size: 18, color: context.palette.primary),
                                         ),
                                       ),
                                     ),
@@ -903,7 +1306,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                     Padding(
                       padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
                       child: Material(
-                        color: AppColors.cardBg.withValues(alpha: 0.96),
+                        color: context.palette.cardBg.withValues(alpha: 0.96),
                         borderRadius: BorderRadius.circular(12),
                         elevation: 1,
                         child: Padding(
@@ -911,17 +1314,17 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Icon(Icons.info_outline_rounded, size: 22, color: AppColors.primary),
-                              const SizedBox(width: 10),
+                              Icon(Icons.info_outline_rounded, size: 22, color: context.palette.primary),
+                              SizedBox(width: 10),
                               Expanded(
                                 child: Text(
-                                  'На карте не видно точек без координат. Во вкладке «Список» они отображаются.',
-                                  style: TextStyle(fontSize: 13, color: AppColors.textSecondary, height: 1.35),
+                                  l10n.searchMapNoCoordsHint,
+                                  style: TextStyle(fontSize: 13, color: context.palette.textSecondary, height: 1.35),
                                 ),
                               ),
                               TextButton(
                                 onPressed: () => setState(() => _isMapView = false),
-                                child: const Text('Список'),
+                                child: Text(l10n.searchViewList),
                               ),
                             ],
                           ),
@@ -933,6 +1336,39 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
             ),
           ),
         ),
+        // Открыть текущий вид в Google / Яндекс (настройка «Карты» в профиле)
+        if (showExternalMapLauncher)
+          Positioned(
+            right: 12,
+            bottom: MediaQuery.of(context).padding.bottom +
+                16 +
+                52 +
+                (hasMapLocButton ? 52 : 0),
+            child: SafeArea(
+              top: false,
+              child: Material(
+                elevation: 2,
+                borderRadius: BorderRadius.circular(28),
+                color: context.palette.cardBg.withValues(alpha: 0.95),
+                child: IconButton(
+                  onPressed: () {
+                    final c = _lastMapCenter ?? initialCenter;
+                    launchExternalMapView(
+                      provider: mapProvider,
+                      center: c,
+                      zoom: _currentZoom,
+                    );
+                  },
+                  icon: Icon(
+                    mapProvider == MapProvider.google ? Icons.map_rounded : Icons.explore_rounded,
+                    color: context.palette.primary,
+                    size: 26,
+                  ),
+                  tooltip: mapProvider == MapProvider.google ? l10n.searchOpenInGoogleMaps : l10n.searchOpenInYandexMaps,
+                ),
+              ),
+            ),
+          ),
         // Кнопка «Моё местоположение» — правый нижний угол (если геолокация не успела за 3 сек или для перехода к себе)
         if (_showMyLocationButton || _userPosition != null)
           Positioned(
@@ -943,11 +1379,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
               child: Material(
                 elevation: 2,
                 borderRadius: BorderRadius.circular(28),
-                color: AppColors.cardBg.withValues(alpha: 0.95),
+                color: context.palette.cardBg.withValues(alpha: 0.95),
                 child: IconButton(
                   onPressed: _moveMapToUserLocation,
-                  icon: const Icon(Icons.my_location_rounded, color: AppColors.primary, size: 26),
-                  tooltip: 'Моё местоположение',
+                  icon: Icon(Icons.my_location_rounded, color: context.palette.primary, size: 26),
+                  tooltip: l10n.searchMyLocation,
                 ),
               ),
             ),
@@ -961,17 +1397,30 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
             child: Material(
               elevation: 2,
               borderRadius: BorderRadius.circular(28),
-              color: AppColors.cardBg.withValues(alpha: 0.95),
+              color: context.palette.cardBg.withValues(alpha: 0.95),
               child: PopupMenuButton<String>(
                 padding: EdgeInsets.zero,
                 offset: const Offset(0, -140),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 icon: Padding(
                   padding: const EdgeInsets.all(10),
-                  child: Icon(Icons.layers_rounded, color: AppColors.primary, size: 26),
+                  child: Icon(Icons.layers_rounded, color: context.palette.primary, size: 26),
                 ),
                 onSelected: (value) {
-                  if (value == 'external') setState(() => _showExternalPOIsOnMap = !_showExternalPOIsOnMap);
+                  if (value == 'external') {
+                    setState(() {
+                      _showExternalPOIsOnMap = !_showExternalPOIsOnMap;
+                      if (!_showExternalPOIsOnMap) {
+                        _externalPOIs = [];
+                        _externalFetchGeneration++;
+                      }
+                    });
+                    if (_showExternalPOIsOnMap) {
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (mounted) _refetchExternalPoisForCurrentMapView();
+                      });
+                    }
+                  }
                   if (value == 'all_orgs') setState(() => _showAllOrganizations = !_showAllOrganizations);
                 },
                 itemBuilder: (context) => [
@@ -979,12 +1428,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                     value: 'external',
                     child: Row(
                       children: [
-                        Icon(_showExternalPOIsOnMap ? Icons.visibility_off_rounded : Icons.place_rounded, size: 20, color: AppColors.primary),
-                        const SizedBox(width: 10),
+                        Icon(_showExternalPOIsOnMap ? Icons.visibility_off_rounded : Icons.place_rounded, size: 20, color: context.palette.primary),
+                        SizedBox(width: 10),
                         Flexible(
                           child: Text(
-                            _showExternalPOIsOnMap ? 'Скрыть непартнёрские' : 'Отобразить непартнёрские',
-                            style: const TextStyle(fontSize: 14),
+                            _showExternalPOIsOnMap ? l10n.searchHideNonPartners : l10n.searchShowNonPartners,
+                            style: TextStyle(fontSize: 14),
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
@@ -996,12 +1445,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                       value: 'all_orgs',
                       child: Row(
                         children: [
-                          Icon(Icons.directions_car_rounded, size: 20, color: AppColors.primary),
-                          const SizedBox(width: 10),
+                          Icon(Icons.directions_car_rounded, size: 20, color: context.palette.primary),
+                          SizedBox(width: 10),
                           Flexible(
                             child: Text(
-                              _showAllOrganizations ? 'С фильтром по марке' : 'Без фильтра по марке',
-                              style: const TextStyle(fontSize: 14),
+                              _showAllOrganizations ? l10n.searchWithCarBrandFilter : l10n.searchWithoutCarBrandFilter,
+                              style: TextStyle(fontSize: 14),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
@@ -1019,6 +1468,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
 
   /// Карточка внешней организации: название, типы, адрес, сообщение «не сотрудничает», Позвонить, Маршрут.
   void _showExternalPOICard(BuildContext context, ExternalPOI poi) {
+    final l10n = L10nScope.of(context);
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -1029,8 +1479,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         maxChildSize: 0.9,
         expand: false,
         builder: (_, scrollController) => Container(
-          decoration: const BoxDecoration(
-            color: AppColors.cardBg,
+          decoration: BoxDecoration(
+            color: context.palette.cardBg,
             borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
             boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 12, offset: Offset(0, -4))],
           ),
@@ -1048,24 +1498,24 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                       width: 36,
                       height: 4,
                       decoration: BoxDecoration(
-                        color: AppColors.border,
+                        color: context.palette.border,
                         borderRadius: BorderRadius.circular(2),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  SizedBox(height: 16),
                   Text(
                     poi.name,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
+                      color: context.palette.textPrimary,
                     ),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
                   if (poi.types.isNotEmpty) ...[
-                    const SizedBox(height: 8),
+                    SizedBox(height: 8),
                     Wrap(
                       spacing: 6,
                       runSpacing: 4,
@@ -1073,48 +1523,36 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                           .map((t) => Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                                 decoration: BoxDecoration(
-                                  color: AppColors.surface,
+                                  color: context.palette.surface,
                                   borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(color: AppColors.border),
+                                  border: Border.all(color: context.palette.border),
                                 ),
-                                child: Text(t, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                                child: Text(t, style: TextStyle(fontSize: 12, color: context.palette.textSecondary)),
                               ))
                           .toList(),
                     ),
                   ],
-                  if (poi.address != null && poi.address!.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(Icons.location_on_outlined, size: 16, color: AppColors.textTertiary),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            poi.address!,
-                            style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                  const SizedBox(height: 12),
+                  SizedBox(height: 8),
+                  LocationPreviewCard(
+                    latitude: poi.lat,
+                    longitude: poi.lng,
+                    staticAddress: poi.address ?? '',
+                  ),
+                  SizedBox(height: 12),
                   Container(
                     padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
                     decoration: BoxDecoration(
-                      color: AppColors.surface,
+                      color: context.palette.surface,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: AppColors.border),
+                      border: Border.all(color: context.palette.border),
                     ),
-                    child: const Text(
-                      'Данная организация не сотрудничает с AutoHub',
-                      style: TextStyle(fontSize: 13, color: AppColors.textTertiary, height: 1.3),
+                    child: Text(
+                      l10n.searchExternalNotPartner,
+                      style: TextStyle(fontSize: 13, color: context.palette.textTertiary, height: 1.3),
                       textAlign: TextAlign.center,
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  SizedBox(height: 16),
                   Row(
                     children: [
                       if (poi.phone != null && poi.phone!.isNotEmpty)
@@ -1124,35 +1562,35 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                               Navigator.of(ctx).pop();
                               _openCallForExternalPOI(context, poi);
                             },
-                            icon: const Icon(Icons.phone_rounded, size: 18),
-                            label: const Text('Позвонить'),
+                            icon: Icon(Icons.phone_rounded, size: 18),
+                            label: Text(l10n.searchCall),
                             style: OutlinedButton.styleFrom(
-                              foregroundColor: AppColors.primary,
-                              side: const BorderSide(color: AppColors.primary),
+                              foregroundColor: context.palette.primary,
+                              side: BorderSide(color: context.palette.primary),
                             ),
                           ),
                         ),
-                      if (poi.phone != null && poi.phone!.isNotEmpty) const SizedBox(width: 10),
+                      if (poi.phone != null && poi.phone!.isNotEmpty) SizedBox(width: 10),
                       Expanded(
                         child: OutlinedButton.icon(
                           onPressed: () {
                             Navigator.of(ctx).pop();
                             _openRouteToExternalPOI(context, poi);
                           },
-                          icon: const Icon(Icons.directions_rounded, size: 18),
-                          label: const Text('Маршрут'),
+                          icon: Icon(Icons.directions_rounded, size: 18),
+                          label: Text(l10n.searchRoute),
                           style: OutlinedButton.styleFrom(
-                            foregroundColor: AppColors.primary,
-                            side: const BorderSide(color: AppColors.primary),
+                            foregroundColor: context.palette.primary,
+                            side: BorderSide(color: context.palette.primary),
                           ),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
+                  SizedBox(height: 8),
                   TextButton(
                     onPressed: () => Navigator.of(ctx).pop(),
-                    child: const Text('Закрыть'),
+                    child: Text(l10n.searchClose),
                   ),
                 ],
               ),
@@ -1164,10 +1602,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   }
 
   Future<void> _openCallForExternalPOI(BuildContext context, ExternalPOI poi) async {
+    final l10n = L10nScope.of(context);
     if (poi.phone == null || poi.phone!.isEmpty) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Нет номера для звонка'), behavior: SnackBarBehavior.floating),
+          SnackBar(content: Text(l10n.searchNoPhone), behavior: SnackBarBehavior.floating),
         );
       }
       return;
@@ -1178,112 +1617,26 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     } catch (_) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Не удалось открыть набор номера'), behavior: SnackBarBehavior.floating),
+          SnackBar(content: Text(l10n.searchDialFailed), behavior: SnackBarBehavior.floating),
         );
       }
     }
   }
 
-  /// Открыть маршрут: если закреплён навигатор в настройках — открыть его, иначе выбор один раз с сохранением.
   Future<void> _openRouteWithMapLauncher({
     required double destLat,
     required double destLng,
     required String destinationTitle,
   }) async {
-    final available = await MapLauncher.installedMaps;
-    if (available.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Нет установленных карт для маршрута'), behavior: SnackBarBehavior.floating),
-        );
-      }
-      return;
-    }
-    Coords? origin;
-    if (_userPosition != null) {
-      origin = Coords(_userPosition!.latitude, _userPosition!.longitude);
-    }
-    final destination = Coords(destLat, destLng);
-
-    final preferredType = ref.read(preferredDirectionsMapProvider);
-    if (preferredType != null && preferredType.isNotEmpty) {
-      final preferred = available.where((m) => m.mapType.name == preferredType).firstOrNull;
-      if (preferred != null) {
-        try {
-          await preferred.showDirections(
-            destination: destination,
-            destinationTitle: destinationTitle,
-            origin: origin,
-            originTitle: 'Моё местоположение',
-          );
-          return;
-        } catch (_) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Не удалось открыть карты'), behavior: SnackBarBehavior.floating),
-            );
-          }
-          return;
-        }
-      }
-    }
-
-    if (available.length == 1) {
-      ref.read(preferredDirectionsMapProvider.notifier).set(available.first.mapType.name);
-      try {
-        await available.first.showDirections(
-          destination: destination,
-          destinationTitle: destinationTitle,
-          origin: origin,
-          originTitle: 'Моё местоположение',
-        );
-      } catch (_) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Не удалось открыть карты'), behavior: SnackBarBehavior.floating),
-          );
-        }
-      }
-      return;
-    }
     if (!mounted) return;
-    final chosen = await showModalBottomSheet<AvailableMap>(
-      context: context,
-      backgroundColor: AppColors.cardBg,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('Выберите навигатор', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
-            ),
-            ...available.map((map) => ListTile(
-              leading: const Icon(Icons.map_rounded, color: AppColors.primary, size: 28),
-              title: Text(directionsMapDisplayName(map), style: const TextStyle(color: AppColors.textPrimary)),
-              onTap: () => Navigator.pop(ctx, map),
-            )),
-          ],
-        ),
-      ),
+    await launchDrivingRoute(
+      context,
+      ref,
+      destLat: destLat,
+      destLng: destLng,
+      destinationTitle: destinationTitle,
+      userPosition: _userPosition,
     );
-    if (chosen == null) return;
-    ref.read(preferredDirectionsMapProvider.notifier).set(chosen.mapType.name);
-    try {
-      await chosen.showDirections(
-        destination: destination,
-        destinationTitle: destinationTitle,
-        origin: origin,
-        originTitle: 'Моё местоположение',
-      );
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Не удалось открыть карты'), behavior: SnackBarBehavior.floating),
-        );
-      }
-    }
   }
 
   Future<void> _openRouteToExternalPOI(BuildContext context, ExternalPOI poi) async {
@@ -1295,11 +1648,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   }
 
   Future<void> _openCallForSto(BuildContext context, STO sto) async {
+    final l10n = L10nScope.of(context);
     final phones = sto.displayPhones;
     if (phones.isEmpty) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Нет номера для звонка'), backgroundColor: AppColors.error),
+          SnackBar(content: Text(l10n.searchNoPhone), backgroundColor: context.palette.error),
         );
       }
       return;
@@ -1311,13 +1665,13 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
       selected = await showDialog<String>(
         context: context,
         builder: (ctx) => AlertDialog(
-          backgroundColor: AppColors.cardBg,
-          title: const Text('Выберите номер', style: TextStyle(color: AppColors.textPrimary)),
+          backgroundColor: context.palette.cardBg,
+          title: Text(l10n.searchSelectPhone, style: TextStyle(color: context.palette.textPrimary)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: phones
                 .map((n) => ListTile(
-                      title: Text(Formatters.phone(n), style: const TextStyle(color: AppColors.textPrimary)),
+                      title: Text(Formatters.phone(n), style: TextStyle(color: context.palette.textPrimary)),
                       onTap: () => Navigator.pop(ctx, n),
                     ))
                 .toList(),
@@ -1332,7 +1686,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
       } catch (_) {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Не удалось открыть набор номера'), backgroundColor: AppColors.error),
+            SnackBar(content: Text(l10n.searchDialFailed), backgroundColor: context.palette.error),
           );
         }
       }
@@ -1349,14 +1703,20 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   }
 
   void _showFilters(BuildContext context) {
+    final l10n = L10nScope.of(context);
     double tempMaxKm = _maxDistanceKm ?? 50;
     double? tempMinRating = _minRating;
-    final ratingOptions = <String, double?>{'Любой': null, '3.0+': 3.0, '4.0+': 4.0, '4.5+': 4.5};
+    final ratingOptions = <String, double?>{
+      l10n.searchRatingAny: null,
+      '3.0+': 3.0,
+      '4.0+': 4.0,
+      '4.5+': 4.5,
+    };
 
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: AppColors.cardBg,
-      shape: const RoundedRectangleBorder(
+      backgroundColor: context.palette.cardBg,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (ctx) => StatefulBuilder(
@@ -1370,17 +1730,17 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text('Фильтры', style: TextStyle(
-                      fontSize: 20, fontWeight: FontWeight.w600, color: AppColors.textPrimary,
+                    Text(l10n.searchFiltersTitle, style: TextStyle(
+                      fontSize: 20, fontWeight: FontWeight.w600, color: context.palette.textPrimary,
                     )),
                     GestureDetector(
                       onTap: () => Navigator.pop(context),
-                      child: const Icon(Icons.close_rounded, color: AppColors.textSecondary),
+                      child: Icon(Icons.close_rounded, color: context.palette.textSecondary),
                     ),
                   ],
                 ),
-                const SizedBox(height: 24),
-                const Text('Расстояние (км)', style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
+                SizedBox(height: 24),
+                Text(l10n.searchDistanceKm, style: TextStyle(fontSize: 14, color: context.palette.textSecondary)),
                 Row(
                   children: [
                     Expanded(
@@ -1389,20 +1749,20 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                         min: 1,
                         max: 50,
                         divisions: 49,
-                        activeColor: AppColors.primary,
-                        inactiveColor: AppColors.border,
+                        activeColor: context.palette.primary,
+                        inactiveColor: context.palette.border,
                         onChanged: (v) {
                           tempMaxKm = v;
                           setModalState(() {});
                         },
                       ),
                     ),
-                    SizedBox(width: 40, child: Text('${tempMaxKm.round()}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textPrimary))),
+                    SizedBox(width: 40, child: Text('${tempMaxKm.round()}', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: context.palette.textPrimary))),
                   ],
                 ),
-                const SizedBox(height: 16),
-                const Text('Минимальный рейтинг', style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
-                const SizedBox(height: 8),
+                SizedBox(height: 16),
+                Text(l10n.searchMinRating, style: TextStyle(fontSize: 14, color: context.palette.textSecondary)),
+                SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
                   runSpacing: 6,
@@ -1411,10 +1771,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                     return ChoiceChip(
                       label: Text(e.key),
                       selected: isSelected,
-                      selectedColor: AppColors.primary,
-                      backgroundColor: AppColors.nestedBg,
+                      selectedColor: context.palette.primary,
+                      backgroundColor: context.palette.nestedBg,
                       labelStyle: TextStyle(
-                        color: isSelected ? const Color(0xFF0D0D0D) : AppColors.textSecondary,
+                        color: isSelected ? context.palette.onAccent : context.palette.textSecondary,
                         fontSize: 13,
                       ),
                       onSelected: (_) {
@@ -1424,7 +1784,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                     );
                   }).toList(),
                 ),
-                const SizedBox(height: 24),
+                SizedBox(height: 24),
                 Row(
                   children: [
                     Expanded(
@@ -1434,16 +1794,16 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                           tempMinRating = null;
                           setModalState(() {});
                         },
-                        child: const Text('Сбросить'),
+                        child: Text(l10n.searchFiltersReset),
                       ),
                     ),
-                    const SizedBox(width: 12),
+                    SizedBox(width: 12),
                     Expanded(
                       child: SizedBox(
                         height: 48,
                         child: DecoratedBox(
                           decoration: BoxDecoration(
-                            gradient: AppColors.primaryGradient,
+                            gradient: context.palette.primaryGradient,
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: ElevatedButton(
@@ -1459,8 +1819,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                               shadowColor: Colors.transparent,
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                             ),
-                            child: const Text('Применить', style: TextStyle(
-                              fontWeight: FontWeight.w600, color: Color(0xFF0D0D0D),
+                            child: Text(l10n.searchFiltersApply, style: TextStyle(
+                              fontWeight: FontWeight.w600, color: context.palette.onAccent,
                             )),
                           ),
                         ),
@@ -1468,7 +1828,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
+                SizedBox(height: 12),
               ],
             ),
           );
@@ -1492,12 +1852,12 @@ class _SegmentBtn extends StatelessWidget {
         child: Container(
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: active ? AppColors.primary : Colors.transparent,
+            color: active ? context.palette.primary : Colors.transparent,
             borderRadius: BorderRadius.circular(9),
           ),
           child: Text(label, style: TextStyle(
             fontSize: 14, fontWeight: FontWeight.w600,
-            color: active ? const Color(0xFF0D0D0D) : AppColors.textSecondary,
+            color: active ? context.palette.onAccent : context.palette.textSecondary,
           )),
         ),
       ),
@@ -1527,7 +1887,7 @@ class _PriceTimeBadge extends StatelessWidget {
       ),
       child: Text(
         '$priceStr · $timeStr',
-        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white),
+        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white),
       ),
     );
   }
@@ -1560,14 +1920,15 @@ class _SearchSTOCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = L10nScope.of(context);
     return GestureDetector(
       onTap: onTap,
       child: Container(
       padding: EdgeInsets.all(compact ? 14 : 16),
       decoration: BoxDecoration(
-        color: AppColors.cardBg.withValues(alpha: 0.95),
+        color: context.palette.cardBg.withValues(alpha: 0.95),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: context.palette.border),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.2),
@@ -1587,16 +1948,16 @@ class _SearchSTOCard extends StatelessWidget {
                 width: 80,
                 height: 80,
                 decoration: BoxDecoration(
-                  color: AppColors.nestedBg,
+                  color: context.palette.nestedBg,
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Center(
-                  child: Text(sto.name[0], style: const TextStyle(
-                    fontSize: 28, fontWeight: FontWeight.w700, color: AppColors.primary,
+                  child: Text(sto.name[0], style: TextStyle(
+                    fontSize: 28, fontWeight: FontWeight.w700, color: context.palette.primary,
                   )),
                 ),
               ),
-              const SizedBox(width: 12),
+              SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1607,8 +1968,8 @@ class _SearchSTOCard extends StatelessWidget {
                         Expanded(
                           child: Text(
                             sto.name,
-                            style: const TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textPrimary,
+                            style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w600, color: context.palette.textPrimary,
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -1621,75 +1982,75 @@ class _SearchSTOCard extends StatelessWidget {
                           child: Icon(
                             isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
                             size: 22,
-                            color: isFavorite ? AppColors.error : AppColors.textTertiary,
+                            color: isFavorite ? context.palette.error : context.palette.textTertiary,
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 4),
+                    SizedBox(height: 4),
                     Row(
                       children: [
-                        const Icon(Icons.star_rounded, size: 14, color: AppColors.primary),
-                        const SizedBox(width: 2),
+                        Icon(Icons.star_rounded, size: 14, color: context.palette.primary),
+                        SizedBox(width: 2),
                         Text(
                           '${Formatters.rating(displayRating ?? sto.rating)} (${displayReviewCount ?? sto.reviewCount})',
-                          style: const TextStyle(
-                            fontSize: 14, color: AppColors.textSecondary,
+                          style: TextStyle(
+                            fontSize: 14, color: context.palette.textSecondary,
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 4),
+                    SizedBox(height: 4),
                     Row(
                       children: [
                         Expanded(
-                          child: Text(sto.address, style: const TextStyle(
-                            fontSize: 14, color: AppColors.textSecondary,
+                          child: Text(sto.address, style: TextStyle(
+                            fontSize: 14, color: context.palette.textSecondary,
                           ), maxLines: 1, overflow: TextOverflow.ellipsis),
                         ),
                         if (sto.distanceKm != null)
-                          Text(Formatters.distance(sto.distanceKm!), style: const TextStyle(
-                            fontSize: 14, color: AppColors.textSecondary,
+                          Text(Formatters.distance(sto.distanceKm!), style: TextStyle(
+                            fontSize: 14, color: context.palette.textSecondary,
                           )),
                       ],
                     ),
-                    const SizedBox(height: 6),
+                    SizedBox(height: 6),
                     Row(
                       children: [
                         Container(
                           width: 8,
                           height: 8,
                           decoration: BoxDecoration(
-                            color: sto.isOpen ? AppColors.success : AppColors.error,
+                            color: sto.isOpen ? context.palette.success : context.palette.error,
                             shape: BoxShape.circle,
                           ),
                         ),
-                        const SizedBox(width: 6),
+                        SizedBox(width: 6),
                         Text(
-                          sto.isOpen ? 'Открыто' : 'Закрыто',
+                          sto.isOpen ? l10n.searchOpen : l10n.searchClosed,
                           style: TextStyle(
                             fontSize: 12,
-                            color: sto.isOpen ? AppColors.success : AppColors.error,
+                            color: sto.isOpen ? context.palette.success : context.palette.error,
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 6),
+                    SizedBox(height: 6),
                     Wrap(
                       spacing: 6,
                       runSpacing: 4,
                       children: sto.specializations.take(4).map((s) => Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                         decoration: BoxDecoration(
-                          color: AppColors.nestedBg,
+                          color: context.palette.nestedBg,
                           borderRadius: BorderRadius.circular(20),
                         ),
-                        child: Text(s, style: const TextStyle(fontSize: 11, color: AppColors.textPrimary)),
+                        child: Text(s, style: TextStyle(fontSize: 11, color: context.palette.textPrimary)),
                       )).toList(),
                     ),
                     if (sto.minPrice != null) ...[
-                      const SizedBox(height: 4),
-                      Text(sto.minPrice!, style: const TextStyle(fontSize: 14, color: AppColors.textSecondary)),
+                      SizedBox(height: 4),
+                      Text(sto.minPrice!, style: TextStyle(fontSize: 14, color: context.palette.textSecondary)),
                     ],
                   ],
                 ),
@@ -1697,7 +2058,7 @@ class _SearchSTOCard extends StatelessWidget {
             ],
           ),
           if (onCall != null || onRoute != null || onShare != null) ...[
-            const SizedBox(height: 10),
+            SizedBox(height: 10),
             FittedBox(
               fit: BoxFit.scaleDown,
               alignment: Alignment.centerLeft,
@@ -1705,32 +2066,32 @@ class _SearchSTOCard extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   if (onCall != null)
-                    _ActionChip(icon: Icons.phone_rounded, label: 'Позвонить', onTap: () => onCall!(sto)),
-                  if (onCall != null && (onRoute != null || onShare != null)) const SizedBox(width: 6),
+                    _ActionChip(icon: Icons.phone_rounded, label: l10n.searchCall, onTap: () => onCall!(sto)),
+                  if (onCall != null && (onRoute != null || onShare != null)) SizedBox(width: 6),
                   if (onRoute != null)
-                    _ActionChip(icon: Icons.directions_rounded, label: 'Маршрут', onTap: () => onRoute!(sto)),
-                  if (onRoute != null && onShare != null) const SizedBox(width: 6),
+                    _ActionChip(icon: Icons.directions_rounded, label: l10n.searchRoute, onTap: () => onRoute!(sto)),
+                  if (onRoute != null && onShare != null) SizedBox(width: 6),
                   if (onShare != null)
-                    _ActionChip(icon: Icons.share_rounded, label: 'Поделиться', onTap: () => onShare!(sto)),
+                    _ActionChip(icon: Icons.share_rounded, label: l10n.searchShare, onTap: () => onShare!(sto)),
                 ],
               ),
             ),
           ],
           if (sto.totalSelectedPriceKopecks != null && sto.totalSelectedPriceKopecks! > 0) ...[
-            const SizedBox(height: 10),
+            SizedBox(height: 10),
             Center(
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
-                  color: AppColors.nestedBg,
+                  color: context.palette.nestedBg,
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: AppColors.border.withValues(alpha: 0.5)),
+                  border: Border.all(color: context.palette.border.withValues(alpha: 0.5)),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.account_balance_wallet_outlined, size: 18, color: AppColors.primary),
-                    const SizedBox(width: 8),
+                    Icon(Icons.account_balance_wallet_outlined, size: 18, color: context.palette.primary),
+                    SizedBox(width: 8),
                     _PriceTimeBadge(
                       priceKopecks: sto.totalSelectedPriceKopecks!,
                       durationMinutes: sto.totalSelectedDurationMinutes ?? 0,
@@ -1757,7 +2118,7 @@ class _ActionChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: AppColors.nestedBg,
+      color: context.palette.nestedBg,
       borderRadius: BorderRadius.circular(8),
       child: InkWell(
         onTap: onTap,
@@ -1767,12 +2128,12 @@ class _ActionChip extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 16, color: AppColors.primary),
-              const SizedBox(width: 4),
-              Text(label, style: const TextStyle(
+              Icon(icon, size: 16, color: context.palette.primary),
+              SizedBox(width: 4),
+              Text(label, style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
-                color: AppColors.primary,
+                color: context.palette.primary,
               )),
             ],
           ),
@@ -1822,6 +2183,7 @@ class _ServiceFilterSheetContentState extends State<_ServiceFilterSheetContent> 
 
   @override
   Widget build(BuildContext context) {
+    final l10n = L10nScope.of(context);
     final query = _searchController.text.trim().toLowerCase();
     final filteredItems = query.isEmpty
         ? widget.items
@@ -1841,11 +2203,11 @@ class _ServiceFilterSheetContentState extends State<_ServiceFilterSheetContent> 
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
             child: Row(
               children: [
-                const Text('Фильтр по услугам', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                Text(l10n.searchServiceFilterTitle, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: context.palette.textPrimary)),
                 const Spacer(),
                 TextButton(
                   onPressed: widget.onReset,
-                  child: const Text('Сбросить всё'),
+                  child: Text(l10n.searchResetAll),
                 ),
               ],
             ),
@@ -1855,8 +2217,8 @@ class _ServiceFilterSheetContentState extends State<_ServiceFilterSheetContent> 
             child: TextField(
               controller: _searchController,
               decoration: InputDecoration(
-                hintText: 'Поиск по услугам',
-                prefixIcon: const Icon(Icons.search_rounded, size: 22, color: AppColors.textSecondary),
+                hintText: l10n.searchServicesSearchHint,
+                prefixIcon: Icon(Icons.search_rounded, size: 22, color: context.palette.textSecondary),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 isDense: true,
@@ -1864,7 +2226,7 @@ class _ServiceFilterSheetContentState extends State<_ServiceFilterSheetContent> 
             ),
           ),
           if (_selectedIds.isNotEmpty) ...[
-            const SizedBox(height: 8),
+            SizedBox(height: 8),
             SizedBox(
               height: 40,
               child: ListView(
@@ -1874,8 +2236,8 @@ class _ServiceFilterSheetContentState extends State<_ServiceFilterSheetContent> 
                   ...widget.items.where((i) => _selectedIds.contains(i.id)).map((i) => Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: Chip(
-                      label: Text(i.name, style: const TextStyle(fontSize: 12)),
-                      deleteIcon: const Icon(Icons.close, size: 16),
+                      label: Text(i.name, style: TextStyle(fontSize: 12)),
+                      deleteIcon: Icon(Icons.close, size: 16),
                       onDeleted: () => setState(() => _selectedIds.remove(i.id)),
                     ),
                   )),
@@ -1883,7 +2245,7 @@ class _ServiceFilterSheetContentState extends State<_ServiceFilterSheetContent> 
               ),
             ),
           ],
-          const SizedBox(height: 8),
+          SizedBox(height: 8),
           Expanded(
             child: ListView(
               controller: widget.scrollController,
@@ -1893,8 +2255,8 @@ class _ServiceFilterSheetContentState extends State<_ServiceFilterSheetContent> 
                   Padding(
                     padding: const EdgeInsets.only(top: 12, bottom: 4),
                     child: Text(
-                      entry.key.isEmpty ? 'Прочее' : (widget.categories.where((c) => c.id == entry.key).map((c) => c.name).firstOrNull ?? 'Услуги'),
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                      entry.key.isEmpty ? l10n.searchCategoryOther : (widget.categories.where((c) => c.id == entry.key).map((c) => c.name).firstOrNull ?? l10n.searchCategoryServicesFallback),
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: context.palette.textSecondary),
                     ),
                   ),
                   ...entry.value.map((item) => CheckboxListTile(
@@ -1903,7 +2265,7 @@ class _ServiceFilterSheetContentState extends State<_ServiceFilterSheetContent> 
                       if (v == true) _selectedIds.add(item.id);
                       else _selectedIds.remove(item.id);
                     }),
-                    title: Text(item.name, style: const TextStyle(fontSize: 14, color: AppColors.textPrimary)),
+                    title: Text(item.name, style: TextStyle(fontSize: 14, color: context.palette.textPrimary)),
                     controlAffinity: ListTileControlAffinity.leading,
                     contentPadding: EdgeInsets.zero,
                   )),
@@ -1913,21 +2275,21 @@ class _ServiceFilterSheetContentState extends State<_ServiceFilterSheetContent> 
           ),
           Container(
             padding: EdgeInsets.fromLTRB(16, 8, 16, MediaQuery.of(context).padding.bottom + 8),
-            color: AppColors.cardBg,
+            color: context.palette.cardBg,
             child: Row(
               children: [
                 Expanded(
                   child: OutlinedButton(
                     onPressed: widget.onReset,
-                    child: const Text('Сбросить'),
+                    child: Text(l10n.searchFiltersReset),
                   ),
                 ),
-                const SizedBox(width: 12),
+                SizedBox(width: 12),
                 Expanded(
                   flex: 2,
                   child: ElevatedButton(
                     onPressed: () => widget.onApply(_selectedIds.toList()..sort()),
-                    child: const Text('Применить'),
+                    child: Text(l10n.searchFiltersApply),
                   ),
                 ),
               ],

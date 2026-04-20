@@ -3,10 +3,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/auth/auth_provider.dart';
 import '../../../../core/repositories/staff_repository.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/app_colors_desktop.dart';
+import '../../../../core/theme/desktop_design_system.dart';
+import '../../../../core/theme/desktop_light_theme.dart';
 import '../../../../shared/models/staff_invitation_model.dart';
+import '../providers/pending_invitations_count_provider.dart';
 
 class IncomingInvitationsScreen extends ConsumerStatefulWidget {
-  const IncomingInvitationsScreen({super.key});
+  const IncomingInvitationsScreen({super.key, this.desktopChrome = false});
+
+  /// Светлая тема как у остальных десктоп-экранов.
+  final bool desktopChrome;
 
   @override
   ConsumerState<IncomingInvitationsScreen> createState() => _IncomingInvitationsScreenState();
@@ -17,6 +24,8 @@ class _IncomingInvitationsScreenState extends ConsumerState<IncomingInvitationsS
   List<StaffInvitation> _items = const [];
   /// После принятия переключить активную организацию на пригласившую.
   bool _setActiveOrganizationOnAccept = true;
+
+  bool get _d => widget.desktopChrome;
 
   @override
   void initState() {
@@ -40,26 +49,46 @@ class _IncomingInvitationsScreenState extends ConsumerState<IncomingInvitationsS
     final e = r.errorOrNull;
     if (e != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message), backgroundColor: AppColors.error),
+        SnackBar(
+          content: Text(e.message),
+          backgroundColor: _d ? AppColorsDesktop.error : AppColors.error,
+        ),
       );
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      appBar: AppBar(title: const Text('Входящие приглашения')),
+    final bg = _d ? AppColorsDesktop.background : AppColors.background;
+    final cardBg = _d ? AppColorsDesktop.surface : AppColors.cardBg;
+    final textPri = _d ? AppColorsDesktop.textPrimary : AppColors.textPrimary;
+    final textSec = _d ? AppColorsDesktop.textSecondary : AppColors.textSecondary;
+    final border = _d ? AppColorsDesktop.border : AppColors.border;
+
+    final scaffold = Scaffold(
+      backgroundColor: bg,
+      appBar: AppBar(
+        title: const Text('Входящие приглашения'),
+        backgroundColor: _d ? AppColorsDesktop.surface : null,
+        foregroundColor: _d ? AppColorsDesktop.textPrimary : null,
+        surfaceTintColor: _d ? Colors.transparent : null,
+        elevation: _d ? 0 : null,
+      ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? Center(
+              child: CircularProgressIndicator(
+                color: _d ? AppColorsDesktop.primary : AppColors.primary,
+              ),
+            )
           : _items.isEmpty
-              ? const Center(
+              ? Center(
                   child: Text(
                     'Приглашений нет',
-                    style: TextStyle(color: AppColors.textSecondary),
+                    style: TextStyle(color: textSec),
                   ),
                 )
               : RefreshIndicator(
+                  color: _d ? AppColorsDesktop.primary : AppColors.primary,
                   onRefresh: _load,
                   child: ListView.separated(
                     padding: const EdgeInsets.all(16),
@@ -69,10 +98,10 @@ class _IncomingInvitationsScreenState extends ConsumerState<IncomingInvitationsS
                       if (i == 0) {
                         return SwitchListTile(
                           contentPadding: EdgeInsets.zero,
-                          title: const Text('Сделать основной организацией'),
-                          subtitle: const Text(
+                          title: Text('Сделать основной организацией', style: TextStyle(color: textPri)),
+                          subtitle: Text(
                             'После принятия приглашения откроется работа в этой организации',
-                            style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                            style: TextStyle(fontSize: 13, color: textSec),
                           ),
                           value: _setActiveOrganizationOnAccept,
                           onChanged: (v) => setState(() => _setActiveOrganizationOnAccept = v),
@@ -80,7 +109,12 @@ class _IncomingInvitationsScreenState extends ConsumerState<IncomingInvitationsS
                       }
                       final item = _items[i - 1];
                       return Card(
-                        color: AppColors.cardBg,
+                        color: cardBg,
+                        elevation: _d ? 0 : null,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(_d ? DesktopDesignSystem.radiusCard : 12),
+                          side: _d ? BorderSide(color: border) : BorderSide.none,
+                        ),
                         child: Padding(
                           padding: const EdgeInsets.all(12),
                           child: Column(
@@ -88,16 +122,16 @@ class _IncomingInvitationsScreenState extends ConsumerState<IncomingInvitationsS
                             children: [
                               Text(
                                 item.organizationName ?? 'Организация',
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontWeight: FontWeight.w700,
-                                  color: AppColors.textPrimary,
+                                  color: textPri,
                                 ),
                               ),
                               const SizedBox(height: 6),
-                              Text('Роль: ${item.role.label}', style: const TextStyle(color: AppColors.textSecondary)),
+                              Text('Роль: ${item.role.label}', style: TextStyle(color: textSec)),
                               if ((item.message ?? '').isNotEmpty) ...[
                                 const SizedBox(height: 6),
-                                Text(item.message!, style: const TextStyle(color: AppColors.textSecondary)),
+                                Text(item.message!, style: TextStyle(color: textSec)),
                               ],
                               const SizedBox(height: 12),
                               Row(
@@ -110,7 +144,7 @@ class _IncomingInvitationsScreenState extends ConsumerState<IncomingInvitationsS
                                   ),
                                   const SizedBox(width: 8),
                                   Expanded(
-                                    child: ElevatedButton(
+                                    child: FilledButton(
                                       onPressed: () => _accept(item),
                                       child: const Text('Принять'),
                                     ),
@@ -125,6 +159,8 @@ class _IncomingInvitationsScreenState extends ConsumerState<IncomingInvitationsS
                   ),
                 ),
     );
+    if (_d) return themeDesktopLight(child: scaffold);
+    return scaffold;
   }
 
   Future<void> _accept(StaffInvitation item) async {
@@ -136,7 +172,10 @@ class _IncomingInvitationsScreenState extends ConsumerState<IncomingInvitationsS
     final err = r.errorOrNull;
     if (err != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(err.message), backgroundColor: AppColors.error),
+        SnackBar(
+          content: Text(err.message),
+          backgroundColor: _d ? AppColorsDesktop.error : AppColors.error,
+        ),
       );
       return;
     }
@@ -144,7 +183,10 @@ class _IncomingInvitationsScreenState extends ConsumerState<IncomingInvitationsS
     await _load();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Приглашение принято'), backgroundColor: AppColors.cardBg),
+      SnackBar(
+        content: const Text('Приглашение принято'),
+        backgroundColor: _d ? AppColorsDesktop.nestedBg : AppColors.cardBg,
+      ),
     );
   }
 
@@ -154,14 +196,21 @@ class _IncomingInvitationsScreenState extends ConsumerState<IncomingInvitationsS
     final err = r.errorOrNull;
     if (err != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(err.message), backgroundColor: AppColors.error),
+        SnackBar(
+          content: Text(err.message),
+          backgroundColor: _d ? AppColorsDesktop.error : AppColors.error,
+        ),
       );
       return;
     }
+    ref.invalidate(pendingInvitationsCountProvider);
     await _load();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Приглашение отклонено'), backgroundColor: AppColors.cardBg),
+      SnackBar(
+        content: const Text('Приглашение отклонено'),
+        backgroundColor: _d ? AppColorsDesktop.nestedBg : AppColors.cardBg,
+      ),
     );
   }
 }

@@ -4,9 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/providers/app_providers.dart';
 import '../../../../core/settings/filter_by_car_setting.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/theme/app_text_styles.dart';
 import '../../../../core/utils/formatters.dart';
+import '../../../../core/utils/vin_validation.dart' show vinValidationMessageRu, normalizeVinOrNull, VinUpperCaseTextInputFormatter;
 import '../../../../core/utils/scroll_center.dart';
 import '../../../../shared/models/car_model.dart';
 
@@ -19,8 +20,8 @@ Future<void> showGarageCarsManagementSheet(
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
-    backgroundColor: AppColors.cardBg,
-    shape: const RoundedRectangleBorder(
+    backgroundColor: context.palette.cardBg,
+    shape: RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
     ),
     builder: (ctx) {
@@ -56,18 +57,18 @@ Future<void> showGarageCarsManagementSheet(
                       width: 40,
                       height: 4,
                       decoration: BoxDecoration(
-                        color: AppColors.border,
+                        color: context.palette.border,
                         borderRadius: BorderRadius.circular(2),
                       ),
                     ),
                   ),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
-                    child: Text('Мои автомобили', style: AppTextStyles.screenTitle.copyWith(fontSize: 20)),
+                    child: Text('Мои автомобили', style: AppTextStyles.screenTitle(context.palette).copyWith(fontSize: 20)),
                   ),
                   Expanded(
                     child: carsAsync.isLoading
-                        ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
+                        ? Center(child: CircularProgressIndicator(color: context.palette.primary))
                         : cars.isEmpty
                             ? Center(
                                 child: Padding(
@@ -75,7 +76,7 @@ Future<void> showGarageCarsManagementSheet(
                                   child: Text(
                                     'Пока нет автомобилей',
                                     textAlign: TextAlign.center,
-                                    style: TextStyle(fontSize: 15, color: AppColors.textSecondary),
+                                    style: TextStyle(fontSize: 15, color: context.palette.textSecondary),
                                   ),
                                 ),
                               )
@@ -85,13 +86,13 @@ Future<void> showGarageCarsManagementSheet(
                                     controller: scrollController,
                                     padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                                     itemCount: cars.length,
-                                    separatorBuilder: (_, _) => const SizedBox(height: 8),
+                                    separatorBuilder: (_, _) => SizedBox(height: 8),
                                     itemBuilder: (_, i) {
                                       final car = cars[i];
                                       final isSelected = car.id == selectedId;
                                       return Material(
                                         key: GlobalObjectKey(car.id),
-                                        color: isSelected ? AppColors.primary.withValues(alpha: 0.08) : AppColors.nestedBg,
+                                        color: isSelected ? context.palette.primary.withValues(alpha: 0.08) : context.palette.nestedBg,
                                         borderRadius: BorderRadius.circular(12),
                                         child: InkWell(
                                           borderRadius: BorderRadius.circular(12),
@@ -110,9 +111,9 @@ Future<void> showGarageCarsManagementSheet(
                                                     Icon(
                                                       Icons.directions_car_rounded,
                                                       size: 22,
-                                                      color: isSelected ? AppColors.primary : AppColors.textSecondary,
+                                                      color: isSelected ? context.palette.primary : context.palette.textSecondary,
                                                     ),
-                                                    const SizedBox(width: 10),
+                                                    SizedBox(width: 10),
                                                     Expanded(
                                                       child: Column(
                                                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -120,26 +121,26 @@ Future<void> showGarageCarsManagementSheet(
                                                           if (car.nickname != null && car.nickname!.trim().isNotEmpty)
                                                             Text(
                                                               car.nickname!.trim(),
-                                                              style: const TextStyle(
+                                                              style: TextStyle(
                                                                 fontSize: 13,
                                                                 fontWeight: FontWeight.w600,
-                                                                color: AppColors.gold1,
+                                                                color: context.palette.gold1,
                                                               ),
                                                               maxLines: 1,
                                                               overflow: TextOverflow.ellipsis,
                                                             ),
                                                           Text(
                                                             car.displayName,
-                                                            style: const TextStyle(
+                                                            style: TextStyle(
                                                               fontSize: 15,
                                                               fontWeight: FontWeight.w600,
-                                                              color: AppColors.textPrimary,
+                                                              color: context.palette.textPrimary,
                                                               height: 1.25,
                                                             ),
                                                             maxLines: 2,
                                                             overflow: TextOverflow.ellipsis,
                                                           ),
-                                                          const SizedBox(height: 6),
+                                                          SizedBox(height: 6),
                                                           Text(
                                                             [
                                                               '${car.year} г.',
@@ -147,7 +148,7 @@ Future<void> showGarageCarsManagementSheet(
                                                               if (car.plateNumber != null && car.plateNumber!.trim().isNotEmpty)
                                                                 car.plateNumber!.trim(),
                                                             ].join(' · '),
-                                                            style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                                                            style: TextStyle(fontSize: 13, color: context.palette.textSecondary),
                                                             maxLines: 2,
                                                             overflow: TextOverflow.ellipsis,
                                                           ),
@@ -156,16 +157,16 @@ Future<void> showGarageCarsManagementSheet(
                                                     ),
                                                   ],
                                                 ),
-                                                const SizedBox(height: 10),
+                                                SizedBox(height: 10),
                                                 Row(
                                                   children: [
                                                     TextButton(
                                                       onPressed: () => _openEditCarDialog(context, car),
-                                                      child: const Text('Изменить'),
+                                                      child: Text('Изменить'),
                                                     ),
                                                     TextButton(
                                                       onPressed: () => _confirmDeleteCar(context, ref, car, afterDeleteReselect),
-                                                      child: Text('Удалить', style: TextStyle(color: AppColors.error)),
+                                                      child: Text('Удалить', style: TextStyle(color: context.palette.error)),
                                                     ),
                                                   ],
                                                 ),
@@ -198,7 +199,7 @@ Future<void> showGarageCarsManagementSheet(
                             Navigator.pop(ctx);
                             await onAddCar();
                           },
-                          child: const Text('Добавить автомобиль'),
+                          child: Text('Добавить автомобиль'),
                         ),
                       ),
                     ),
@@ -313,13 +314,19 @@ class _GarageCarEditDialogState extends ConsumerState<_GarageCarEditDialog> {
       );
       return;
     }
+    final vinErr = vinValidationMessageRu(_vin.text);
+    if (vinErr != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(vinErr)));
+      return;
+    }
+    final vinNorm = normalizeVinOrNull(_vin.text);
     setState(() => _saving = true);
     final ok = await ref.read(carsProvider.notifier).updateCarDetails(
           widget.car.id,
           nickname: _nickname.text.trim(),
           licensePlate: _plate.text.trim(),
           mileage: miles,
-          vin: _vin.text.trim(),
+          vin: vinNorm ?? '',
         );
     if (!mounted) return;
     setState(() => _saving = false);
@@ -338,8 +345,8 @@ class _GarageCarEditDialogState extends ConsumerState<_GarageCarEditDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: AppColors.cardBg,
-      title: const Text('Данные автомобиля'),
+      backgroundColor: context.palette.cardBg,
+      title: Text('Данные автомобиля'),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -347,32 +354,37 @@ class _GarageCarEditDialogState extends ConsumerState<_GarageCarEditDialog> {
           children: [
             Text(
               widget.car.displayName,
-              style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
+              style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
             ),
-            const SizedBox(height: 16),
+            SizedBox(height: 16),
             TextField(
               controller: _nickname,
-              decoration: const InputDecoration(labelText: 'Название (необязательно)'),
+              decoration: InputDecoration(labelText: 'Название (необязательно)'),
               textCapitalization: TextCapitalization.words,
             ),
-            const SizedBox(height: 12),
+            SizedBox(height: 12),
             TextField(
               controller: _plate,
-              decoration: const InputDecoration(labelText: 'Госномер'),
+              decoration: InputDecoration(labelText: 'Госномер'),
               textCapitalization: TextCapitalization.characters,
             ),
-            const SizedBox(height: 12),
+            SizedBox(height: 12),
             TextField(
               controller: _mileage,
-              decoration: const InputDecoration(labelText: 'Пробег, км'),
+              decoration: InputDecoration(labelText: 'Пробег, км'),
               keyboardType: TextInputType.number,
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
             ),
-            const SizedBox(height: 12),
+            SizedBox(height: 12),
             TextField(
               controller: _vin,
-              decoration: const InputDecoration(labelText: 'VIN'),
+              decoration: InputDecoration(labelText: 'VIN (A–Z, 0–9)'),
               textCapitalization: TextCapitalization.characters,
+              inputFormatters: [
+                VinUpperCaseTextInputFormatter(),
+                FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9]')),
+                LengthLimitingTextInputFormatter(32),
+              ],
             ),
           ],
         ),
@@ -380,17 +392,17 @@ class _GarageCarEditDialogState extends ConsumerState<_GarageCarEditDialog> {
       actions: [
         TextButton(
           onPressed: _saving ? null : () => Navigator.pop(context),
-          child: const Text('Отмена'),
+          child: Text('Отмена'),
         ),
         FilledButton(
           onPressed: _saving ? null : _save,
           child: _saving
-              ? const SizedBox(
+              ? SizedBox(
                   width: 22,
                   height: 22,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF0D0D0D)),
+                  child: CircularProgressIndicator(strokeWidth: 2, color: context.palette.onAccent),
                 )
-              : const Text('Сохранить'),
+              : Text('Сохранить'),
         ),
       ],
     );
@@ -406,17 +418,17 @@ Future<void> _confirmDeleteCar(
   final go = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
-      backgroundColor: AppColors.cardBg,
-      title: const Text('Удалить автомобиль?'),
+      backgroundColor: context.palette.cardBg,
+      title: Text('Удалить автомобиль?'),
       content: Text(
-        'Будет удалена карточка «${car.displayName}». История заказов в приложении сохранится, если она была привязана к этому авто.',
-        style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
+        'Карточка «${car.displayName}» исчезнет из гаража и не будет снова подставляться из истории заказов. Записи о заказах в приложении останутся. Локальные напоминания ТО и документы по этому авто будут очищены.',
+        style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('Отмена')),
         TextButton(
           onPressed: () => Navigator.pop(ctx, true),
-          child: Text('Удалить', style: TextStyle(color: AppColors.error)),
+          child: Text('Удалить', style: TextStyle(color: context.palette.error)),
         ),
       ],
     ),

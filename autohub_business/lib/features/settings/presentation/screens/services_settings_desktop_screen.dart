@@ -36,18 +36,6 @@ class _ServicesSettingsDesktopScreenState
     return '$h ч $m мин';
   }
 
-  String _categoryIdForCatalogCategory(
-    ServiceCatalogCategoryRef cat,
-    List<ServiceCategory> categories,
-    SettingsRepository repo,
-  ) {
-    for (final c in categories) {
-      if (c.name.trim().toLowerCase() == cat.categoryName.trim().toLowerCase())
-        return c.id;
-    }
-    return repo.addCategory(cat.categoryName);
-  }
-
   Future<void> _pickFromCatalog(BuildContext context) async {
     ServiceCatalogData data;
     try {
@@ -93,7 +81,7 @@ class _ServicesSettingsDesktopScreenState
               return AlertDialog(
                 backgroundColor: AppColorsDesktop.surface,
                 surfaceTintColor: Colors.transparent,
-                title: const Text('Добавить из справочника AutoHub'),
+                title: const Text('Добавить из справочника MP-Servis'),
                 content: SizedBox(
                   width: 520,
                   height: 420,
@@ -236,13 +224,8 @@ class _ServicesSettingsDesktopScreenState
     final rub = double.tryParse(priceCtrl.text.replaceAll(',', '.')) ?? 0;
     final priceKopecks = (rub * 100).round();
     final dur = int.tryParse(durCtrl.text) ?? item.defaultDurationMinutes;
-    final settingsSnap = ref.read(settingsRepositoryProvider);
     final repo = ref.read(settingsRepositoryProvider.notifier);
-    final catId = _categoryIdForCatalogCategory(
-      cat,
-      settingsSnap.categories,
-      repo,
-    );
+    final catId = repo.categoryIdForCatalogCategory(cat);
     repo.addServiceFromCatalog(
       categoryId: catId,
       catalogItemId: item.id,
@@ -276,7 +259,7 @@ class _ServicesSettingsDesktopScreenState
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const Text(
-                    'Это не добавляет услугу в ваш прайс. Заявка уходит разработчикам AutoHub: после проверки строка появится в общем справочнике, и все организации смогут выбрать её кнопкой «Из справочника».\n\n'
+                    'Это не добавляет услугу в ваш прайс. Заявка уходит разработчикам MP-Servis: после проверки строка появится в общем справочнике, и все организации смогут выбрать её кнопкой «Из справочника».\n\n'
                     'Если нужна только ваша уникальная позиция без единого названия — используйте «Своя услуга».',
                     style: TextStyle(
                       fontSize: 13,

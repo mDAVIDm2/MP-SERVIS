@@ -22,7 +22,12 @@ async function bootstrap() {
 
   const port = process.env.PORT || 3000;
   await app.listen(port, '0.0.0.0');
-  console.log(`AutoHub API: http://localhost:${port}/api/v1 (listening on 0.0.0.0)`);
+  const httpServer = app.getHttpAdapter().getHttpServer() as import('http').Server;
+  // Node по умолчанию держит keep-alive коротко; клиенты (Dart HttpClient) при reuse сокета иногда
+  // получают «Connection closed before full header was received». Увеличиваем таймауты для LAN/dev.
+  httpServer.keepAliveTimeout = 65_000;
+  httpServer.headersTimeout = 66_000;
+  console.log(`MP-Servis API: http://localhost:${port}/api/v1 (listening on 0.0.0.0)`);
 }
 
 bootstrap();

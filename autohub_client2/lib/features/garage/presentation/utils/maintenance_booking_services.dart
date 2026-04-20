@@ -1,23 +1,32 @@
+import '../../../../core/catalog/client_catalog_service_ids.dart';
 import '../../../../core/settings/maintenance_reminders_provider.dart';
 
-/// ID услуг каталога для предзаполнения записи / фильтра поиска.
+/// ID услуг каталога API для предзаполнения записи / фильтра поиска.
 List<String> maintenanceBookingServiceIds(MaintenanceType type) {
   switch (type) {
     case MaintenanceType.oil:
-      return ['s1', 's2'];
+      return [ClientCatalogServiceIds.oilEngine, ClientCatalogServiceIds.oilFilterOnly];
+    case MaintenanceType.airFilter:
+      return [ClientCatalogServiceIds.airFilter];
     case MaintenanceType.brakes:
-      return ['s6'];
+      return [ClientCatalogServiceIds.brakePadsFront];
     case MaintenanceType.antifreeze:
-      return ['s8'];
+      return [ClientCatalogServiceIds.coolant];
     case MaintenanceType.battery:
-      return ['s5'];
+      return [ClientCatalogServiceIds.battery];
     case MaintenanceType.tires:
-      return ['s10'];
+      return [ClientCatalogServiceIds.wheelAlignment];
     case MaintenanceType.inspection:
-      return ['s5'];
+      return [ClientCatalogServiceIds.computerDiag];
+    case MaintenanceType.timingBelt:
+      return [ClientCatalogServiceIds.timingBelt];
+    case MaintenanceType.suspension:
+      return [ClientCatalogServiceIds.shockFront];
+    case MaintenanceType.sparkPlugs:
+      return [ClientCatalogServiceIds.sparkPlugs];
+    case MaintenanceType.alignment:
+      return [ClientCatalogServiceIds.wheelAlignment];
     case MaintenanceType.general:
-      return ['s1', 's2', 's3'];
-    default:
-      return ['s1'];
+      return [ClientCatalogServiceIds.oilEngine, ClientCatalogServiceIds.airFilter];
   }
 }

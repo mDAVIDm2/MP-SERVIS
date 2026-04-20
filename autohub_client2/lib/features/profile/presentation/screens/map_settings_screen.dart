@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:map_launcher/map_launcher.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/l10n/l10n_scope.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/settings/map_provider_setting.dart';
 import '../../../../core/settings/preferred_directions_map_provider.dart';
 
@@ -10,23 +11,24 @@ class MapSettingsScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = L10nScope.of(context);
     final current = ref.watch(mapProviderSettingProvider);
     final preferredMapType = ref.watch(preferredDirectionsMapProvider);
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       appBar: AppBar(
-        backgroundColor: AppColors.background,
-        title: const Text('Карты', style: TextStyle(
-          fontSize: 18, fontWeight: FontWeight.w600, color: AppColors.textPrimary,
+        backgroundColor: context.palette.background,
+        title: Text(l10n.maps, style: TextStyle(
+          fontSize: 18, fontWeight: FontWeight.w600, color: context.palette.textPrimary,
         )),
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const Padding(
-            padding: EdgeInsets.only(left: 4, bottom: 8),
-            child: Text('Карта в приложении', style: TextStyle(
-              fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textSecondary,
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 8),
+            child: Text(l10n.mapInSearchTab, style: TextStyle(
+              fontSize: 13, fontWeight: FontWeight.w600, color: context.palette.textSecondary,
             )),
           ),
           ...MapProvider.values.map((provider) {
@@ -34,7 +36,7 @@ class MapSettingsScreen extends ConsumerWidget {
             return Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Material(
-                color: AppColors.cardBg,
+                color: context.palette.cardBg,
                 borderRadius: BorderRadius.circular(12),
                 child: InkWell(
                   onTap: () => ref.read(mapProviderSettingProvider.notifier).set(provider),
@@ -45,20 +47,20 @@ class MapSettingsScreen extends ConsumerWidget {
                       children: [
                         Icon(
                           isSelected ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded,
-                          color: isSelected ? AppColors.primary : AppColors.textTertiary,
+                          color: isSelected ? context.palette.primary : context.palette.textTertiary,
                           size: 24,
                         ),
-                        const SizedBox(width: 12),
+                        SizedBox(width: 12),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(provider.shortName, style: const TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textPrimary,
+                              Text(provider.shortName, style: TextStyle(
+                                fontSize: 16, fontWeight: FontWeight.w600, color: context.palette.textPrimary,
                               )),
-                              const SizedBox(height: 2),
-                              Text(provider.description, style: const TextStyle(
-                                fontSize: 13, color: AppColors.textSecondary,
+                              SizedBox(height: 2),
+                              Text(provider.description, style: TextStyle(
+                                fontSize: 13, color: context.palette.textSecondary,
                               )),
                             ],
                           ),
@@ -70,15 +72,15 @@ class MapSettingsScreen extends ConsumerWidget {
               ),
             );
           }),
-          const SizedBox(height: 16),
-          const Padding(
-            padding: EdgeInsets.only(left: 4, bottom: 8),
-            child: Text('Приложение для маршрутов', style: TextStyle(
-              fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textSecondary,
+          SizedBox(height: 16),
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 8),
+            child: Text(l10n.routingApp, style: TextStyle(
+              fontSize: 13, fontWeight: FontWeight.w600, color: context.palette.textSecondary,
             )),
           ),
           Material(
-            color: AppColors.cardBg,
+            color: context.palette.cardBg,
             borderRadius: BorderRadius.circular(12),
             child: InkWell(
               onTap: () async {
@@ -86,7 +88,7 @@ class MapSettingsScreen extends ConsumerWidget {
                 if (!context.mounted) return;
                 if (available.isEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Нет установленных карт'), behavior: SnackBarBehavior.floating),
+                    SnackBar(content: Text(l10n.noMapsInstalled), behavior: SnackBarBehavior.floating),
                   );
                   return;
                 }
@@ -94,26 +96,26 @@ class MapSettingsScreen extends ConsumerWidget {
                   ref.read(preferredDirectionsMapProvider.notifier).set(available.first.mapType.name);
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Навигатор сохранён'), behavior: SnackBarBehavior.floating),
+                      SnackBar(content: Text(l10n.navigatorSaved), behavior: SnackBarBehavior.floating),
                     );
                   }
                   return;
                 }
                 final chosen = await showModalBottomSheet<AvailableMap>(
                   context: context,
-                  backgroundColor: AppColors.cardBg,
-                  shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+                  backgroundColor: context.palette.cardBg,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
                   builder: (ctx) => SafeArea(
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Padding(
-                          padding: EdgeInsets.all(16),
-                          child: Text('Выберите навигатор', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+                        Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Text(l10n.chooseNavigator, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: context.palette.textPrimary)),
                         ),
                         ...available.map((map) => ListTile(
-                          leading: const Icon(Icons.map_rounded, color: AppColors.primary, size: 28),
-                          title: Text(directionsMapDisplayName(map), style: const TextStyle(color: AppColors.textPrimary)),
+                          leading: Icon(Icons.map_rounded, color: context.palette.primary, size: 28),
+                          title: Text(directionsMapDisplayName(map), style: TextStyle(color: context.palette.textPrimary)),
                           onTap: () => Navigator.pop(ctx, map),
                         )),
                       ],
@@ -124,7 +126,7 @@ class MapSettingsScreen extends ConsumerWidget {
                   ref.read(preferredDirectionsMapProvider.notifier).set(chosen.mapType.name);
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Навигатор сохранён'), behavior: SnackBarBehavior.floating),
+                      SnackBar(content: Text(l10n.navigatorSaved), behavior: SnackBarBehavior.floating),
                     );
                   }
                 }
@@ -134,24 +136,24 @@ class MapSettingsScreen extends ConsumerWidget {
                 padding: const EdgeInsets.all(16),
                 child: Row(
                   children: [
-                    const Icon(Icons.directions_rounded, color: AppColors.primary, size: 24),
-                    const SizedBox(width: 12),
+                    Icon(Icons.directions_rounded, color: context.palette.primary, size: 24),
+                    SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text('Навигатор для маршрута', style: TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textPrimary,
+                          Text(l10n.navigatorForRoute, style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w600, color: context.palette.textPrimary,
                           )),
-                          const SizedBox(height: 2),
+                          SizedBox(height: 2),
                           Text(
                             preferredDirectionsMapDisplayName(preferredMapType),
-                            style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                            style: TextStyle(fontSize: 13, color: context.palette.textSecondary),
                           ),
                         ],
                       ),
                     ),
-                    const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary, size: 24),
+                    Icon(Icons.chevron_right_rounded, color: context.palette.textTertiary, size: 24),
                   ],
                 ),
               ),

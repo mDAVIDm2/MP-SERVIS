@@ -22,27 +22,27 @@ let EmailOtpDeliveryProvider = EmailOtpDeliveryProvider_1 = class EmailOtpDelive
     }
     buildMail(ctx) {
         const minutes = Math.max(1, Math.ceil(ctx.ttlSeconds / 60));
-        const subject = `AutoHub: код входа (${minutes} мин)`;
+        const subject = `MP-Servis: код входа (${minutes} мин)`;
         const text = [
             'Здравствуйте!',
             '',
-            `Ваш одноразовый код входа в AutoHub: ${ctx.code}`,
+            `Ваш одноразовый код входа в MP-Servis: ${ctx.code}`,
             '',
             `Код действителен ${minutes} мин. Не сообщайте его никому, в том числе сотрудникам поддержки.`,
             '',
             'Если вы не запрашивали вход, просто проигнорируйте это письмо.',
             '',
-            '— AutoHub',
+            '— MP-Servis',
         ].join('\n');
         const html = `
 <!DOCTYPE html>
 <html><body style="font-family:system-ui,sans-serif;line-height:1.5;color:#111">
   <p>Здравствуйте!</p>
-  <p>Ваш одноразовый код входа в <strong>AutoHub</strong>:</p>
+  <p>Ваш одноразовый код входа в <strong>MP-Servis</strong>:</p>
   <p style="font-size:28px;font-weight:700;letter-spacing:4px">${ctx.code}</p>
   <p>Код действителен <strong>${minutes} мин</strong>. Не пересылайте это письмо и не сообщайте код третьим лицам.</p>
   <p style="color:#666;font-size:14px">Если вы не запрашивали вход, проигнорируйте письмо.</p>
-  <p style="margin-top:24px;color:#999;font-size:12px">— AutoHub</p>
+  <p style="margin-top:24px;color:#999;font-size:12px">— MP-Servis</p>
 </body></html>`;
         return { subject, text, html };
     }

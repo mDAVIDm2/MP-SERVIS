@@ -6,6 +6,9 @@ abstract class ChatRepository {
   /// Открыть чат с поддержкой (создаёт при первом обращении).
   Future<Result<Chat>> openSupportChat();
 
+  /// Открыть или создать общий чат с организацией (карточка СТО).
+  Future<Result<Chat>> openOrganizationChat(String organizationId);
+
   /// Все чаты пользователя
   Future<Result<List<Chat>>> getChats();
 

@@ -1,37 +1,60 @@
-﻿@echo off
-chcp 65001 >nul 2>&1
+@echo off
 set "RUN_EXIT=0"
 
 echo ========================================
-echo   AutoHub Business - запуск на телефон
+echo   MP-Servis Business - phone / emulator
 echo ========================================
 echo.
-echo Подключите телефон по USB или запустите эмулятор.
+echo Connect USB device or start an emulator.
+echo.
+echo API: по умолчанию прод https://api.mp-servis.ru/api/v1
+echo       Для Nest в LAN: set USE_LAN_API=1 перед запуском этого bat.
+echo.
+echo Если установка падает ^(подпись не совпадает^): adb uninstall ru.mpservis.business
 echo.
 
 cd /d "%~dp0autohub_business"
 if errorlevel 1 (
-  echo Ошибка: не удалось перейти в папку autohub_business.
+  echo ERROR - Cannot cd to autohub_business.
   set "RUN_EXIT=1"
   goto :final
 )
 if not exist "pubspec.yaml" (
-  echo Ошибка: нет pubspec.yaml в autohub_business.
+  echo ERROR - pubspec.yaml missing in autohub_business.
   set "RUN_EXIT=1"
   goto :final
 )
 
-call flutter run
+where flutter >nul 2>&1
+if errorlevel 1 (
+  echo ERROR - flutter not in PATH.
+  set "RUN_EXIT=9001"
+  goto :final
+)
+
+echo flutter pub get...
+call flutter pub get
+if errorlevel 1 (
+  set "RUN_EXIT=%errorlevel%"
+  goto :final
+)
+
+if "%USE_LAN_API%"=="1" (
+  call flutter run
+) else (
+  call flutter run --dart-define=MP_SERVIS_API_BASE_URL=https://api.mp-servis.ru/api/v1
+)
 set "RUN_EXIT=%errorlevel%"
 
 :final
 echo.
 if not "%RUN_EXIT%"=="0" (
-  echo Завершено с ошибкой (код %RUN_EXIT%).
+  echo Finished with error, code %RUN_EXIT%.
 ) else (
-  echo Сессия flutter run завершена (код 0).
+  echo flutter run finished OK.
 )
 echo.
-echo Нажмите любую клавишу, чтобы закрыть окно...
+if "%NO_PAUSE%"=="1" exit /b %RUN_EXIT%
+echo Press any key to close...
 pause
 exit /b %RUN_EXIT%

@@ -1,12 +1,21 @@
 import '../../shared/models/sto_model.dart';
 import '../api/api_exceptions.dart';
 import '../api/catalog_api_service.dart';
+import '../config/app_config.dart';
 import 'sto_repository.dart';
 
 /// Репозиторий каталога точек через API (организации с бэкенда).
 class ApiSTORepository implements STORepository {
   ApiSTORepository(this._catalog);
   final CatalogApiService _catalog;
+
+  static String? _catalogItemIdFromJson(Map<String, dynamic> m) {
+    final a = m['catalog_item_id']?.toString().trim();
+    if (a != null && a.isNotEmpty) return a;
+    final b = m['catalogItemId']?.toString().trim();
+    if (b != null && b.isNotEmpty) return b;
+    return null;
+  }
 
   static STO _itemToSTO(Map<String, dynamic> o, {bool isFavorite = false}) {
     final carBrands =
@@ -17,7 +26,7 @@ class ApiSTORepository implements STORepository {
     final photoUrlsRaw = o['photo_urls'] as List<dynamic>?;
     final photoUrls =
         photoUrlsRaw
-            ?.map((e) => e.toString())
+            ?.map((e) => AppConfig.resolveOrganizationPhotoUrl(e.toString()))
             .where((s) => s.isNotEmpty)
             .toList() ??
         [];
@@ -43,6 +52,7 @@ class ApiSTORepository implements STORepository {
             category: '',
             priceKopecks: (m['price_kopecks'] as num?)?.toInt() ?? 0,
             durationMinutes: (m['duration_minutes'] as num?)?.toInt() ?? 60,
+            catalogItemId: _catalogItemIdFromJson(m),
             useBodyTypePricing: m['use_body_type_pricing'] == true,
             bodyTypePricing:
                 ((m['body_type_pricing'] as List<dynamic>?) ?? const [])
@@ -81,6 +91,7 @@ class ApiSTORepository implements STORepository {
       isFavorite: isFavorite,
       latitude: lat,
       longitude: lng,
+      logoUrl: photoUrls.isNotEmpty ? photoUrls.first : null,
       photoUrls: photoUrls,
       serviceIds: serviceIds,
       services: services,
@@ -152,6 +163,7 @@ class ApiSTORepository implements STORepository {
             category: catMap[cid] ?? '',
             priceKopecks: (m['price_kopecks'] as num?)?.toInt() ?? 0,
             durationMinutes: (m['duration_minutes'] as num?)?.toInt() ?? 60,
+            catalogItemId: _catalogItemIdFromJson(m),
             requiredSkill: m['required_skill'] as String?,
             useBodyTypePricing: m['use_body_type_pricing'] == true,
             bodyTypePricing:
@@ -208,6 +220,7 @@ class ApiSTORepository implements STORepository {
             durationMinutes:
                 (sm['default_duration_minutes'] as num?)?.toInt() ?? 60,
             requiredSkill: sm['required_skill']?.toString(),
+            catalogItemId: id,
           ),
         );
       }
@@ -226,6 +239,7 @@ class ApiSTORepository implements STORepository {
             priceKopecks: (sm['price_kopecks'] as num?)?.toInt() ?? 0,
             durationMinutes: (sm['duration_minutes'] as num?)?.toInt() ?? 60,
             requiredSkill: sm['required_skill']?.toString(),
+            catalogItemId: id,
           ),
         );
       }

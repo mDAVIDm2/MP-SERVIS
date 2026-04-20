@@ -1,14 +1,18 @@
 {
-  "name": "autohub-backend",
+  "name": "mp-servis-backend",
   "version": "1.0.0",
-  "description": "AutoHub API — NestJS + PostgreSQL для Business и Client",
+  "description": "MP-Servis API — NestJS + PostgreSQL для Business и Client",
   "scripts": {
     "db:create": "node scripts/create-db.js",
+    "db:bootstrap": "ts-node -r tsconfig-paths/register scripts/bootstrap-local-schema.ts",
+    "db:add-user-avatar-column": "node scripts/add-user-avatar-column.js",
+    "db:add-staff-capabilities": "node scripts/add-staff-capabilities-columns.js",
     "seed:internal": "node scripts/seed-internal-admin.js",
     "fix:internal-null-email": "node scripts/fix-internal-operators-null-email.js",
     "clear-orders": "ts-node scripts/clear-orders.ts",
     "chats-find-duplicates": "ts-node -r tsconfig-paths/register scripts/chats-find-duplicates.ts",
     "test:bk": "ts-node -r tsconfig-paths/register scripts/smoke-organization-business-kind.ts",
+    "seed:mp-servis-services": "ts-node -r tsconfig-paths/register scripts/seed-mp-servis-org-services.ts",
     "build": "nest build",
     "prestart": "node scripts/kill-port-3000.js",
     "start": "nest start",
@@ -19,7 +23,8 @@
     "start:debug": "nest start --debug --watch",
     "typeorm": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js",
     "migration:generate": "npm run typeorm -- migration:generate -d src/database/data-source.ts",
-    "migration:run": "npm run typeorm -- migration:run -d src/database/data-source.ts"
+    "migration:run": "npm run typeorm -- migration:run -d src/database/data-source.ts",
+    "migration:run:prod": "node --env-file=.env scripts/run-migrations-prod.js"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",

@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/theme/app_text_styles.dart';
 import '../../../../core/providers/app_providers.dart';
 import '../../../../core/utils/formatters.dart';
-import '../../../../core/settings/map_provider_setting.dart';
+import '../../../../core/navigation/driving_route_launcher.dart';
 import '../../../../core/settings/filter_by_car_setting.dart';
 import '../../../../core/navigation/app_routes.dart';
+import '../../../../core/navigation/shell_navigation_provider.dart';
 import '../../../../core/settings/favorite_sto_ids_provider.dart';
 import '../../../../shared/models/car_model.dart';
 import '../../../../shared/models/sto_model.dart';
@@ -38,28 +38,28 @@ class ServicesScreen extends ConsumerWidget {
     }
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       body: SafeArea(
         child: Column(
           children: [
-            const Padding(
+            Padding(
               padding: EdgeInsets.fromLTRB(20, 12, 20, 0),
               child: SizedBox(
                 height: 56,
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: Text('Мои сервисы', style: AppTextStyles.screenTitle),
+                  child: Text('Мои сервисы', style: AppTextStyles.screenTitle(context.palette)),
                 ),
               ),
             ),
             Expanded(
               child: favoriteAsync.isLoading && stos.isEmpty
-                  ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
+                  ? Center(child: CircularProgressIndicator(color: context.palette.primary))
                   : favoriteAsync.hasError && stos.isEmpty
                       ? Center(
                           child: Text(
                             'Не удалось загрузить избранное',
-                            style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
+                            style: TextStyle(color: context.palette.textSecondary, fontSize: 14),
                           ),
                         )
                       : stos.isEmpty
@@ -69,19 +69,14 @@ class ServicesScreen extends ConsumerWidget {
                       subtitle: 'Добавляйте сервисы в избранное в разделе Поиск — так вы сможете быстро записываться',
                       buttonText: 'Найти сервис',
                       onButton: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Откройте вкладку «Поиск»'),
-                            behavior: SnackBarBehavior.floating,
-                          ),
-                        );
+                        ref.read(shellTargetTabProvider.notifier).state = 2;
                       },
                     )
                   : ListView.separated(
                       physics: const BouncingScrollPhysics(),
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
                       itemCount: stos.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 8),
+                      separatorBuilder: (_, __) => SizedBox(height: 8),
                       itemBuilder: (_, i) => _STOCard(sto: stos[i], ref: ref),
                     ),
             ),
@@ -129,9 +124,9 @@ class _STOCardState extends ConsumerState<_STOCard> {
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeOutCubic,
         decoration: BoxDecoration(
-          color: AppColors.cardBg,
+          color: context.palette.cardBg,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppColors.border),
+          border: Border.all(color: context.palette.border),
         ),
         child: Column(
           children: [
@@ -143,59 +138,59 @@ class _STOCardState extends ConsumerState<_STOCard> {
                     width: 64,
                     height: 64,
                     decoration: BoxDecoration(
-                      color: AppColors.nestedBg,
+                      color: context.palette.nestedBg,
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Center(
                       child: Text(
                         widget.sto.name[0],
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 24,
                           fontWeight: FontWeight.w700,
-                          color: AppColors.primary,
+                          color: context.palette.primary,
                         ),
                       ),
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
                           widget.sto.name,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
-                            color: AppColors.textPrimary,
+                            color: context.palette.textPrimary,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        const SizedBox(height: 4),
+                        SizedBox(height: 4),
                         Row(
                           children: [
-                            const Icon(Icons.star_rounded, size: 14, color: AppColors.primary),
-                            const SizedBox(width: 2),
+                            Icon(Icons.star_rounded, size: 14, color: context.palette.primary),
+                            SizedBox(width: 2),
                             Text(
                               Formatters.rating(widget.sto.rating),
-                              style: const TextStyle(fontSize: 14, color: AppColors.textPrimary),
+                              style: TextStyle(fontSize: 14, color: context.palette.textPrimary),
                             ),
                             Text(
                               ' (${Formatters.reviewCount(widget.sto.reviewCount)})',
-                              style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+                              style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 4),
+                        SizedBox(height: 4),
                         Row(
                           children: [
                             Expanded(
                               child: Text(
                                 widget.sto.address,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 14,
-                                  color: AppColors.textSecondary,
+                                  color: context.palette.textSecondary,
                                 ),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
@@ -204,14 +199,14 @@ class _STOCardState extends ConsumerState<_STOCard> {
                             if (widget.sto.distanceKm != null)
                               Text(
                                 Formatters.distance(widget.sto.distanceKm!),
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 14,
-                                  color: AppColors.textSecondary,
+                                  color: context.palette.textSecondary,
                                 ),
                               ),
                           ],
                         ),
-                        const SizedBox(height: 6),
+                        SizedBox(height: 6),
                         Wrap(
                           spacing: 6,
                           runSpacing: 4,
@@ -219,33 +214,33 @@ class _STOCardState extends ConsumerState<_STOCard> {
                               .map((s) => Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
                                     decoration: BoxDecoration(
-                                      color: AppColors.nestedBg,
+                                      color: context.palette.nestedBg,
                                       borderRadius: BorderRadius.circular(20),
                                     ),
                                     child: Text(
                                       s,
-                                      style: const TextStyle(fontSize: 12, color: AppColors.textPrimary),
+                                      style: TextStyle(fontSize: 12, color: context.palette.textPrimary),
                                     ),
                                   ))
                               .toList(),
                         ),
-                        const SizedBox(height: 6),
+                        SizedBox(height: 6),
                         Row(
                           children: [
                             Container(
                               width: 8,
                               height: 8,
                               decoration: BoxDecoration(
-                                color: widget.sto.isOpen ? AppColors.success : AppColors.error,
+                                color: widget.sto.isOpen ? context.palette.success : context.palette.error,
                                 shape: BoxShape.circle,
                               ),
                             ),
-                            const SizedBox(width: 6),
+                            SizedBox(width: 6),
                             Text(
                               widget.sto.isOpen ? 'Открыто' : 'Закрыто',
                               style: TextStyle(
                                 fontSize: 12,
-                                color: widget.sto.isOpen ? AppColors.success : AppColors.error,
+                                color: widget.sto.isOpen ? context.palette.success : context.palette.error,
                               ),
                             ),
                           ],
@@ -255,34 +250,34 @@ class _STOCardState extends ConsumerState<_STOCard> {
                   ),
                   Icon(
                     _isExpanded ? Icons.expand_less_rounded : Icons.chevron_right_rounded,
-                    color: AppColors.textTertiary,
+                    color: context.palette.textTertiary,
                     size: 24,
                   ),
                 ],
               ),
             ),
             if (_isExpanded) ...[
-              const Divider(color: AppColors.border, height: 1),
+              Divider(color: context.palette.border, height: 1),
               Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
+                    Text(
                       'История посещений',
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.textSecondary,
+                        color: context.palette.textSecondary,
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    SizedBox(height: 12),
                     if (visibleHistory.isEmpty)
-                      const Padding(
+                      Padding(
                         padding: EdgeInsets.only(bottom: 8),
                         child: Text(
                           'Пока нет посещений',
-                          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                          style: TextStyle(fontSize: 13, color: context.palette.textSecondary),
                         ),
                       )
                     else ...[
@@ -300,15 +295,15 @@ class _STOCardState extends ConsumerState<_STOCard> {
                               minimumSize: Size.zero,
                               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                             ),
-                            child: const Text('Развернуть все', style: TextStyle(
+                            child: Text('Развернуть все', style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w500,
-                              color: AppColors.primary,
+                              color: context.palette.primary,
                             )),
                           ),
                         ),
                     ],
-                    const SizedBox(height: 16),
+                    SizedBox(height: 16),
                     Row(
                       children: [
                         Expanded(
@@ -316,11 +311,11 @@ class _STOCardState extends ConsumerState<_STOCard> {
                             height: 44,
                             child: DecoratedBox(
                               decoration: BoxDecoration(
-                                gradient: AppColors.primaryGradient,
+                                gradient: context.palette.primaryGradient,
                                 borderRadius: BorderRadius.circular(10),
                               ),
                               child: ElevatedButton(
-                                onPressed: () => pushCupertino(context, STODetailScreen(sto: widget.sto)),
+                                onPressed: () => pushStoDetailScreen(context, STODetailScreen(sto: widget.sto)),
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: Colors.transparent,
                                   shadowColor: Colors.transparent,
@@ -328,27 +323,27 @@ class _STOCardState extends ConsumerState<_STOCard> {
                                     borderRadius: BorderRadius.circular(10),
                                   ),
                                 ),
-                                child: const Text(
+                                child: Text(
                                   'Записаться',
                                   style: TextStyle(
                                     fontSize: 14,
                                     fontWeight: FontWeight.w600,
-                                    color: Color(0xFF0D0D0D),
+                                    color: context.palette.onAccent,
                                   ),
                                 ),
                               ),
                             ),
                           ),
                         ),
-                        const SizedBox(width: 8),
+                        SizedBox(width: 8),
                         _ActionBtn(
                           icon: Icons.phone_rounded,
                           onTap: () => _openPhone(context, widget.sto),
                         ),
-                        const SizedBox(width: 8),
+                        SizedBox(width: 8),
                         _ActionBtn(
                           icon: Icons.directions_rounded,
-                          onTap: () => _openRoute(context, widget.sto, ref.read(mapProviderSettingProvider)),
+                          onTap: () => _openRoute(context, ref, widget.sto),
                         ),
                       ],
                     ),
@@ -368,7 +363,7 @@ class _STOCardState extends ConsumerState<_STOCard> {
     if (phones.isEmpty) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Номер не указан'), backgroundColor: AppColors.warning),
+          SnackBar(content: Text('Номер не указан'), backgroundColor: context.palette.warning),
         );
       }
       return;
@@ -382,13 +377,13 @@ class _STOCardState extends ConsumerState<_STOCard> {
     final selected = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.cardBg,
-        title: const Text('Выберите номер', style: TextStyle(color: AppColors.textPrimary)),
+        backgroundColor: context.palette.cardBg,
+        title: Text('Выберите номер', style: TextStyle(color: context.palette.textPrimary)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: phones
               .map((n) => ListTile(
-                    title: Text(Formatters.phone(n), style: const TextStyle(color: AppColors.textPrimary)),
+                    title: Text(Formatters.phone(n), style: TextStyle(color: context.palette.textPrimary)),
                     onTap: () => Navigator.pop(ctx, n),
                   ))
               .toList(),
@@ -402,90 +397,28 @@ class _STOCardState extends ConsumerState<_STOCard> {
     }
   }
 
-  static String _appendRouteCacheBust(String url) {
-    final stamp = DateTime.now().millisecondsSinceEpoch;
-    final sep = url.contains('?') ? '&' : '?';
-    final idx = url.indexOf('#');
-    if (idx >= 0) {
-      return url.substring(0, idx) + sep + '_t=$stamp' + url.substring(idx);
-    }
-    return url + sep + '_t=$stamp';
-  }
-
-  /// Маршрут от текущего местоположения до точки в выбранных картах
-  static Future<void> _openRoute(BuildContext context, STO sto, MapProvider mapProvider) async {
+  static Future<void> _openRoute(BuildContext context, WidgetRef ref, STO sto) async {
     if (sto.latitude == null || sto.longitude == null) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Адрес сервиса не привязан к карте'),
-            backgroundColor: AppColors.warning,
+          SnackBar(
+            content: const Text('Адрес сервиса не привязан к карте'),
+            backgroundColor: context.palette.warning,
           ),
         );
       }
       return;
     }
-    String url;
-    try {
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled && context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Включите геолокацию для построения маршрута'),
-            backgroundColor: AppColors.warning,
-          ),
-        );
-      }
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-      if (permission == LocationPermission.deniedForever) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Доступ к местоположению запрещён. Маршрут откроется до точки назначения.'),
-              backgroundColor: AppColors.info,
-            ),
-          );
-        }
-      }
-      Position? position;
-      if (permission == LocationPermission.whileInUse || permission == LocationPermission.always) {
-        position = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium),
-        );
-      }
-      if (mapProvider == MapProvider.google) {
-        if (position != null) {
-          url = 'https://www.google.com/maps/dir/?api=1&origin=${position.latitude},${position.longitude}&destination=${sto.latitude},${sto.longitude}&travelmode=driving';
-        } else {
-          url = 'https://www.google.com/maps/dir/?api=1&origin=current+location&destination=${sto.latitude},${sto.longitude}&travelmode=driving';
-        }
-      } else if (mapProvider == MapProvider.yandex) {
-        if (position != null) {
-          url = 'https://yandex.ru/maps/?rtext=${position.latitude},${position.longitude}~${sto.latitude},${sto.longitude}&rtt=auto';
-        } else {
-          url = 'https://yandex.ru/maps/?pt=${sto.longitude},${sto.latitude}&z=16';
-        }
-      } else {
-        url = 'https://www.openstreetmap.org/directions?from=${position?.latitude ?? ""},${position?.longitude ?? ""}&to=${sto.latitude},${sto.longitude}';
-        if (position == null) {
-          url = 'https://www.openstreetmap.org/?mlat=${sto.latitude}&mlon=${sto.longitude}#map=16/${sto.latitude}/${sto.longitude}';
-        }
-      }
-      url = _appendRouteCacheBust(url);
-      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Не удалось построить маршрут: $e'),
-            backgroundColor: AppColors.error,
-          ),
-        );
-      }
-    }
+    final position = await tryCurrentUserPositionForRoute();
+    if (!context.mounted) return;
+    await launchDrivingRoute(
+      context,
+      ref,
+      destLat: sto.latitude!,
+      destLng: sto.longitude!,
+      destinationTitle: sto.name,
+      userPosition: position,
+    );
   }
 }
 
@@ -514,30 +447,30 @@ class _HistoryRow extends StatelessWidget {
               children: [
                 Text(
                   date,
-                  style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                  style: TextStyle(fontSize: 13, color: context.palette.textSecondary),
                 ),
-                const SizedBox(width: 12),
+                SizedBox(width: 12),
                 Expanded(
                   child: Text(
                     workName,
-                    style: const TextStyle(fontSize: 13, color: AppColors.textPrimary),
+                    style: TextStyle(fontSize: 13, color: context.palette.textPrimary),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 Text(
                   price,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
+                    color: context.palette.textPrimary,
                   ),
                 ),
-                const SizedBox(width: 4),
+                SizedBox(width: 4),
                 Icon(
                   Icons.chevron_right_rounded,
                   size: 20,
-                  color: AppColors.textTertiary,
+                  color: context.palette.textTertiary,
                 ),
               ],
             ),
@@ -562,11 +495,11 @@ class _ActionBtn extends StatelessWidget {
         width: 44,
         height: 44,
         decoration: BoxDecoration(
-          color: AppColors.nestedBg,
+          color: context.palette.nestedBg,
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AppColors.border),
+          border: Border.all(color: context.palette.border),
         ),
-        child: Icon(icon, size: 20, color: AppColors.textPrimary),
+        child: Icon(icon, size: 20, color: context.palette.textPrimary),
       ),
     );
   }

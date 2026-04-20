@@ -3,15 +3,15 @@ import 'package:flutter/foundation.dart';
 class AppConfig {
   AppConfig._();
 
-  /// Тот же хост по умолчанию, что в `autohub_business`, чтобы панель и Business смотрели на один API без `--dart-define`.
-  /// Локальная сеть по умолчанию: `192.168.1.186` (можно переопределить через `--dart-define=AUTOHUB_API_HOST=...`).
+  /// Если задан полный [MP_SERVIS_API_BASE_URL], хост из окружения не используется.
+  /// Иначе — хост локального Nest (для разработки без базового URL).
   static const String _apiHostFromEnv = String.fromEnvironment(
-    'AUTOHUB_API_HOST',
-    defaultValue: '192.168.1.186',
+    'MP_SERVIS_API_HOST',
+    defaultValue: '127.0.0.1',
   );
   static String get apiHost {
     if (_apiHostFromEnv.isNotEmpty) return _apiHostFromEnv;
-    if (kIsWeb) return '192.168.1.186';
+    if (kIsWeb) return '127.0.0.1';
     switch (defaultTargetPlatform) {
       case TargetPlatform.windows:
       case TargetPlatform.linux:
@@ -19,9 +19,9 @@ class AppConfig {
         return '127.0.0.1';
       case TargetPlatform.android:
       case TargetPlatform.iOS:
-        return '192.168.1.186';
+        return '10.0.2.2';
       default:
-        return '192.168.1.186';
+        return '127.0.0.1';
     }
   }
 
@@ -29,10 +29,29 @@ class AppConfig {
   static const String apiPath = '/api/v1';
 
   static const String environment = String.fromEnvironment(
-    'AUTOHUB_ENV',
+    'MP_SERVIS_ENV',
     defaultValue: 'dev',
   );
 
+  /// По умолчанию продакшен MP-Servis. Для локального Nest: `--dart-define=MP_SERVIS_API_BASE_URL=http://127.0.0.1:3000`
+  static const String _apiBaseUrlFromEnv = String.fromEnvironment(
+    'MP_SERVIS_API_BASE_URL',
+    defaultValue: 'https://api.mp-servis.ru',
+  );
+
   /// Base URL с завершающим слэшем для корректной склейки путей в Dio.
-  static String get baseUrl => 'http://$apiHost:$apiPort$apiPath/';
+  static String get baseUrl {
+    final raw = _apiBaseUrlFromEnv.trim();
+    if (raw.isEmpty) {
+      return 'http://$apiHost:$apiPort$apiPath/';
+    }
+    var u = raw;
+    while (u.endsWith('/')) {
+      u = u.substring(0, u.length - 1);
+    }
+    if (!u.endsWith('/api/v1')) {
+      u = '$u/api/v1';
+    }
+    return '$u/';
+  }
 }

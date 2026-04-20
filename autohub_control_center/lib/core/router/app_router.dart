@@ -8,6 +8,7 @@ import '../../features/dashboard/dashboard_screen.dart';
 import '../../features/organizations/organizations_screen.dart';
 import '../../features/organizations/organization_detail_screen.dart';
 import '../../features/users/users_screen.dart';
+import '../../features/users/user_detail_screen.dart';
 import '../../features/subscriptions/subscriptions_screen.dart';
 import '../../features/car_dictionaries/car_dictionaries_screen.dart';
 import '../../features/service_dictionaries/service_dictionaries_screen.dart';
@@ -60,7 +61,19 @@ final goRouterProvider = Provider<GoRouter>((ref) {
                 ),
               ],
             ),
-              GoRoute(path: 'users', builder: (context, state) => const UsersScreen()),
+              GoRoute(
+                path: 'users',
+                builder: (context, state) => const UsersScreen(),
+                routes: [
+                  GoRoute(
+                    path: ':userId',
+                    builder: (context, state) {
+                      final id = state.pathParameters['userId'] ?? '';
+                      return UserDetailScreen(userId: id);
+                    },
+                  ),
+                ],
+              ),
               GoRoute(path: 'subscriptions', builder: (context, state) => const SubscriptionsScreen()),
               GoRoute(path: 'car-dictionaries', builder: (context, state) => const CarDictionariesScreen()),
               GoRoute(path: 'service-dictionaries', builder: (context, state) => const ServiceDictionariesScreen()),

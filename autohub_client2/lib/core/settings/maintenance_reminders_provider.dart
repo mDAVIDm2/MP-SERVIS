@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../auth/auth_provider.dart' show authProvider, sharedPreferencesProvider;
+import '../sync/client_app_state_push_bridge.dart';
 import '../../shared/models/car_model.dart';
 import '../../shared/models/order_model.dart';
 
@@ -12,7 +13,7 @@ const _kSyncedOrderIdsPrefix = 'maintenance_synced_order_ids_';
 
 /// Тип обслуживания для напоминания. Масло и масляный фильтр — один пункт (`oil`).
 enum MaintenanceType {
-  oil('Замена масла и масляного фильтра', 'По пробегу и/или раз в год'),
+  oil('Замена моторного масла и масляного фильтра', 'Две услуги в каталоге, выполняются вместе; один интервал'),
   airFilter('Замена воздушного фильтра', 'По регламенту'),
   antifreeze('Замена антифриза', 'По регламенту'),
   brakes('Тормозные колодки/диски', 'По износу'),
@@ -366,6 +367,7 @@ class MaintenanceRemindersNotifier extends StateNotifier<MaintenanceRemindersSta
     await prefs.setString(_keyConfig, jsonEncode(state.configs.map((e) => e.toJson()).toList()));
     await prefs.setString(_keyRecords, jsonEncode(state.records.map((e) => e.toJson()).toList()));
     await prefs.setString(_keySynced, jsonEncode(state.syncedOrderIds.toList()));
+    scheduleClientAppStatePush();
   }
 
   static bool _sameLogicalType(String typeKeyA, String typeKeyB) {
@@ -551,6 +553,19 @@ class MaintenanceRemindersNotifier extends StateNotifier<MaintenanceRemindersSta
     _save();
   }
 
+  /// Удаление авто из гаража: все интервалы ТО и записи по этому [carId].
+  void removeAllDataForCar(String carId) {
+    if (carId.isEmpty) return;
+    final newConfigs = state.configs.where((c) => c.carId != carId).toList();
+    final newRecords = state.records.where((r) => r.carId != carId).toList();
+    state = MaintenanceRemindersState(
+      configs: newConfigs,
+      records: newRecords,
+      syncedOrderIds: state.syncedOrderIds,
+    );
+    _save();
+  }
+
   void addRecord(MaintenanceRecord record) {
     final tk = record.typeKey == 'oilFilter' ? MaintenanceType.oil.name : record.typeKey;
     final r = MaintenanceRecord(
@@ -592,5 +607,39 @@ class MaintenanceRemindersNotifier extends StateNotifier<MaintenanceRemindersSta
         remindEnabled: enabled,
       ));
     }
+  }
+
+  /// Активные напоминания по умолчанию (только если для типа ещё нет конфигурации).
+  void ensureStandardRemindersForCar(String carId) {
+    if (carId.isEmpty) return;
+    var configs = [...state.configs];
+    var changed = false;
+    void addKm(MaintenanceType type, int intervalKm) {
+      if (configs.any((c) => c.carId == carId && _sameLogicalType(c.typeKey, type.name))) {
+        return;
+      }
+      configs.add(MaintenanceConfig(
+        carId: carId,
+        typeKey: type.name,
+        intervalKm: intervalKm,
+        useKmInterval: true,
+        intervalMonths: 0,
+        useMonthsInterval: false,
+        remindEnabled: true,
+      ));
+      changed = true;
+    }
+
+    addKm(MaintenanceType.oil, 7000);
+    addKm(MaintenanceType.airFilter, 14000);
+    addKm(MaintenanceType.brakes, 30000);
+    addKm(MaintenanceType.alignment, 30000);
+    if (!changed) return;
+    state = MaintenanceRemindersState(
+      configs: configs,
+      records: state.records,
+      syncedOrderIds: state.syncedOrderIds,
+    );
+    _save();
   }
 }

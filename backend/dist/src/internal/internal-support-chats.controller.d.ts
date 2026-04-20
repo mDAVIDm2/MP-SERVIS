@@ -10,6 +10,9 @@ export declare class InternalSupportChatsController {
             order_status: any;
             organization_id: string;
             organization_name: any;
+            organization_photo_url: string | null;
+            organization_phone: string | null;
+            client_avatar_url: string | null;
             organization_kind: "sto" | "car_wash" | "detailing" | "car_audio" | "tire_service" | "body_shop" | "glass" | "tuning" | "ev_service" | "other" | null;
             business_kind: "sto" | "car_wash" | "detailing" | "car_audio" | "tire_service" | "body_shop" | "glass" | "tuning" | "ev_service" | "other" | null;
             car_info: any;

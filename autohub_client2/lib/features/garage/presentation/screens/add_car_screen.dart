@@ -1,15 +1,24 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/theme/app_colors.dart';
+import 'package:image_picker/image_picker.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/providers/app_providers.dart';
+import '../../../../core/settings/maintenance_reminders_provider.dart';
 import '../../../../core/api/reference_api_service.dart';
 import '../../../../core/api/car_reference_data.dart';
+import '../../../../shared/models/car_model.dart';
+import '../../../../core/utils/vin_validation.dart';
 import '../../../../shared/widgets/common_widgets.dart';
 import '../../../../shared/widgets/russian_license_plate_field.dart';
+import '../widgets/car_reference_autocomplete_field.dart';
 
 class AddCarScreen extends ConsumerStatefulWidget {
-  const AddCarScreen({super.key});
+  const AddCarScreen({super.key, this.editCarId});
+
+  /// Если задан — только шаг марка/модель/поколение: исправить данные существующей машины (после отклонения заявки и т.п.).
+  final String? editCarId;
 
   @override
   ConsumerState<AddCarScreen> createState() => _AddCarScreenState();
@@ -51,8 +60,31 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
   /// Защита от повторных нажатий «Сохранить» пока идёт запись и запрос к API.
   bool _saving = false;
 
-  static const String _kOther = '__other__';
+  /// Локальный путь к фото до сохранения машины (после сохранения загружается через updateCarPhoto).
+  String? _pickedPhotoPath;
+
+  bool _editSeeded = false;
+
   static const int kMinCarYear = 1950;
+
+  /// Пресеты цвета: свотч + строка для API (пользователь может изменить текст вручную).
+  static const List<({Color swatch, String name})> _kColorPresets = [
+    (swatch: Color(0xFFF5F5F5), name: 'Белый'),
+    (swatch: Color(0xFF1A1A1A), name: 'Чёрный'),
+    (swatch: Color(0xFFC0C0C0), name: 'Серебристый'),
+    (swatch: Color(0xFF757575), name: 'Серый'),
+    (swatch: Color(0xFFE53935), name: 'Красный'),
+    (swatch: Color(0xFF1976D2), name: 'Синий'),
+    (swatch: Color(0xFF2E7D32), name: 'Зелёный'),
+    (swatch: Color(0xFF6D4C41), name: 'Коричневый'),
+    (swatch: Color(0xFFD7CCC8), name: 'Бежевый'),
+    (swatch: Color(0xFFFDD835), name: 'Жёлтый'),
+    (swatch: Color(0xFFFF9800), name: 'Оранжевый'),
+    (swatch: Color(0xFF7B1FA2), name: 'Фиолетовый'),
+  ];
+
+  /// Индекс выбранного пресета или null, если введён свой текст.
+  int? _selectedColorPresetIndex;
 
   final _engines = ['Бензин', 'Дизель', 'Гибрид', 'Электро', 'Газ'];
   final _transmissions = ['Автомат', 'Механика', 'Робот', 'Вариатор'];
@@ -77,6 +109,12 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
     'Готово',
   ];
 
+  bool get _isEditMode =>
+      widget.editCarId != null && widget.editCarId!.trim().isNotEmpty;
+
+  List<String> get _effectiveSteps =>
+      _isEditMode ? const ['Марка и модель'] : _steps;
+
   int get _maxCarYear => DateTime.now().year;
 
   bool _yearValid() {
@@ -87,7 +125,97 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
     return y >= kMinCarYear && y <= _maxCarYear;
   }
 
+  /// Рамка поля года: зелёный при 4 верных цифрах, красный при полном но неверном годе, иначе нейтрально.
+  Color? _yearFieldBorderColor() {
+    final s = _yearController.text.trim();
+    if (s.length != 4) return null;
+    return _yearValid() ? context.palette.success : context.palette.error;
+  }
+
+  Color? _plateFieldBorderColor() {
+    final plate = normalizePlateInput(_plateController.text);
+    if (plate.isEmpty) return null;
+    return isValidRussianPlateCompact(plate) ? context.palette.success : context.palette.error;
+  }
+
+  Color? _vinFieldBorderColor() {
+    final t = _vinController.text.trim();
+    if (t.isEmpty) return null;
+    return vinValidationMessageRu(_vinController.text) == null
+        ? context.palette.success
+        : context.palette.error;
+  }
+
+  Color? _mileageFieldBorderColor() {
+    final s = _mileageController.text.replaceAll(' ', '').trim();
+    if (s.isEmpty) return null;
+    final n = int.tryParse(s);
+    return (n != null && n >= 0) ? context.palette.success : context.palette.error;
+  }
+
+  void _syncColorPresetIndexFromText(String text) {
+    final t = text.trim().toLowerCase();
+    int? idx;
+    for (var i = 0; i < _kColorPresets.length; i++) {
+      if (_kColorPresets[i].name.toLowerCase() == t) {
+        idx = i;
+        break;
+      }
+    }
+    _selectedColorPresetIndex = idx;
+  }
+
   bool get _useReference => _brands != null && _brands!.isNotEmpty;
+
+  /// Нужна ли заявка разработчикам (ручной ввод или поколение вне справочника).
+  bool _needsReferenceModeration({
+    required int? brandId,
+    required int? modelId,
+    required int? generationId,
+    required String brandName,
+    required String modelName,
+    required String? generation,
+  }) {
+    final bn = brandName.trim();
+    final mn = modelName.trim();
+    final g = generation?.trim() ?? '';
+    return (brandId == null && bn.isNotEmpty) ||
+        (modelId == null && mn.isNotEmpty && mn != '—') ||
+        (generationId == null && g.isNotEmpty);
+  }
+
+  /// Тексты марки/модели/поколения из формы — не из ответа API (там иногда пустые строки при тех же id).
+  Future<bool> _submitPendingFromForm({
+    required String carId,
+    required String brandName,
+    required String modelName,
+    required String? generation,
+    required int? brandId,
+    required int? modelId,
+    required int? generationId,
+  }) async {
+    if (!_needsReferenceModeration(
+      brandId: brandId,
+      modelId: modelId,
+      generationId: generationId,
+      brandName: brandName,
+      modelName: modelName,
+      generation: generation,
+    )) {
+      return true;
+    }
+    final mn = modelName.trim();
+    final g = generation?.trim() ?? '';
+    final pendingRes = await ref.read(referenceApiServiceProvider).submitPendingCar(
+          carId: carId,
+          pendingBrand: brandName.trim().isNotEmpty ? brandName.trim() : null,
+          pendingModel: mn.isNotEmpty && mn != '—' ? mn : null,
+          pendingGeneration: generationId == null && g.isNotEmpty ? g : null,
+          referenceBrandId: brandId,
+          referenceModelId: modelId,
+        );
+    return pendingRes.errorOrNull == null;
+  }
 
   bool get _canProceed {
     switch (_step) {
@@ -139,6 +267,12 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
   void initState() {
     super.initState();
     _loadBrands();
+    if (_isEditMode) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        await ref.read(carsProvider.notifier).loadCars(silent: true);
+        if (mounted) await _trySeedEditCar();
+      });
+    }
   }
 
   Future<void> _loadBrands() async {
@@ -147,11 +281,162 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
     if (!mounted) return;
     final fromApi = result.dataOrNull;
     final useBundled = fromApi == null || fromApi.isEmpty;
+    final raw = useBundled
+        ? CarReferenceData.bundledBrands
+        : List<CarBrandDto>.from(fromApi);
+    raw.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     setState(() {
       _brandsLoading = false;
-      _brands = useBundled ? CarReferenceData.bundledBrands : fromApi;
+      _brands = raw;
       _usingBundledData = useBundled;
     });
+    if (_isEditMode && mounted) {
+      await _trySeedEditCar();
+    }
+  }
+
+  void _applyManualBrandModelFromCar(Car car) {
+    _brandOther = true;
+    _selectedBrand = null;
+    _modelOther = false;
+    _selectedModel = null;
+    _selectedGeneration = null;
+    _generationOther = false;
+    _models = null;
+    _generations = null;
+    _brandController.text = car.brand;
+    _modelController.text = car.model;
+    final g = car.generation?.trim() ?? '';
+    if (g.isNotEmpty) {
+      _generationOther = true;
+      _customGenerationController.text = g;
+    } else {
+      _generationOther = false;
+      _customGenerationController.clear();
+    }
+  }
+
+  Future<void> _trySeedEditCar() async {
+    if (!_isEditMode || _editSeeded || _brands == null || _brands!.isEmpty) {
+      return;
+    }
+    final id = widget.editCarId!.trim();
+    final cars = ref.read(carsProvider).valueOrNull ?? [];
+    Car? car;
+    for (final c in cars) {
+      if (c.id == id) {
+        car = c;
+        break;
+      }
+    }
+    if (car == null) {
+      _editSeeded = true;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+              'Автомобиль не найден в гараже. Обновите список и откройте экран снова.',
+            ),
+            backgroundColor: context.palette.error,
+          ),
+        );
+        Navigator.pop(context);
+      }
+      return;
+    }
+
+    _nicknameController.text = car.nickname ?? '';
+
+    if (car.brandId != null) {
+      CarBrandDto? b;
+      for (final x in _brands!) {
+        if (x.id == car.brandId) {
+          b = x;
+          break;
+        }
+      }
+      if (b != null) {
+        _brandOther = false;
+        _selectedBrand = b;
+        await _loadModels(b.id);
+        if (!mounted) return;
+        if (car.modelId != null && _models != null) {
+          CarModelDto? m;
+          for (final x in _models!) {
+            if (x.id == car.modelId) {
+              m = x;
+              break;
+            }
+          }
+          if (m != null) {
+            _modelOther = false;
+            _selectedModel = m;
+            await _loadGenerations();
+            if (!mounted) return;
+            if (car.generationId != null && _generations != null) {
+              CarGenerationDto? g;
+              for (final x in _generations!) {
+                if (x.id == car.generationId) {
+                  g = x;
+                  break;
+                }
+              }
+              if (g != null) {
+                _generationOther = false;
+                _selectedGeneration = g;
+                _customGenerationController.clear();
+              } else {
+                _generationOther = true;
+                _selectedGeneration = null;
+                _customGenerationController.text = car.generation?.trim() ?? '';
+              }
+            } else {
+              final gt = car.generation?.trim() ?? '';
+              if (gt.isNotEmpty) {
+                _generationOther = true;
+                _selectedGeneration = null;
+                _customGenerationController.text = gt;
+              } else {
+                _generationOther = false;
+                _selectedGeneration = null;
+                _customGenerationController.clear();
+              }
+            }
+          } else {
+            _modelOther = true;
+            _selectedModel = null;
+            _modelController.text = car.model;
+            final gt = car.generation?.trim() ?? '';
+            if (gt.isNotEmpty) {
+              _generationOther = true;
+              _customGenerationController.text = gt;
+            } else {
+              _generationOther = false;
+              _customGenerationController.clear();
+            }
+          }
+        } else {
+          _modelOther = true;
+          _selectedModel = null;
+          _modelController.text = car.model;
+          final gt = car.generation?.trim() ?? '';
+          if (gt.isNotEmpty) {
+            _generationOther = true;
+            _customGenerationController.text = gt;
+          } else {
+            _generationOther = false;
+            _customGenerationController.clear();
+          }
+        }
+      } else {
+        _applyManualBrandModelFromCar(car);
+      }
+    } else {
+      _applyManualBrandModelFromCar(car);
+    }
+
+    _editSeeded = true;
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadModels(int brandId) async {
@@ -164,8 +449,10 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
     });
     if (_usingBundledData) {
       if (!mounted) return;
+      final m = CarReferenceData.modelsForBrand(brandId);
+      m.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
       setState(() {
-        _models = CarReferenceData.modelsForBrand(brandId);
+        _models = m;
         _modelsLoading = false;
       });
       return;
@@ -174,9 +461,11 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
         .read(referenceApiServiceProvider)
         .getCarModels(brandId);
     if (!mounted) return;
+    final m = List<CarModelDto>.from(result.dataOrNull ?? []);
+    m.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     setState(() {
       _modelsLoading = false;
-      _models = result.dataOrNull ?? [];
+      _models = m;
     });
   }
 
@@ -193,9 +482,14 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
         _selectedBrand!.name,
         _selectedModel!.name,
       );
+      list.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
       setState(() {
         _generations = list;
         _generationsLoading = false;
+        if (list.isEmpty && !_modelOther && !_brandOther) {
+          _generationOther = true;
+          _selectedGeneration = null;
+        }
       });
       return;
     }
@@ -203,9 +497,15 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
         .read(referenceApiServiceProvider)
         .getCarGenerations(_selectedModel!.id);
     if (!mounted) return;
+    final gens = List<CarGenerationDto>.from(result.dataOrNull ?? []);
+    gens.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     setState(() {
       _generationsLoading = false;
-      _generations = result.dataOrNull ?? [];
+      _generations = gens;
+      if (gens.isEmpty && _selectedModel != null && !_modelOther && !_brandOther) {
+        _generationOther = true;
+        _selectedGeneration = null;
+      }
     });
   }
 
@@ -223,11 +523,97 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
     super.dispose();
   }
 
+  Future<void> _saveEditReference() async {
+    if (!_isEditMode || !_canProceed || _saving) return;
+    setState(() => _saving = true);
+    try {
+      HapticFeedback.heavyImpact();
+      final brandName = _useReference
+          ? (_brandOther
+              ? _brandController.text.trim()
+              : (_selectedBrand?.name ?? ''))
+          : _brandController.text.trim();
+      final modelName = _useReference
+          ? (_modelOther || _brandOther
+              ? _modelController.text.trim()
+              : (_selectedModel?.name ?? ''))
+          : _modelController.text.trim();
+      final generation = _useReference
+          ? ((_generationOther || _brandOther || _modelOther)
+              ? (_customGenerationController.text.trim().isEmpty
+                  ? null
+                  : _customGenerationController.text.trim())
+              : _selectedGeneration?.name)
+          : null;
+      final brandId = _useReference && !_brandOther ? _selectedBrand?.id : null;
+      final modelId = _useReference && !_modelOther ? _selectedModel?.id : null;
+      final generationId =
+          _useReference && !_generationOther && !_brandOther && !_modelOther
+              ? _selectedGeneration?.id
+              : null;
+      final nick = _nicknameController.text.trim();
+
+      final car = await ref.read(carsProvider.notifier).patchCarGarageReference(
+            widget.editCarId!.trim(),
+            brand: brandName,
+            model: modelName,
+            generation: generation,
+            brandId: brandId,
+            modelId: modelId,
+            generationId: generationId,
+            nickname: nick.isEmpty ? null : nick,
+          );
+
+      if (!mounted) return;
+
+      if (car == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Не удалось сохранить данные. Проверьте сеть и войдите в аккаунт.'),
+            backgroundColor: context.palette.error,
+          ),
+        );
+        return;
+      }
+
+      final pendingOk = await _submitPendingFromForm(
+        carId: car.id,
+        brandName: brandName,
+        modelName: modelName,
+        generation: generation,
+        brandId: brandId,
+        modelId: modelId,
+        generationId: generationId,
+      );
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            pendingOk
+                ? 'Данные авто обновлены. При необходимости заявка снова отправлена разработчикам.'
+                : 'Данные сохранены. Заявка модераторам не дошла — проверьте сеть.',
+          ),
+          backgroundColor: pendingOk ? context.palette.success : Colors.orange.shade800,
+        ),
+      );
+      Navigator.pop(context, car.id);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   Future<void> _handlePrimary() async {
     if (!_canProceed || _saving) return;
 
-    if (_step < _steps.length - 1) {
+    if (_step < _effectiveSteps.length - 1) {
       setState(() => _step++);
+      return;
+    }
+
+    if (_isEditMode) {
+      await _saveEditReference();
       return;
     }
 
@@ -260,6 +646,15 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
         }
         return;
       }
+
+      final vinErr = vinValidationMessageRu(_vinController.text);
+      if (vinErr != null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(vinErr)));
+        }
+        return;
+      }
+      final vinNorm = normalizeVinOrNull(_vinController.text);
 
       final year = int.parse(_yearController.text.trim());
       final mileage =
@@ -300,9 +695,7 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
             year: year,
             licensePlate: plateCompact.isEmpty ? null : plateCompact,
             mileage: mileage,
-            vin: _vinController.text.trim().isEmpty
-                ? null
-                : _vinController.text.trim(),
+            vin: vinNorm,
             nickname: _nicknameController.text.trim().isEmpty
                 ? null
                 : _nicknameController.text.trim(),
@@ -329,24 +722,21 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
         return;
       }
 
-      var pendingOk = true;
-      if (car.hasPendingBrand ||
-          car.hasPendingModel ||
-          car.hasPendingGeneration) {
-        final pendingRes = await ref
-            .read(referenceApiServiceProvider)
-            .submitPendingCar(
-              carId: car.id,
-              pendingBrand: car.hasPendingBrand ? car.brand : null,
-              pendingModel: car.hasPendingModel ? car.model : null,
-              pendingGeneration: car.hasPendingGeneration
-                  ? car.generation
-                  : null,
-            );
-        if (pendingRes.errorOrNull != null) {
-          pendingOk = false;
-        }
+      ref.read(maintenanceRemindersProvider.notifier).ensureStandardRemindersForCar(car.id);
+      final photoPath = _pickedPhotoPath;
+      if (photoPath != null && photoPath.isNotEmpty) {
+        await ref.read(carsProvider.notifier).updateCarPhoto(car.id, photoPath);
       }
+
+      final pendingOk = await _submitPendingFromForm(
+        carId: car.id,
+        brandName: brandName,
+        modelName: modelName,
+        generation: generation,
+        brandId: brandId,
+        modelId: modelId,
+        generationId: generationId,
+      );
 
       if (!mounted) return;
 
@@ -354,11 +744,12 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
         SnackBar(
           content: Text(
             pendingOk
-                ? '$brandName $modelName добавлен!'
+                ? '$brandName $modelName добавлен в гараж на этом устройстве. '
+                    'Переустановка приложения сотрёт локальный гараж, пока нет облачной синхронизации.'
                 : '$brandName $modelName сохранён. Заявка модераторам не дошла — проверьте сеть и попробуйте позже.',
           ),
           backgroundColor: pendingOk
-              ? AppColors.success
+              ? context.palette.success
               : Colors.orange.shade800,
         ),
       );
@@ -371,42 +762,51 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.background,
+      resizeToAvoidBottomInset: true,
+      backgroundColor: context.palette.background,
       appBar: AppBar(
-        backgroundColor: AppColors.background,
+        backgroundColor: context.palette.background,
         title: Text(
-          _steps[_step],
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+          _isEditMode
+              ? 'Марка, модель и поколение'
+              : _effectiveSteps[_step],
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
         ),
       ),
       body: Column(
         children: [
-          // Progress
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            child: Row(
-              children: List.generate(
-                _steps.length,
-                (i) => Expanded(
-                  child: Container(
-                    height: 4,
-                    margin: const EdgeInsets.symmetric(horizontal: 2),
-                    decoration: BoxDecoration(
-                      color: i <= _step
-                          ? AppColors.primary
-                          : AppColors.nestedBg,
-                      borderRadius: BorderRadius.circular(2),
+          if (!_isEditMode)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Row(
+                children: List.generate(
+                  _effectiveSteps.length,
+                  (i) => Expanded(
+                    child: Container(
+                      height: 4,
+                      margin: const EdgeInsets.symmetric(horizontal: 2),
+                      decoration: BoxDecoration(
+                        color: i <= _step
+                            ? context.palette.primary
+                            : context.palette.nestedBg,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
 
           // Content
           Expanded(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              padding: EdgeInsets.fromLTRB(
+                16,
+                0,
+                16,
+                16 + MediaQuery.viewInsetsOf(context).bottom,
+              ),
               child: AnimatedSwitcher(
                 duration: const Duration(milliseconds: 300),
                 child: _buildStep(),
@@ -431,20 +831,20 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
                       onPressed: () => setState(() => _step--),
                       style: OutlinedButton.styleFrom(
                         minimumSize: const Size(0, 52),
-                        side: const BorderSide(color: AppColors.border),
+                        side: BorderSide(color: context.palette.border),
                       ),
-                      child: const Text('Назад'),
+                      child: Text('Назад'),
                     ),
                   ),
-                if (_step > 0) const SizedBox(width: 12),
+                if (_step > 0) SizedBox(width: 12),
                 Expanded(
                   flex: 2,
                   child: GoldButton(
-                    text: _step == _steps.length - 1
+                    text: _step == _effectiveSteps.length - 1
                         ? (_saving ? 'Сохранение…' : 'Сохранить')
                         : 'Далее',
                     height: 52,
-                    isLoading: _saving && _step == _steps.length - 1,
+                    isLoading: _saving && _step == _effectiveSteps.length - 1,
                     onPressed: (_canProceed && !_saving)
                         ? () {
                             _handlePrimary();
@@ -473,7 +873,7 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
       case 4:
         return _buildSummary();
       default:
-        return const SizedBox();
+        return SizedBox();
     }
   }
 
@@ -482,7 +882,7 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
       key: const ValueKey(0),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         if (_brandsLoading)
           const Center(
             child: Padding(
@@ -491,62 +891,55 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
             ),
           )
         else if (_useReference) ...[
-          _buildDropdown<String>(
-            label: 'Марка *',
-            value: _brandOther ? _kOther : _selectedBrand?.name,
-            items: [
-              ..._brands!.map(
-                (b) => DropdownMenuItem(value: b.name, child: Text(b.name)),
+          if (!_brandOther)
+            KeyedSubtree(
+              // Только длина списка марок: не включаем выбранную марку — иначе после выбора ключ
+              // меняется, RawAutocomplete пересоздаётся и поле «сбрасывается» (нужно выбирать снова).
+              key: ValueKey<String>('brand_${_brands?.length ?? 0}'),
+              child: buildBrandAutocompleteField(
+                brands: _brands!,
+                selectedBrand: _selectedBrand,
+                onPickBrand: (brand) {
+                  setState(() {
+                    _brandOther = false;
+                    _selectedBrand = brand;
+                    _modelOther = false;
+                    _selectedModel = null;
+                    _selectedGeneration = null;
+                    _generationOther = false;
+                    _generations = null;
+                  });
+                  _loadModels(brand.id);
+                },
+                onPickOther: () {
+                  setState(() {
+                    _brandOther = true;
+                    _selectedBrand = null;
+                    _modelOther = false;
+                    _selectedModel = null;
+                    _selectedGeneration = null;
+                    _generationOther = false;
+                    _models = null;
+                    _generations = null;
+                  });
+                },
               ),
-              const DropdownMenuItem(
-                value: _kOther,
-                child: Text('Другое (указать вручную)'),
-              ),
-            ],
-            onChanged: (name) {
-              if (name == _kOther) {
-                setState(() {
-                  _brandOther = true;
-                  _selectedBrand = null;
-                  _modelOther = false;
-                  _selectedModel = null;
-                  _selectedGeneration = null;
-                  _generationOther = false;
-                  _models = null;
-                  _generations = null;
-                });
-              } else {
-                final brand = _brands!.firstWhere((b) => b.name == name);
-                setState(() {
-                  _brandOther = false;
-                  _selectedBrand = brand;
-                  _modelOther = false;
-                  _selectedModel = null;
-                  _selectedGeneration = null;
-                  _generationOther = false;
-                  _generations = null;
-                });
-                _loadModels(brand.id);
-              }
-            },
-            hint: 'Выберите марку',
-          ),
-          if (_brandOther) ...[
-            const SizedBox(height: 16),
+            )
+          else ...[
             _buildField('Марка (вручную) *', _brandController, 'Например: BMW'),
-            const SizedBox(height: 16),
+            SizedBox(height: 16),
             _buildField('Модель (вручную) *', _modelController, 'Например: X5'),
-            const SizedBox(height: 16),
+            SizedBox(height: 16),
             _buildField(
               'Поколение (вручную, необязательно)',
               _customGenerationController,
               'Например: XV70',
             ),
           ],
-          const SizedBox(height: 16),
+          if (!_brandOther) SizedBox(height: 16),
           if (_selectedBrand != null && !_brandOther)
             _modelsLoading
-                ? const Padding(
+                ? Padding(
                     padding: EdgeInsets.symmetric(vertical: 12),
                     child: Center(
                       child: SizedBox(
@@ -556,60 +949,52 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
                       ),
                     ),
                   )
-                : _buildDropdown<String>(
-                    label: 'Модель *',
-                    value: _modelOther ? _kOther : _selectedModel?.name,
-                    items: [
-                      ...(_models ?? []).map(
-                        (m) => DropdownMenuItem(
-                          value: m.name,
-                          child: Text(m.name),
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (!_modelOther)
+                        KeyedSubtree(
+                          // Марка + длина списка моделей; без id выбранной модели — иначе после выбора
+                          // виджет пересоздаётся и нужно тапать повторно.
+                          key: ValueKey<String>('model_${_selectedBrand!.id}_${_models?.length ?? 0}'),
+                          child: buildModelAutocompleteField(
+                            models: _models ?? const [],
+                            selectedModel: _selectedModel,
+                            onPickModel: (model) {
+                              setState(() {
+                                _modelOther = false;
+                                _selectedModel = model;
+                                _generationOther = false;
+                                _selectedGeneration = null;
+                              });
+                              _loadGenerations();
+                            },
+                            onPickOther: () {
+                              setState(() {
+                                _modelOther = true;
+                                _selectedModel = null;
+                                _generationOther = false;
+                                _selectedGeneration = null;
+                                _generations = null;
+                              });
+                            },
+                          ),
                         ),
-                      ),
-                      const DropdownMenuItem(
-                        value: _kOther,
-                        child: Text('Другое (указать вручную)'),
-                      ),
                     ],
-                    onChanged: (name) {
-                      if (name == _kOther) {
-                        setState(() {
-                          _modelOther = true;
-                          _selectedModel = null;
-                          _generationOther = false;
-                          _selectedGeneration = null;
-                          _generations = null;
-                        });
-                      } else {
-                        final model = _models!.firstWhere(
-                          (m) => m.name == name,
-                        );
-                        setState(() {
-                          _modelOther = false;
-                          _selectedModel = model;
-                          _generationOther = false;
-                          _selectedGeneration = null;
-                        });
-                        _loadGenerations();
-                      }
-                    },
-                    hint: 'Выберите модель',
                   ),
-          if (_modelOther) ...[
-            const SizedBox(height: 16),
+          if (_modelOther && !_brandOther) ...[
+            SizedBox(height: 16),
             _buildField('Модель (вручную) *', _modelController, 'Например: X5'),
-            if (!_brandOther) ...[
-              const SizedBox(height: 16),
-              _buildField(
-                'Поколение (вручную, необязательно)',
-                _customGenerationController,
-                'Например: XV70',
-              ),
-            ],
+            SizedBox(height: 16),
+            _buildField(
+              'Поколение (вручную, необязательно)',
+              _customGenerationController,
+              'Например: XV70',
+            ),
           ],
           if (_selectedModel != null && !_modelOther) ...[
             if (_generationsLoading)
-              const Padding(
+              Padding(
                 padding: EdgeInsets.symmetric(vertical: 12),
                 child: Center(
                   child: SizedBox(
@@ -620,45 +1005,42 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
                 ),
               )
             else if (_generations != null && _generations!.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              _buildDropdown<String>(
-                label: 'Поколение (необязательно)',
-                value: _generationOther ? _kOther : _selectedGeneration?.name,
-                items: [
-                  ..._generations!.map(
-                    (g) => DropdownMenuItem(
-                      value: g.name,
-                      child: Text(
-                        g.yearRange.isNotEmpty
-                            ? '${g.name} (${g.yearRange})'
-                            : g.name,
-                      ),
-                    ),
+              SizedBox(height: 16),
+              if (!_generationOther)
+                KeyedSubtree(
+                  // Модель + число поколений; без id поколения — иначе после выбора сброс поля.
+                  key: ValueKey<String>('gen_${_selectedModel!.id}_${_generations!.length}'),
+                  child: buildGenerationAutocompleteField(
+                    generations: _generations!,
+                    selectedGeneration: _selectedGeneration,
+                    onPickGeneration: (gen) {
+                      setState(() {
+                        _generationOther = false;
+                        _selectedGeneration = gen;
+                      });
+                    },
+                    onPickOther: () {
+                      setState(() {
+                        _generationOther = true;
+                        _selectedGeneration = null;
+                      });
+                    },
                   ),
-                  const DropdownMenuItem(
-                    value: _kOther,
-                    child: Text('Другое (указать вручную)'),
-                  ),
-                ],
-                onChanged: (name) {
-                  if (name == _kOther) {
-                    setState(() {
-                      _generationOther = true;
-                      _selectedGeneration = null;
-                    });
-                  } else {
-                    final gen = _generations!.firstWhere((g) => g.name == name);
-                    setState(() {
-                      _generationOther = false;
-                      _selectedGeneration = gen;
-                    });
-                  }
-                },
-                hint: 'Выберите поколение',
+                ),
+            ]
+            else if (_generations != null && _generations!.isEmpty) ...[
+              SizedBox(height: 16),
+              Text(
+                'Поколений этой модели нет в справочнике. Укажите поколение вручную — заявку проверят разработчики.',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: context.palette.textSecondary.withValues(alpha: 0.95),
+                  height: 1.4,
+                ),
               ),
             ],
             if (_generationOther) ...[
-              const SizedBox(height: 16),
+              SizedBox(height: 16),
               _buildField(
                 'Поколение (вручную)',
                 _customGenerationController,
@@ -668,57 +1050,14 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
           ],
         ] else ...[
           _buildField('Марка *', _brandController, 'Например: BMW'),
-          const SizedBox(height: 16),
+          SizedBox(height: 16),
           _buildField('Модель *', _modelController, 'Например: X5'),
         ],
-        const SizedBox(height: 16),
+        SizedBox(height: 16),
         _buildField(
           'Никнейм (необязательно)',
           _nicknameController,
           'Например: Чёрный зверь',
-        ),
-      ],
-    );
-  }
-
-  Widget _buildDropdown<T>({
-    required String label,
-    required T? value,
-    required List<DropdownMenuItem<T>> items,
-    required ValueChanged<T?> onChanged,
-    required String hint,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
-        ),
-        const SizedBox(height: 8),
-        Container(
-          decoration: BoxDecoration(
-            color: AppColors.cardBg,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.border),
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<T>(
-              value: value,
-              isExpanded: true,
-              hint: Text(
-                hint,
-                style: const TextStyle(color: AppColors.textPlaceholder),
-              ),
-              items: items,
-              onChanged: onChanged,
-              style: const TextStyle(
-                fontSize: 16,
-                color: AppColors.textPrimary,
-              ),
-            ),
-          ),
         ),
       ],
     );
@@ -729,26 +1068,40 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
       key: const ValueKey(1),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         _buildField(
           'Год выпуска *',
           _yearController,
           '2024',
           keyboardType: TextInputType.number,
+          validationBorderColor: _yearFieldBorderColor(),
           inputFormatters: [
             FilteringTextInputFormatter.digitsOnly,
             LengthLimitingTextInputFormatter(4),
           ],
         ),
-        const SizedBox(height: 4),
+        SizedBox(height: 4),
         Text(
           'Год: с $kMinCarYear по $_maxCarYear',
-          style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+          style: TextStyle(fontSize: 12, color: context.palette.textSecondary),
         ),
-        const SizedBox(height: 12),
-        RussianLicensePlateField(controller: _plateController),
-        const SizedBox(height: 16),
-        _buildField('VIN (необязательно)', _vinController, '17 символов'),
+        SizedBox(height: 12),
+        RussianLicensePlateField(
+          controller: _plateController,
+          validationBorderColor: _plateFieldBorderColor(),
+        ),
+        SizedBox(height: 16),
+        _buildField(
+          'VIN (необязательно)',
+          _vinController,
+          'Только A–Z и 0–9, до 32 символов',
+          validationBorderColor: _vinFieldBorderColor(),
+          inputFormatters: [
+            VinUpperCaseTextInputFormatter(),
+            FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9]')),
+            LengthLimitingTextInputFormatter(32),
+          ],
+        ),
       ],
     );
   }
@@ -758,12 +1111,12 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
       key: const ValueKey(2),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SizedBox(height: 8),
-        const Text(
+        SizedBox(height: 8),
+        Text(
           'Тип двигателя *',
-          style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
+          style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
         ),
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         Wrap(
           spacing: 8,
           runSpacing: 8,
@@ -778,10 +1131,10 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
                   vertical: 12,
                 ),
                 decoration: BoxDecoration(
-                  color: isSelected ? AppColors.primary : AppColors.cardBg,
+                  color: isSelected ? context.palette.primary : context.palette.cardBg,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                    color: isSelected ? AppColors.primary : AppColors.border,
+                    color: isSelected ? context.palette.primary : context.palette.border,
                   ),
                 ),
                 child: Text(
@@ -790,20 +1143,20 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
                     fontSize: 16,
                     fontWeight: FontWeight.w500,
                     color: isSelected
-                        ? const Color(0xFF0D0D0D)
-                        : AppColors.textPrimary,
+                        ? context.palette.onAccent
+                        : context.palette.textPrimary,
                   ),
                 ),
               ),
             );
           }).toList(),
         ),
-        const SizedBox(height: 24),
-        const Text(
+        SizedBox(height: 24),
+        Text(
           'Коробка передач',
-          style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
+          style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
         ),
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         Wrap(
           spacing: 8,
           runSpacing: 8,
@@ -818,10 +1171,10 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
                   vertical: 12,
                 ),
                 decoration: BoxDecoration(
-                  color: isSelected ? AppColors.primary : AppColors.cardBg,
+                  color: isSelected ? context.palette.primary : context.palette.cardBg,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                    color: isSelected ? AppColors.primary : AppColors.border,
+                    color: isSelected ? context.palette.primary : context.palette.border,
                   ),
                 ),
                 child: Text(
@@ -830,22 +1183,22 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
                     fontSize: 16,
                     fontWeight: FontWeight.w500,
                     color: isSelected
-                        ? const Color(0xFF0D0D0D)
-                        : AppColors.textPrimary,
+                        ? context.palette.onAccent
+                        : context.palette.textPrimary,
                   ),
                 ),
               ),
             );
           }).toList(),
         ),
-        const SizedBox(height: 24),
-        _buildField('Цвет', _colorController, 'Например: чёрный, белый'),
-        const SizedBox(height: 24),
-        const Text(
+        SizedBox(height: 24),
+        _buildColorSection(),
+        SizedBox(height: 24),
+        Text(
           'Привод',
-          style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
+          style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
         ),
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         Wrap(
           spacing: 8,
           runSpacing: 8,
@@ -860,10 +1213,10 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
                   vertical: 12,
                 ),
                 decoration: BoxDecoration(
-                  color: isSelected ? AppColors.primary : AppColors.cardBg,
+                  color: isSelected ? context.palette.primary : context.palette.cardBg,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                    color: isSelected ? AppColors.primary : AppColors.border,
+                    color: isSelected ? context.palette.primary : context.palette.border,
                   ),
                 ),
                 child: Text(
@@ -872,20 +1225,20 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
                     fontSize: 16,
                     fontWeight: FontWeight.w500,
                     color: isSelected
-                        ? const Color(0xFF0D0D0D)
-                        : AppColors.textPrimary,
+                        ? context.palette.onAccent
+                        : context.palette.textPrimary,
                   ),
                 ),
               ),
             );
           }).toList(),
         ),
-        const SizedBox(height: 24),
-        const Text(
+        SizedBox(height: 24),
+        Text(
           'Тип кузова *',
-          style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
+          style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
         ),
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         Wrap(
           spacing: 8,
           runSpacing: 8,
@@ -900,10 +1253,10 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
                   vertical: 12,
                 ),
                 decoration: BoxDecoration(
-                  color: isSelected ? AppColors.primary : AppColors.cardBg,
+                  color: isSelected ? context.palette.primary : context.palette.cardBg,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                    color: isSelected ? AppColors.primary : AppColors.border,
+                    color: isSelected ? context.palette.primary : context.palette.border,
                   ),
                 ),
                 child: Text(
@@ -912,8 +1265,8 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
                     fontSize: 16,
                     fontWeight: FontWeight.w500,
                     color: isSelected
-                        ? const Color(0xFF0D0D0D)
-                        : AppColors.textPrimary,
+                        ? context.palette.onAccent
+                        : context.palette.textPrimary,
                   ),
                 ),
               ),
@@ -929,12 +1282,13 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
       key: const ValueKey(3),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         _buildField(
           'Текущий пробег (км) *',
           _mileageController,
           '0',
           keyboardType: TextInputType.number,
+          validationBorderColor: _mileageFieldBorderColor(),
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
         ),
       ],
@@ -945,48 +1299,74 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
     return Column(
       key: const ValueKey(4),
       children: [
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         Container(
           width: double.infinity,
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            gradient: AppColors.cardGradient,
+            gradient: context.palette.cardGradient,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+            border: Border.all(color: context.palette.primary.withValues(alpha: 0.3)),
           ),
           child: Column(
             children: [
-              Container(
-                width: 80,
-                height: 56,
-                decoration: BoxDecoration(
-                  color: AppColors.nestedBg,
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
                   borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(
-                  Icons.directions_car_rounded,
-                  size: 36,
-                  color: AppColors.primary,
+                  onTap: () async {
+                    final picked = await ImagePicker().pickImage(
+                      source: ImageSource.gallery,
+                      imageQuality: 85,
+                    );
+                    if (picked != null && mounted) {
+                      setState(() => _pickedPhotoPath = picked.path);
+                    }
+                  },
+                  child: Container(
+                    width: 120,
+                    height: 80,
+                    decoration: BoxDecoration(
+                      color: context.palette.nestedBg,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: context.palette.border),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: _pickedPhotoPath != null
+                        ? Image.file(File(_pickedPhotoPath!), fit: BoxFit.cover)
+                        : Icon(
+                            Icons.add_photo_alternate_outlined,
+                            size: 36,
+                            color: context.palette.primary,
+                          ),
+                  ),
                 ),
               ),
-              const SizedBox(height: 16),
+              if (_pickedPhotoPath != null) ...[
+                SizedBox(height: 8),
+                TextButton(
+                  onPressed: () => setState(() => _pickedPhotoPath = null),
+                  child: Text('Убрать фото'),
+                ),
+              ],
+              SizedBox(height: 16),
               if (_nicknameController.text.isNotEmpty)
                 Text(
                   _nicknameController.text,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
-                    color: AppColors.primary,
+                    color: context.palette.primary,
                   ),
                 ),
               Text(
                 '${_useReference ? (_brandOther ? _brandController.text : (_selectedBrand?.name ?? '')) : _brandController.text} ${_useReference ? (_modelOther ? _modelController.text : (_selectedModel?.name ?? '')) : _modelController.text}$_summaryGenerationSuffix',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 22,
                   fontWeight: FontWeight.w700,
-                  color: AppColors.textPrimary,
+                  color: context.palette.textPrimary,
                 ),
               ),
-              const SizedBox(height: 12),
+              SizedBox(height: 12),
               _SummaryRow('Год', _yearController.text),
               if (normalizePlateInput(_plateController.text).isNotEmpty)
                 _SummaryRow(
@@ -1011,36 +1391,111 @@ class _AddCarScreenState extends ConsumerState<AddCarScreen> {
     );
   }
 
+  Widget _buildColorSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Цвет',
+          style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
+        ),
+        SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: List.generate(_kColorPresets.length, (i) {
+            final p = _kColorPresets[i];
+            final sel = _selectedColorPresetIndex == i;
+            final dark = ThemeData.estimateBrightnessForColor(p.swatch) ==
+                Brightness.dark;
+            return GestureDetector(
+              onTap: () {
+                setState(() {
+                  _selectedColorPresetIndex = i;
+                  _colorController.text = p.name;
+                });
+              },
+              child: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: p.swatch,
+                  border: Border.all(
+                    color: sel
+                        ? context.palette.primary
+                        : (dark
+                            ? Colors.white24
+                            : context.palette.border),
+                    width: sel ? 2.5 : 1,
+                  ),
+                  boxShadow: sel
+                      ? [
+                          BoxShadow(
+                            color: context.palette.primary.withValues(alpha: 0.35),
+                            blurRadius: 6,
+                          ),
+                        ]
+                      : null,
+                ),
+              ),
+            );
+          }),
+        ),
+        SizedBox(height: 12),
+        Text(
+          'Свой вариант',
+          style: TextStyle(fontSize: 13, color: context.palette.textTertiary),
+        ),
+        SizedBox(height: 8),
+        _buildField(
+          'Название цвета (необязательно)',
+          _colorController,
+          'Например: графит, тёмно-синий',
+          onChangedText: _syncColorPresetIndexFromText,
+        ),
+      ],
+    );
+  }
+
   Widget _buildField(
     String label,
     TextEditingController controller,
     String hint, {
     TextInputType? keyboardType,
     List<TextInputFormatter>? inputFormatters,
+    Color? validationBorderColor,
+    void Function(String value)? onChangedText,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           label,
-          style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+          style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
         ),
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         Container(
           decoration: BoxDecoration(
-            color: AppColors.cardBg,
+            color: context.palette.cardBg,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.border),
+            border: Border.all(
+              color: validationBorderColor ?? context.palette.border,
+              width: validationBorderColor != null ? 1.5 : 1,
+            ),
           ),
           child: TextField(
             controller: controller,
             keyboardType: keyboardType,
             inputFormatters: inputFormatters,
-            style: const TextStyle(fontSize: 16, color: AppColors.textPrimary),
-            onChanged: (_) => setState(() {}),
+            style: TextStyle(fontSize: 16, color: context.palette.textPrimary),
+            onChanged: (v) {
+              onChangedText?.call(v);
+              setState(() {});
+            },
             decoration: InputDecoration(
               hintText: hint,
-              hintStyle: const TextStyle(color: AppColors.textPlaceholder),
+              hintStyle: TextStyle(color: context.palette.textPlaceholder),
               border: InputBorder.none,
               contentPadding: const EdgeInsets.symmetric(
                 horizontal: 16,
@@ -1067,17 +1522,17 @@ class _SummaryRow extends StatelessWidget {
         children: [
           Text(
             label,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 14,
-              color: AppColors.textSecondary,
+              color: context.palette.textSecondary,
             ),
           ),
           Text(
             value,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w600,
-              color: AppColors.textPrimary,
+              color: context.palette.textPrimary,
             ),
           ),
         ],

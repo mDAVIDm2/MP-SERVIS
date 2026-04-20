@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import '../api_client.dart';
@@ -27,12 +28,17 @@ class OrganizationApiService {
 
   /// Загрузить фото точки (отображается в карточке у клиентов).
   Future<Result<String>> addPhoto(String orgId, File imageFile) async {
+    final bytes = await imageFile.readAsBytes();
+    final name = imageFile.path.split(RegExp(r'[/\\]')).last;
+    return addPhotoBytes(orgId, bytes, name);
+  }
+
+  /// Надёжнее на Android (Oplus и др.): байты из галереи без зависимости от пути к файлу.
+  Future<Result<String>> addPhotoBytes(String orgId, Uint8List bytes, String filename) async {
     try {
+      final safeName = filename.trim().isEmpty ? 'photo.jpg' : filename.trim();
       final formData = FormData.fromMap({
-        'file': await MultipartFile.fromFile(
-          imageFile.path,
-          filename: imageFile.path.split(RegExp(r'[/\\]')).last,
-        ),
+        'file': MultipartFile.fromBytes(bytes, filename: safeName),
       });
       final res = await _client.post<Map<String, dynamic>>(
         ApiEndpoints.organizationPhotos(orgId),
@@ -43,6 +49,19 @@ class OrganizationApiService {
         return Result.failure(const ApiException(code: ApiErrorCode.internal, message: 'Нет URL в ответе'));
       }
       return Result.success(url);
+    } on DioException catch (e) {
+      return Result.failure(ApiException.fromDioError(e));
+    }
+  }
+
+  /// Удалить фото точки ([photoUrl] — значение из `photo_urls`, как в ответе GET организации).
+  Future<Result<bool>> deletePhoto(String orgId, String photoUrl) async {
+    try {
+      await _client.delete<void>(
+        ApiEndpoints.organizationPhotos(orgId),
+        data: {'url': photoUrl},
+      );
+      return Result.success(true);
     } on DioException catch (e) {
       return Result.failure(ApiException.fromDioError(e));
     }

@@ -30,13 +30,15 @@ const service_catalog_item_entity_1 = require("../reference/service-catalog-item
 const organization_invitation_entity_1 = require("./organization-invitation.entity");
 const subscription_quota_service_1 = require("../subscriptions/subscription-quota.service");
 const users_service_1 = require("../users/users.service");
+const user_entity_1 = require("../users/user.entity");
+const user_organization_membership_entity_1 = require("../users/user-organization-membership.entity");
 const notifications_service_1 = require("../notifications/notifications.service");
 const transactional_mail_service_1 = require("../mail/transactional-mail.service");
 const plan_definitions_1 = require("../subscriptions/plan-definitions");
 const ORG_PHOTOS_DIR = path.join(process.cwd(), 'uploads', 'organizations');
 const DEFAULT_ORG_INVITE_EXPIRY_DAYS = 14;
 let OrganizationsService = OrganizationsService_1 = class OrganizationsService {
-    constructor(orgRepo, subRepo, staffRepo, settingsRepo, invitationRepo, scheduleRepo, catalogItemRepo, subscriptionQuota, dataSource, usersService, notificationsService, mail) {
+    constructor(orgRepo, subRepo, staffRepo, settingsRepo, invitationRepo, scheduleRepo, catalogItemRepo, userRepo, userOrgMembershipRepo, subscriptionQuota, dataSource, usersService, notificationsService, mail) {
         this.orgRepo = orgRepo;
         this.subRepo = subRepo;
         this.staffRepo = staffRepo;
@@ -44,6 +46,8 @@ let OrganizationsService = OrganizationsService_1 = class OrganizationsService {
         this.invitationRepo = invitationRepo;
         this.scheduleRepo = scheduleRepo;
         this.catalogItemRepo = catalogItemRepo;
+        this.userRepo = userRepo;
+        this.userOrgMembershipRepo = userOrgMembershipRepo;
         this.subscriptionQuota = subscriptionQuota;
         this.dataSource = dataSource;
         this.usersService = usersService;
@@ -312,7 +316,176 @@ let OrganizationsService = OrganizationsService_1 = class OrganizationsService {
         });
         return { items: list.map((s) => this._staffToItem(s)) };
     }
+    ensureCallerCanManageOrganizationStaff(caller) {
+        this.assertCanManageOrganizationStaff(caller);
+    }
+    assertCanManageOrganizationStaff(caller) {
+        if (caller.role === 'master') {
+            throw new common_1.ForbiddenException('Управление персоналом и приглашениями доступно владельцу, администратору или самозанятому.');
+        }
+    }
+    async getStaffForCaller(orgId, caller) {
+        await this.ensureSoloStaffMember(orgId, caller);
+        await this.promoteSoloToOwnerIfNeeded(orgId);
+        if (caller.role === 'master') {
+            const byUser = await this.staffRepo.find({
+                where: { organizationId: orgId, userId: caller.id },
+                relations: ['schedule'],
+                order: { invitedAt: 'DESC' },
+            });
+            if (byUser.length > 0) {
+                return { items: byUser.map((s) => this._staffToItem(s)) };
+            }
+            const p = this.normalizePhoneLoose(caller.phone);
+            if (p) {
+                const all = await this.staffRepo.find({
+                    where: { organizationId: orgId },
+                    relations: ['schedule'],
+                    order: { invitedAt: 'DESC' },
+                });
+                const matched = all.filter((s) => this.normalizePhoneLoose(s.phone) === p);
+                return { items: matched.map((s) => this._staffToItem(s)) };
+            }
+            return { items: [] };
+        }
+        return this.getStaff(orgId);
+    }
+    async promoteSoloToOwnerIfNeeded(orgId) {
+        await this.promoteSoloToOwner(orgId);
+    }
+    async countActiveMasters(orgId) {
+        return this.staffRepo.count({
+            where: { organizationId: orgId, isActive: true, role: 'master' },
+        });
+    }
+    async isSoloSingleMasterOrg(orgId) {
+        const solo = await this.userRepo.findOne({ where: { organizationId: orgId, role: 'solo' } });
+        if (!solo)
+            return false;
+        const n = await this.countActiveMasters(orgId);
+        return n === 1;
+    }
+    parseHHMMToMinutes(raw) {
+        const m = String(raw || '09:00').match(/^(\d{1,2}):(\d{2})$/);
+        if (!m)
+            return 9 * 60;
+        const h = Math.min(23, Math.max(0, parseInt(m[1], 10)));
+        const min = Math.min(59, Math.max(0, parseInt(m[2], 10)));
+        return h * 60 + min;
+    }
+    formatMinutesAsHHMM(mins) {
+        const h = Math.floor(mins / 60) % 24;
+        const m = mins % 60;
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    }
+    async syncOrgSlotsFromMasterSchedule(orgId, slots) {
+        const working = slots.filter((s) => s.is_working_day !== false);
+        if (working.length === 0)
+            return;
+        let minM = 24 * 60;
+        let maxM = 0;
+        for (const s of working) {
+            const st = s.start_time != null ? String(s.start_time).slice(0, 5) : '09:00';
+            const en = s.end_time != null ? String(s.end_time).slice(0, 5) : '18:00';
+            minM = Math.min(minM, this.parseHHMMToMinutes(st));
+            maxM = Math.max(maxM, this.parseHHMMToMinutes(en));
+        }
+        if (maxM <= minM)
+            return;
+        let row = await this.settingsRepo.findOne({ where: { organizationId: orgId } });
+        if (!row) {
+            row = this.settingsRepo.create({ organizationId: orgId, data: {} });
+        }
+        const data = { ...(typeof row.data === 'object' && row.data !== null ? row.data : {}) };
+        const prevSlots = typeof data.slots === 'object' && data.slots !== null ? { ...data.slots } : {};
+        data.slots = {
+            ...prevSlots,
+            work_day_start: this.formatMinutesAsHHMM(minM),
+            work_day_end: this.formatMinutesAsHHMM(maxM),
+        };
+        row.data = data;
+        await this.settingsRepo.save(row);
+    }
+    async syncSoloMasterTimesFromOrgSlots(orgId, slots) {
+        if (!(await this.isSoloSingleMasterOrg(orgId)))
+            return;
+        const ws = String(slots['work_day_start'] ?? slots['workDayStart'] ?? '09:00').slice(0, 5);
+        const we = String(slots['work_day_end'] ?? slots['workDayEnd'] ?? '18:00').slice(0, 5);
+        const masters = await this.staffRepo.find({
+            where: { organizationId: orgId, isActive: true, role: 'master' },
+        });
+        if (masters.length !== 1)
+            return;
+        const masterId = masters[0].id;
+        const rows = await this.scheduleRepo.find({ where: { masterId } });
+        for (const sch of rows) {
+            if (!sch.isWorkingDay)
+                continue;
+            sch.startTime = /^\d{1,2}:\d{2}$/.test(ws) ? ws : '09:00';
+            sch.endTime = /^\d{1,2}:\d{2}$/.test(we) ? we : '18:00';
+            await this.scheduleRepo.save(sch);
+        }
+    }
+    async ensureSoloStaffMember(orgId, caller) {
+        if (caller.role !== 'solo' || caller.organizationId !== orgId)
+            return;
+        const existing = await this.staffRepo.findOne({ where: { organizationId: orgId, userId: caller.id } });
+        if (existing)
+            return;
+        const settings = await this.getSettings(orgId);
+        const slots = settings.slots ?? {};
+        const ws = String(slots['work_day_start'] ?? slots['workDayStart'] ?? '09:00').slice(0, 5);
+        const we = String(slots['work_day_end'] ?? slots['workDayEnd'] ?? '18:00').slice(0, 5);
+        const startT = /^\d{1,2}:\d{2}$/.test(ws) ? ws : '09:00';
+        const endT = /^\d{1,2}:\d{2}$/.test(we) ? we : '18:00';
+        const staff = this.staffRepo.create({
+            organizationId: orgId,
+            userId: caller.id,
+            name: caller.name || 'Мастер',
+            phone: caller.phone || null,
+            role: 'master',
+            isActive: true,
+            invitedAt: new Date(),
+            skills: [],
+        });
+        await this.staffRepo.save(staff);
+        for (let dow = 0; dow <= 6; dow++) {
+            const working = dow >= 1 && dow <= 5;
+            const row = this.scheduleRepo.create({
+                masterId: staff.id,
+                dayOfWeek: dow,
+                startTime: startT,
+                endTime: endT,
+                isWorkingDay: working,
+            });
+            await this.scheduleRepo.save(row);
+        }
+        this.log.log(`ensureSoloStaffMember: created staff ${staff.id} for solo user ${caller.id} org ${orgId}`);
+    }
+    async promoteSoloToOwner(orgId) {
+        const n = await this.countActiveMasters(orgId);
+        if (n < 2)
+            return;
+        const soloUsers = await this.userRepo.find({ where: { organizationId: orgId, role: 'solo' } });
+        for (const u of soloUsers) {
+            u.role = 'owner';
+            await this.userRepo.save(u);
+        }
+        const memberships = await this.userOrgMembershipRepo.find({
+            where: { organizationId: orgId, role: 'solo' },
+        });
+        for (const m of memberships) {
+            m.role = 'owner';
+            await this.userOrgMembershipRepo.save(m);
+        }
+        if (soloUsers.length > 0) {
+            this.log.log(`promoteSoloToOwner: org ${orgId} now has ${n} masters; promoted ${soloUsers.length} solo user(s) to owner`);
+        }
+    }
     async addCurrentUserAsMaster(orgId, user) {
+        if (user.role === 'master') {
+            throw new common_1.ForbiddenException('Мастер не может управлять составом персонала.');
+        }
         if (user.organizationId !== orgId) {
             throw new common_1.BadRequestException('Пользователь не принадлежит этой организации');
         }
@@ -337,9 +510,11 @@ let OrganizationsService = OrganizationsService_1 = class OrganizationsService {
             where: { id: staff.id },
             relations: ['schedule'],
         });
+        await this.promoteSoloToOwnerIfNeeded(orgId);
         return this._staffToItem(withSchedule);
     }
     _staffToItem(s) {
+        const caps = s;
         return {
             id: s.id,
             user_id: s.userId ?? null,
@@ -350,6 +525,9 @@ let OrganizationsService = OrganizationsService_1 = class OrganizationsService {
             is_active: s.isActive !== false,
             invited_at: s.invitedAt?.toISOString?.(),
             skills: Array.isArray(s.skills) ? s.skills : [],
+            can_see_chats: caps.canSeeChats === true,
+            can_write_chats: caps.canWriteChats === true,
+            can_manage_org_settings: caps.canManageOrgSettings === true,
             schedule: Array.isArray(s.schedule)
                 ? s.schedule.map((sch) => ({
                     id: sch.id,
@@ -424,16 +602,16 @@ let OrganizationsService = OrganizationsService_1 = class OrganizationsService {
                 `${inviterName} приглашает вас в организацию «${orgName}» (роль: ${inv.role}).`,
                 expiresText,
                 '',
-                'Откройте приложение AutoHub Business, войдите под этим email и перейдите: Профиль → Входящие приглашения.',
+                'Откройте приложение MP-Servis Business, войдите под этим email и перейдите: Профиль → Входящие приглашения.',
                 '',
-                '— AutoHub',
+                '— MP-Servis',
             ]
                 .filter((line) => line !== '')
                 .join('\n');
             try {
                 await this.mail.send({
                     to: toEmail,
-                    subject: `Приглашение в «${orgName}» — AutoHub`,
+                    subject: `Приглашение в «${orgName}» — MP-Servis`,
                     text,
                 });
             }
@@ -442,7 +620,9 @@ let OrganizationsService = OrganizationsService_1 = class OrganizationsService {
             }
         }
     }
-    async createInvitation(orgId, invitedByUserId, dto) {
+    async createInvitation(orgId, caller, dto) {
+        this.assertCanManageOrganizationStaff(caller);
+        const invitedByUserId = caller.id;
         const emailNorm = this.normalizeEmail(dto.email);
         const phoneNorm = this.normalizePhoneLoose(dto.phone);
         if (!emailNorm && !phoneNorm) {
@@ -493,7 +673,8 @@ let OrganizationsService = OrganizationsService_1 = class OrganizationsService {
         }
         return this.invitationToItem(fresh);
     }
-    async listInvitations(orgId, status) {
+    async listInvitations(orgId, caller, status) {
+        this.assertCanManageOrganizationStaff(caller);
         const qb = this.invitationRepo
             .createQueryBuilder('inv')
             .leftJoinAndSelect('inv.organization', 'org')
@@ -508,7 +689,8 @@ let OrganizationsService = OrganizationsService_1 = class OrganizationsService {
         const rows = await qb.getMany();
         return { items: rows.map((x) => this.invitationToItem(x)) };
     }
-    async cancelInvitation(orgId, invitationId) {
+    async cancelInvitation(orgId, invitationId, caller) {
+        this.assertCanManageOrganizationStaff(caller);
         const inv = await this.invitationRepo.findOne({ where: { id: invitationId, organizationId: orgId } });
         if (!inv) {
             throw new common_1.BadRequestException('Приглашение не найдено');
@@ -526,10 +708,17 @@ let OrganizationsService = OrganizationsService_1 = class OrganizationsService {
         await this.subscriptionQuota.assertCanAddOrActivateStaff(orgId);
         const s = this.staffRepo.create({ ...dto, organizationId: orgId, invitedAt: new Date() });
         await this.staffRepo.save(s);
+        const isAdmin = String(dto.role).toLowerCase() === 'admin';
+        await this.staffRepo.update({ id: s.id }, {
+            canSeeChats: isAdmin,
+            canWriteChats: isAdmin,
+            canManageOrgSettings: isAdmin,
+        });
         const withSchedule = await this.staffRepo.findOne({ where: { id: s.id }, relations: ['schedule'] });
         return withSchedule ? this._staffToItem(withSchedule) : this._staffToItem(s);
     }
-    async updateStaffMember(orgId, staffId, dto) {
+    async updateStaffMember(orgId, staffId, dto, caller) {
+        this.assertCanManageOrganizationStaff(caller);
         const staff = await this.staffRepo.findOne({ where: { id: staffId, organizationId: orgId }, relations: ['schedule'] });
         if (!staff)
             return null;
@@ -561,6 +750,12 @@ let OrganizationsService = OrganizationsService_1 = class OrganizationsService {
             setObj.isActive = Boolean(dto.is_active);
         if (Array.isArray(dto.skills))
             setObj.skills = dto.skills;
+        if (dto.can_see_chats !== undefined)
+            setObj.canSeeChats = Boolean(dto.can_see_chats);
+        if (dto.can_write_chats !== undefined)
+            setObj.canWriteChats = Boolean(dto.can_write_chats);
+        if (dto.can_manage_org_settings !== undefined)
+            setObj.canManageOrgSettings = Boolean(dto.can_manage_org_settings);
         try {
             if (Object.keys(setObj).length > 0) {
                 await this.staffRepo.update({ id: staffId, organizationId: orgId }, setObj);
@@ -593,6 +788,15 @@ let OrganizationsService = OrganizationsService_1 = class OrganizationsService {
         const s = await this.staffRepo.findOne({ where: { id: staffId }, relations: ['schedule'] });
         if (!s)
             return null;
+        if (Array.isArray(dto.schedule) && (await this.isSoloSingleMasterOrg(orgId))) {
+            try {
+                await this.syncOrgSlotsFromMasterSchedule(orgId, dto.schedule);
+            }
+            catch (e) {
+                this.log.warn(`syncOrgSlotsFromMasterSchedule: ${e}`);
+            }
+        }
+        await this.promoteSoloToOwnerIfNeeded(orgId);
         return this._staffToItem(s);
     }
     async getSettings(orgId) {
@@ -621,6 +825,15 @@ let OrganizationsService = OrganizationsService_1 = class OrganizationsService {
         else {
             row.data = data;
             await this.settingsRepo.save(row);
+        }
+        const slotsPatch = data['slots'];
+        if (slotsPatch && typeof slotsPatch === 'object') {
+            try {
+                await this.syncSoloMasterTimesFromOrgSlots(orgId, slotsPatch);
+            }
+            catch (e) {
+                this.log.warn(`syncSoloMasterTimesFromOrgSlots: ${e}`);
+            }
         }
         return row.data;
     }
@@ -681,6 +894,44 @@ let OrganizationsService = OrganizationsService_1 = class OrganizationsService {
         await this.orgRepo.update(orgId, { photoUrls });
         return { url };
     }
+    async removePhoto(orgId, photoUrlOrInput) {
+        const org = await this.orgRepo.findOne({ where: { id: orgId } });
+        if (!org)
+            return false;
+        const urls = this.getPhotoUrls(org);
+        if (urls.length === 0)
+            return false;
+        const input = photoUrlOrInput.trim().split('?')[0];
+        if (!input)
+            return false;
+        const inputBase = path.basename(input);
+        if (!inputBase || inputBase === '.' || inputBase === '..' || inputBase.includes('..')) {
+            return false;
+        }
+        const idx = urls.findIndex((stored) => {
+            const u = stored.trim().split('?')[0];
+            if (u === input)
+                return true;
+            const base = path.basename(u);
+            return base === inputBase && u.includes(`/organizations/${orgId}/photos/`);
+        });
+        if (idx < 0)
+            return false;
+        const removed = urls[idx];
+        const filename = path.basename(removed.split('?')[0]);
+        if (!filename || filename.includes('..'))
+            return false;
+        const newUrls = urls.filter((_, i) => i !== idx);
+        const fullPath = path.join(ORG_PHOTOS_DIR, orgId, filename);
+        try {
+            if (fs.existsSync(fullPath))
+                fs.unlinkSync(fullPath);
+        }
+        catch {
+        }
+        await this.orgRepo.update(orgId, { photoUrls: newUrls });
+        return true;
+    }
     async getPhotoPath(orgId, filename) {
         const org = await this.orgRepo.findOne({ where: { id: orgId } });
         if (!org)
@@ -694,6 +945,16 @@ let OrganizationsService = OrganizationsService_1 = class OrganizationsService {
         const urls = org.photoUrls;
         return Array.isArray(urls) ? urls : [];
     }
+    async clearAllOrganizationPhotos(orgId) {
+        const org = await this.orgRepo.findOne({ where: { id: orgId } });
+        if (!org)
+            return false;
+        const urls = [...this.getPhotoUrls(org)];
+        for (const u of urls) {
+            await this.removePhoto(orgId, u);
+        }
+        return true;
+    }
 };
 exports.OrganizationsService = OrganizationsService;
 exports.OrganizationsService = OrganizationsService = OrganizationsService_1 = __decorate([
@@ -705,9 +966,13 @@ exports.OrganizationsService = OrganizationsService = OrganizationsService_1 = _
     __param(4, (0, typeorm_1.InjectRepository)(organization_invitation_entity_1.OrganizationInvitation)),
     __param(5, (0, typeorm_1.InjectRepository)(master_schedule_entity_1.MasterSchedule)),
     __param(6, (0, typeorm_1.InjectRepository)(service_catalog_item_entity_1.ServiceCatalogItem)),
-    __param(9, (0, common_1.Inject)((0, common_1.forwardRef)(() => users_service_1.UsersService))),
-    __param(10, (0, common_1.Inject)((0, common_1.forwardRef)(() => notifications_service_1.NotificationsService))),
+    __param(7, (0, typeorm_1.InjectRepository)(user_entity_1.User)),
+    __param(8, (0, typeorm_1.InjectRepository)(user_organization_membership_entity_1.UserOrganizationMembership)),
+    __param(11, (0, common_1.Inject)((0, common_1.forwardRef)(() => users_service_1.UsersService))),
+    __param(12, (0, common_1.Inject)((0, common_1.forwardRef)(() => notifications_service_1.NotificationsService))),
     __metadata("design:paramtypes", [typeorm_2.Repository,
+        typeorm_2.Repository,
+        typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,

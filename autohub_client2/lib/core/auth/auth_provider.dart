@@ -1,8 +1,11 @@
 import 'dart:io';
 
+import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api/api_client.dart';
+import '../api/api_endpoints.dart';
 import '../api/api_exceptions.dart';
 import '../api/auth_api_service.dart';
 import '../api/sessions_api_service.dart';
@@ -18,6 +21,7 @@ const _kUserPhone = 'auth_user_phone';
 const _kUserEmail = 'auth_user_email';
 const _kUserName = 'auth_user_name';
 const _kUserSurname = 'auth_user_surname';
+const _kUserAvatar = 'auth_user_avatar_url';
 const _kJustAuthorized = 'auth_just_authorized';
 
 /// Состояние авторизации
@@ -100,6 +104,13 @@ class AuthNotifier extends StateNotifier<AuthState> {
   final SharedPreferences _prefs;
   final TokenStorage _tokenStorage = TokenStorage();
 
+  /// Один общий refresh на все параллельные 401 — иначе каждый запрос шлёт старый refresh после ротации
+  /// и бэкенд пишет `refresh_reuse_detected` (десятки push «Безопасность»).
+  Future<String?>? _refreshInFlight;
+
+  /// После успешного входа в уже существующий аккаунт — не показывать обязательный экран PIN.
+  bool _skipMandatoryPinAfterAuth = false;
+
   Future<void> initialize([SharedPreferences? prefsOverride]) async {
     try {
       await Future.delayed(const Duration(milliseconds: 100));
@@ -139,6 +150,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       final email = prefs.getString(_kUserEmail);
       final name = prefs.getString(_kUserName) ?? '';
       final surname = prefs.getString(_kUserSurname);
+      final avatarUrl = prefs.getString(_kUserAvatar);
       if (!mounted) return;
       final hasContact = (email != null && email.isNotEmpty) || (phone != null && phone.isNotEmpty);
       if (id != null && hasContact) {
@@ -150,6 +162,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
             phone: phone != null && phone.isNotEmpty ? phone : null,
             name: name,
             surname: surname,
+            avatarUrl: avatarUrl != null && avatarUrl.isNotEmpty ? avatarUrl : null,
             email: email != null && email.isNotEmpty ? email : null,
           ),
           accessToken: token,
@@ -157,12 +170,53 @@ class AuthNotifier extends StateNotifier<AuthState> {
           sessionId: sessionId,
         );
         _apiClient.setToken(token);
+        await syncProfileWithServer();
       } else {
         await prefs.setBool(_kJustAuthorized, false);
         if (mounted) state = const AuthState(status: AuthStatus.unauthenticated);
       }
     } catch (_) {
       if (mounted) state = const AuthState(status: AuthStatus.unauthenticated);
+    }
+  }
+
+  /// Подтянуть с сервера актуальный профиль (аватар, имя, телефон) и сохранить локально.
+  /// Нужен после переустановки приложения: токен в secure storage, а avatar_url только на сервере.
+  Future<void> syncProfileWithServer() async {
+    if (state.status != AuthStatus.authenticated ||
+        state.accessToken == null ||
+        state.accessToken!.isEmpty) {
+      return;
+    }
+    final u = state.user;
+    if (u == null) return;
+    try {
+      final res = await _apiClient.get<Map<String, dynamic>>(ApiEndpoints.profile);
+      final data = res.data;
+      if (data == null || !mounted) return;
+      final avatarRaw = data['avatar_url']?.toString().trim();
+      final nameRaw = data['name']?.toString().trim();
+      final phoneRaw = data['phone']?.toString().trim();
+      final emailRaw = data['email']?.toString().trim();
+      final next = AuthUser(
+        id: u.id,
+        phone: (phoneRaw != null && phoneRaw.isNotEmpty) ? phoneRaw : u.phone,
+        name: (nameRaw != null && nameRaw.isNotEmpty) ? nameRaw : u.name,
+        surname: u.surname,
+        avatarUrl: (avatarRaw != null && avatarRaw.isNotEmpty) ? avatarRaw : u.avatarUrl,
+        email: (emailRaw != null && emailRaw.isNotEmpty) ? emailRaw : u.email,
+        city: u.city,
+      );
+      if (!mounted) return;
+      state = state.copyWith(user: next);
+      await _persistSecureAndUser(
+        next,
+        state.accessToken!,
+        state.refreshToken,
+        state.sessionId,
+      );
+    } catch (_) {
+      // офлайн / 401 — оставляем кэш из prefs
     }
   }
 
@@ -194,6 +248,11 @@ class AuthNotifier extends StateNotifier<AuthState> {
     } else {
       await _prefs.remove(_kUserSurname);
     }
+    if (user.avatarUrl != null && user.avatarUrl!.trim().isNotEmpty) {
+      _prefs.setString(_kUserAvatar, user.avatarUrl!.trim());
+    } else {
+      await _prefs.remove(_kUserAvatar);
+    }
   }
 
   Future<String> _deviceId() => getOrCreateDeviceId(_prefs);
@@ -216,12 +275,14 @@ class AuthNotifier extends StateNotifier<AuthState> {
     return Result.failure(result.errorOrNull!);
   }
 
+  /// [existingAccountLogin]: true — вход по email в существующий аккаунт (send-code вернул account_exists).
   Future<Result<AuthUser>> verifyEmailCode(
     String email,
     String challengeId,
     String code, {
     String? phoneUnverified,
     String? name,
+    bool existingAccountLogin = false,
   }) async {
     state = state.copyWith(status: AuthStatus.authenticating);
     final deviceId = await _deviceId();
@@ -230,7 +291,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       challengeId,
       code,
       deviceId: deviceId,
-      deviceName: 'AutoHub Client',
+      deviceName: 'MP-Servis Client',
       platform: _platformLabel(),
       phoneUnverified: phoneUnverified,
       name: name,
@@ -244,6 +305,9 @@ class AuthNotifier extends StateNotifier<AuthState> {
         surname: null,
         email: data.email,
       );
+      if (existingAccountLogin) {
+        _skipMandatoryPinAfterAuth = true;
+      }
       state = AuthState(
         status: AuthStatus.authenticated,
         user: user,
@@ -254,7 +318,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
       _apiClient.setToken(data.accessToken);
       await _prefs.setBool(_kJustAuthorized, true);
       await _persistSecureAndUser(user, data.accessToken, data.refreshToken, data.sessionId);
-      return Result.success(user);
+      await syncProfileWithServer();
+      return Result.success(state.user ?? user);
     }
     state = state.copyWith(status: AuthStatus.unauthenticated);
     return Result.failure(result.errorOrNull!);
@@ -285,6 +350,54 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
+  /// Загрузка фото профиля (multipart, поле `file`). Обновляет [AuthUser.avatarUrl].
+  Future<Result<String>> uploadAvatar({String? filePath, List<int>? bytes, String? filename}) async {
+    if (state.user == null || state.accessToken == null || state.accessToken!.isEmpty) {
+      return Result.failure(const ApiException(code: ApiErrorCode.unauthorized, message: 'Нет сессии'));
+    }
+    try {
+      late final MultipartFile part;
+      if (kIsWeb) {
+        if (bytes == null || bytes.isEmpty) {
+          return Result.failure(const ApiException(code: ApiErrorCode.validation, message: 'Нет данных изображения'));
+        }
+        final name = (filename == null || filename.isEmpty) ? 'avatar.jpg' : filename;
+        part = MultipartFile.fromBytes(bytes, filename: name);
+      } else {
+        final path = filePath?.trim() ?? '';
+        if (path.isEmpty) {
+          return Result.failure(const ApiException(code: ApiErrorCode.validation, message: 'Не выбран файл'));
+        }
+        part = await MultipartFile.fromFile(path, filename: filename ?? path.split(Platform.pathSeparator).last);
+      }
+      final form = FormData.fromMap({'file': part});
+      final res = await _apiClient.upload<Map<String, dynamic>>(ApiEndpoints.profileAvatar, formData: form);
+      final data = res.data;
+      final raw = data?['avatar_url']?.toString().trim();
+      if (raw == null || raw.isEmpty) {
+        return Result.failure(const ApiException(code: ApiErrorCode.internal, message: 'Сервер не вернул ссылку на аватар'));
+      }
+      final u = state.user!;
+      final next = AuthUser(
+        id: u.id,
+        phone: u.phone,
+        name: u.name,
+        surname: u.surname,
+        avatarUrl: raw,
+        email: u.email,
+        city: u.city,
+      );
+      state = state.copyWith(user: next);
+      await _prefs.setString(_kUserAvatar, raw);
+      return Result.success(raw);
+    } on DioException catch (e) {
+      final msg = e.error is ApiException ? (e.error as ApiException).message : e.message;
+      return Result.failure(ApiException(code: ApiErrorCode.internal, message: msg ?? 'Ошибка загрузки'));
+    } catch (e) {
+      return Result.failure(ApiException(code: ApiErrorCode.internal, message: '$e'));
+    }
+  }
+
   Future<Result<AuthUser>> updateProfile({
     String? name,
     String? surname,
@@ -307,7 +420,21 @@ class AuthNotifier extends StateNotifier<AuthState> {
     return Result.success(updated);
   }
 
-  Future<String?> refreshSession() async {
+  Future<String?> refreshSession() {
+    final existing = _refreshInFlight;
+    if (existing != null) return existing;
+
+    final future = _refreshSessionOnce();
+    _refreshInFlight = future;
+    future.whenComplete(() {
+      if (identical(_refreshInFlight, future)) {
+        _refreshInFlight = null;
+      }
+    });
+    return future;
+  }
+
+  Future<String?> _refreshSessionOnce() async {
     var refresh = state.refreshToken;
     if (refresh == null || refresh.isEmpty) {
       final s = await _tokenStorage.readAll();
@@ -319,7 +446,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     final result = await _authApi.refresh(
       refresh,
       deviceId: deviceId,
-      deviceName: 'AutoHub Client',
+      deviceName: 'MP-Servis Client',
       platform: _platformLabel(),
     );
     final data = result.dataOrNull;
@@ -373,9 +500,11 @@ class AuthNotifier extends StateNotifier<AuthState> {
     await _prefs.remove(_kUserEmail);
     await _prefs.remove(_kUserName);
     await _prefs.remove(_kUserSurname);
+    await _prefs.remove(_kUserAvatar);
     await _prefs.remove(_kAccessToken);
     await _prefs.remove(_kRefreshToken);
     await _prefs.setBool(_kJustAuthorized, false);
+    _skipMandatoryPinAfterAuth = false;
     state = const AuthState(status: AuthStatus.unauthenticated);
   }
 
@@ -384,6 +513,13 @@ class AuthNotifier extends StateNotifier<AuthState> {
     if (v) {
       await _prefs.setBool(_kJustAuthorized, false);
     }
+    return v;
+  }
+
+  /// Одноразово: вернуть и сбросить флаг «не требовать обязательный PIN после входа».
+  bool takeSkipMandatoryPinAfterAuth() {
+    final v = _skipMandatoryPinAfterAuth;
+    _skipMandatoryPinAfterAuth = false;
     return v;
   }
 }

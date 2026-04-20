@@ -1,3 +1,4 @@
+import { Response } from 'express';
 import { User } from './user.entity';
 import { UsersService } from './users.service';
 import { ClientNotificationPreferences } from '../notifications/client-notification-preferences';
@@ -14,59 +15,49 @@ export declare class UsersController {
     };
     getProfile(req: {
         user: User;
-    }): Promise<{
-        id: string;
-        email: string | null;
-        email_verified_at: string | null;
-        phone: string | null;
-        phone_verified_at: string | null;
-        name: string;
-        role: import("./user.entity").BusinessRole;
-        organization_id: string | null;
-        organizations: import("./users.service").OrganizationSummaryDto[];
-    }>;
+    }): Promise<Record<string, unknown>>;
+    uploadAvatar(req: {
+        user: User;
+    }, file: Express.Multer.File): Promise<Record<string, unknown>>;
+    getAvatarFile(userId: string, filename: string, req: {
+        user: User;
+    }, res: Response): Promise<void | Response<any, Record<string, any>>>;
     patchProfile(req: {
         user: User;
     }, body: {
         name?: string;
         phone?: string;
-    }): Promise<{
-        id: string;
-        email: string | null;
-        email_verified_at: string | null;
-        phone: string | null;
-        phone_verified_at: string | null;
-        name: string;
-        role: import("./user.entity").BusinessRole;
-        organization_id: string | null;
-        organizations: import("./users.service").OrganizationSummaryDto[];
-    }>;
+    }): Promise<Record<string, unknown>>;
     deleteAccount(req: {
         user: User;
-    }, app?: string): Promise<{
+    }): Promise<{
         ok: boolean;
     }>;
     switchOrganization(req: {
         user: User;
     }, body: {
         organization_id?: string;
-    }): Promise<{
-        id: string;
-        email: string | null;
-        email_verified_at: string | null;
-        phone: string | null;
-        phone_verified_at: string | null;
-        name: string;
-        role: import("./user.entity").BusinessRole;
-        organization_id: string | null;
-        organizations: import("./users.service").OrganizationSummaryDto[];
-    }>;
+    }): Promise<Record<string, unknown>>;
     getNotificationPreferences(req: {
         user: User;
     }): Promise<ClientNotificationPreferences>;
     patchNotificationPreferences(req: {
         user: User;
     }, body: Partial<ClientNotificationPreferences>): Promise<ClientNotificationPreferences>;
+    getClientAppState(req: {
+        user: User;
+    }): Promise<{
+        payload: Record<string, unknown> | null;
+        updated_at: string | null;
+    }>;
+    putClientAppState(req: {
+        user: User;
+    }, body: {
+        payload?: Record<string, unknown>;
+    }): Promise<{
+        ok: true;
+        updated_at: string;
+    }>;
     createOrganization(req: {
         user: User;
     }, body: {
@@ -74,17 +65,7 @@ export declare class UsersController {
         address?: string;
         phone?: string;
         plan_key?: string;
-    }): Promise<{
-        id: string;
-        email: string | null;
-        email_verified_at: string | null;
-        phone: string | null;
-        phone_verified_at: string | null;
-        name: string;
-        role: import("./user.entity").BusinessRole;
-        organization_id: string | null;
-        organizations: import("./users.service").OrganizationSummaryDto[];
-    }>;
+    }): Promise<Record<string, unknown>>;
     incomingInvitations(req: {
         user: User;
     }): Promise<{
@@ -107,17 +88,7 @@ export declare class UsersController {
         user: User;
     }, body: {
         set_active_organization?: boolean;
-    }): Promise<{
-        id: string;
-        email: string | null;
-        email_verified_at: string | null;
-        phone: string | null;
-        phone_verified_at: string | null;
-        name: string;
-        role: import("./user.entity").BusinessRole;
-        organization_id: string | null;
-        organizations: import("./users.service").OrganizationSummaryDto[];
-    }>;
+    }): Promise<Record<string, unknown>>;
     declineInvitation(invitationId: string, req: {
         user: User;
     }): Promise<{

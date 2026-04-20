@@ -6,20 +6,38 @@ class InternalApi {
 
   final Dio _dio;
 
+  /// Ответ может быть массивом или обёрткой `{ items | data | results }` (прокси/старый контракт).
+  static List<dynamic>? _coerceJsonList(dynamic data) {
+    if (data is List) return data;
+    if (data is Map) {
+      for (final k in ['items', 'data', 'results']) {
+        final v = data[k];
+        if (v is List) return v;
+      }
+    }
+    return null;
+  }
+
+  static Map<String, dynamic> _normalizeCarGenerationMap(Map<String, dynamic> m) {
+    final o = Map<String, dynamic>.from(m);
+    if (!o.containsKey('year_from') && m['yearFrom'] != null) o['year_from'] = m['yearFrom'];
+    if (!o.containsKey('year_to') && m['yearTo'] != null) o['year_to'] = m['yearTo'];
+    return o;
+  }
+
   void _throwIfNotOk(Response<dynamic> r) {
     final code = r.statusCode ?? 0;
     if (code >= 200 && code < 300) return;
-    final data = r.data;
-    String msg = 'HTTP $code';
+    throw Exception(_messageFromResponseData(r.data, code));
+  }
+
+  static String _messageFromResponseData(dynamic data, int code) {
     if (data is Map && data['message'] != null) {
       final m = data['message'];
-      if (m is List) {
-        msg = m.map((e) => '$e').join(', ');
-      } else {
-        msg = '$m';
-      }
+      if (m is List) return m.map((e) => '$e').join(', ');
+      return '$m';
     }
-    throw Exception(msg);
+    return code > 0 ? 'HTTP $code' : 'Ошибка запроса';
   }
 
   Future<Map<String, dynamic>?> _get(String path, {Map<String, dynamic>? queryParameters}) async {
@@ -78,11 +96,41 @@ class InternalApi {
         if (offset != null) 'offset': offset,
       });
   Future<Map<String, dynamic>?> getSubscriptions() => _get('internal/subscriptions');
-  Future<List<dynamic>?> getCarBrands() async {
+  /// Список марок (только 2xx). При 401/403 — исключение (чтобы не путать с «пустой БД»).
+  Future<List<dynamic>> getCarBrands() async {
     try {
-      final r = await _dio.get('internal/reference/car-brands');
-      if (r.statusCode != null && r.statusCode! >= 200 && r.statusCode! < 300 && r.data is List) {
-        return r.data as List<dynamic>;
+      final r = await _dio.get<dynamic>('internal/reference/car-brands');
+      final code = r.statusCode ?? 0;
+      if (code == 401 || code == 403) {
+        throw Exception(
+          'Доступ к internal API запрещён (HTTP $code). Выйдите и войдите снова в Control Center.',
+        );
+      }
+      if (code < 200 || code >= 300) {
+        throw Exception('Не удалось загрузить марки (HTTP $code).');
+      }
+      return _coerceJsonList(r.data) ?? [];
+    } on DioException catch (e) {
+      final sc = e.response?.statusCode;
+      if (sc == 401 || sc == 403) {
+        throw Exception(
+          'Доступ к internal API запрещён (HTTP $sc). Выйдите и войдите снова в Control Center.',
+        );
+      }
+      if (e.type == DioExceptionType.connectionError ||
+          e.type == DioExceptionType.connectionTimeout ||
+          e.type == DioExceptionType.receiveTimeout) {
+        throw Exception('Нет связи с API при загрузке марок.');
+      }
+      rethrow;
+    }
+  }
+
+  Future<List<dynamic>?> getCarModels(int brandId) async {
+    try {
+      final r = await _dio.get('internal/reference/car-brands/$brandId/models');
+      if (r.statusCode != null && r.statusCode! >= 200 && r.statusCode! < 300) {
+        return _coerceJsonList(r.data);
       }
       return null;
     } on DioException {
@@ -90,27 +138,29 @@ class InternalApi {
     }
   }
 
-  Future<List<dynamic>?> getCarModels(int brandId) async {
-    final r = await _dio.get('internal/reference/car-brands/$brandId/models');
-    if (r.statusCode != null && r.statusCode! >= 200 && r.statusCode! < 300 && r.data is List) {
-      return r.data as List<dynamic>;
-    }
-    return null;
-  }
-
   Future<List<dynamic>?> getCarGenerations(int modelId) async {
-    final r = await _dio.get('internal/reference/car-models/$modelId/generations');
-    if (r.statusCode != null && r.statusCode! >= 200 && r.statusCode! < 300 && r.data is List) {
-      return r.data as List<dynamic>;
+    try {
+      final r = await _dio.get('internal/reference/car-models/$modelId/generations');
+      if (r.statusCode != null && r.statusCode! >= 200 && r.statusCode! < 300) {
+        final list = _coerceJsonList(r.data);
+        if (list == null) return null;
+        return list.map((e) {
+          if (e is Map<String, dynamic>) return _normalizeCarGenerationMap(e);
+          if (e is Map) return _normalizeCarGenerationMap(Map<String, dynamic>.from(e));
+          return e;
+        }).toList();
+      }
+      return null;
+    } on DioException {
+      return null;
     }
-    return null;
   }
 
   Future<List<dynamic>?> getPendingCar() async {
     try {
       final r = await _dio.get('internal/reference/pending-car');
-      if (r.statusCode != null && r.statusCode! >= 200 && r.statusCode! < 300 && r.data is List) {
-        return r.data as List<dynamic>;
+      if (r.statusCode != null && r.statusCode! >= 200 && r.statusCode! < 300) {
+        return _coerceJsonList(r.data);
       }
       return null;
     } on DioException {
@@ -342,7 +392,7 @@ class InternalApi {
           e.type == DioExceptionType.sendTimeout ||
           e.type == DioExceptionType.receiveTimeout) {
         throw Exception(
-          'Нет связи с API (таймаут или хост недоступен). Проверьте AUTOHUB_API_HOST и что бэкенд запущен.',
+          'Нет связи с API (таймаут или хост недоступен). Проверьте MP_SERVIS_API_HOST и что бэкенд запущен.',
         );
       }
       if (status == 401 || status == 403) {
@@ -536,6 +586,124 @@ class InternalApi {
       await _dio.post<void>('internal/support-chats/$chatId/read');
     } on DioException {
       // игнорируем — бейдж обновится при следующем опросе
+    }
+  }
+
+  Future<Map<String, dynamic>?> getUserDetail(String id) => _get('internal/users/$id');
+
+  Future<Map<String, dynamic>?> patchUser(String id, {String? name, bool clearAvatar = false}) async {
+    try {
+      final body = <String, dynamic>{};
+      if (name != null) body['name'] = name;
+      if (clearAvatar) body['clear_avatar'] = true;
+      final r = await _dio.patch<Map<String, dynamic>>('internal/users/$id', data: body);
+      if (r.statusCode != null && r.statusCode! >= 200 && r.statusCode! < 300) return r.data;
+      return null;
+    } on DioException {
+      return null;
+    }
+  }
+
+  /// `all: true` — удалить все фото СТО; иначе укажите полный [url] из списка `photo_urls`.
+  Future<bool> deleteOrganizationPhotos(String orgId, {bool all = false, String? url}) async {
+    if (!all && (url == null || url.isEmpty)) return false;
+    try {
+      final r = await _dio.delete<void>(
+        'internal/organizations/$orgId/photos',
+        queryParameters: all ? {'all': '1'} : {'url': url},
+      );
+      return r.statusCode != null && r.statusCode! >= 200 && r.statusCode! < 300;
+    } on DioException {
+      return false;
+    }
+  }
+
+  Future<bool> moderateClearClientCar(
+    String clientPhone,
+    String carId, {
+    bool vin = false,
+    bool licensePlate = false,
+    bool carInfo = false,
+    bool carPhotoUrl = false,
+  }) async {
+    try {
+      final r = await _dio.post<dynamic>(
+        'internal/client-cars/moderate-clear',
+        data: {
+          'client_phone': clientPhone,
+          'car_id': carId,
+          if (vin) 'vin': true,
+          if (licensePlate) 'license_plate': true,
+          if (carInfo) 'car_info': true,
+          if (carPhotoUrl) 'car_photo_url': true,
+        },
+      );
+      return r.statusCode != null && r.statusCode! >= 200 && r.statusCode! < 300;
+    } on DioException {
+      return false;
+    }
+  }
+
+  /// Скрыть авто у клиента (остаётся в БД, не отображается в приложении).
+  Future<({bool ok, String? error})> hideClientCarFromUser(String clientPhone, String carId) async {
+    try {
+      final r = await _dio.post<dynamic>(
+        'internal/client-cars/hide-from-client',
+        data: {'client_phone': clientPhone, 'car_id': carId},
+      );
+      final code = r.statusCode ?? 0;
+      if (code >= 200 && code < 300) return (ok: true, error: null);
+      return (ok: false, error: _messageFromResponseData(r.data, code));
+    } on DioException catch (e) {
+      final resp = e.response;
+      if (resp != null) {
+        final code = resp.statusCode ?? 0;
+        return (ok: false, error: _messageFromResponseData(resp.data, code));
+      }
+      return (ok: false, error: e.message ?? 'Ошибка сети');
+    }
+  }
+
+  Future<({bool ok, String? error})> restoreClientCarForUser(String clientPhone, String carId) async {
+    try {
+      final r = await _dio.post<dynamic>(
+        'internal/client-cars/restore-for-client',
+        data: {'client_phone': clientPhone, 'car_id': carId},
+      );
+      final code = r.statusCode ?? 0;
+      if (code >= 200 && code < 300) return (ok: true, error: null);
+      return (ok: false, error: _messageFromResponseData(r.data, code));
+    } on DioException catch (e) {
+      final resp = e.response;
+      if (resp != null) {
+        final code = resp.statusCode ?? 0;
+        return (ok: false, error: _messageFromResponseData(resp.data, code));
+      }
+      return (ok: false, error: e.message ?? 'Ошибка сети');
+    }
+  }
+
+  /// Полное удаление заказов с car_id и записи гаража. [confirm] должен быть `DELETE`.
+  Future<({bool ok, String? error})> hardDeleteClientCar(
+    String clientPhone,
+    String carId, {
+    required String confirm,
+  }) async {
+    try {
+      final r = await _dio.post<dynamic>(
+        'internal/client-cars/hard-delete',
+        data: {'client_phone': clientPhone, 'car_id': carId, 'confirm': confirm},
+      );
+      final code = r.statusCode ?? 0;
+      if (code >= 200 && code < 300) return (ok: true, error: null);
+      return (ok: false, error: _messageFromResponseData(r.data, code));
+    } on DioException catch (e) {
+      final resp = e.response;
+      if (resp != null) {
+        final code = resp.statusCode ?? 0;
+        return (ok: false, error: _messageFromResponseData(resp.data, code));
+      }
+      return (ok: false, error: e.message ?? 'Ошибка сети');
     }
   }
 }

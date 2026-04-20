@@ -18,6 +18,9 @@ import { MediaService } from '../media/media.service';
 import { normalizeOrganizationBusinessKind } from '../organizations/organization-business-kind';
 import { normalizeSchedulingMode } from '../organizations/organization-scheduling';
 import { bayNameMapFromSlots, effectiveBayCountFromSlots, normalizeOrgBays } from '../organizations/bay-settings.util';
+import { UsersService } from '../users/users.service';
+import { UserClientHiddenCar } from '../users/user-client-hidden-car.entity';
+import { normalizeOptionalVin } from '../common/vin.util';
 
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads', 'order-photos');
 
@@ -35,7 +38,56 @@ export class OrdersService {
     private orgService: OrganizationsService,
     private subscriptionQuota: SubscriptionQuotaService,
     private readonly mediaService: MediaService,
+    private readonly usersService: UsersService,
+    @InjectRepository(UserClientHiddenCar) private readonly hiddenCarRepo: Repository<UserClientHiddenCar>,
   ) {}
+
+  /**
+   * Id строки прайса организации и/или общего каталога. Не задают цену: фактические суммы и сроки — в полях позиции.
+   */
+  private parseItemServiceRefs(
+    i: Record<string, unknown> | undefined | null,
+  ): { organizationServiceId: string | null; catalogItemId: string | null } {
+    if (!i || typeof i !== 'object') {
+      return { organizationServiceId: null, catalogItemId: null };
+    }
+    const trim = (v: unknown): string | null => {
+      if (v === undefined || v === null) return null;
+      const s = String(v).trim();
+      return s.length > 0 ? s : null;
+    };
+    const organizationServiceId =
+      trim(i['organization_service_id']) ??
+      trim(i['organizationServiceId']) ??
+      trim(i['service_id']) ??
+      trim(i['serviceId']);
+    const catalogItemId = trim(i['catalog_item_id']) ?? trim(i['catalogItemId']);
+    return { organizationServiceId, catalogItemId };
+  }
+
+  private async loadHiddenCarIdsForClientUser(userId: string): Promise<Set<string>> {
+    const rows = await this.hiddenCarRepo.find({ where: { userId }, select: ['carId'] });
+    return new Set(rows.map((r) => r.carId));
+  }
+
+  /** Скрытое у клиента авто: не показывать в гараже и в списке/карточке заказов. */
+  async isCarHiddenForClient(userId: string, carId: string | null | undefined): Promise<boolean> {
+    if (!carId || String(carId).trim() === '') return false;
+    const row = await this.hiddenCarRepo.findOne({
+      where: { userId, carId: String(carId).trim() },
+    });
+    return !!row;
+  }
+
+  /** Аватары клиентских аккаунтов по ключу телефона (для списка/карточки заказа без запроса чатов). */
+  private async buildClientAvatarMapForOrders(orders: Order[]): Promise<Map<string, string | null>> {
+    const keys = new Set<string>();
+    for (const o of orders) {
+      const pk = this.usersService.clientPhoneMatchKey(String((o as any).clientPhone || ''));
+      if (pk) keys.add(pk);
+    }
+    return this.usersService.mapClientAvatarUrlsByPhoneKeys(keys);
+  }
 
   private async assertOrderMediaAttachmentLimit(orderId: string, organizationId: string): Promise<void> {
     const limits = await this.subscriptionQuota.getLimitsForOrganization(organizationId);
@@ -83,7 +135,8 @@ export class OrdersService {
       order: { dateTime: 'DESC' },
     });
     const bayCache = new Map<string, Map<string, string>>();
-    const items = await Promise.all(orders.map((o) => this.toOrderJsonWithApprovalPreview(o, bayCache)));
+    const avatarMap = await this.buildClientAvatarMapForOrders(orders);
+    const items = await Promise.all(orders.map((o) => this.toOrderJsonWithApprovalPreview(o, bayCache, avatarMap)));
     return { items };
   }
 
@@ -96,13 +149,16 @@ export class OrdersService {
       skip: offset,
     });
     const bayCache = new Map<string, Map<string, string>>();
-    const items = await Promise.all(orders.map((o) => this.toOrderJsonWithApprovalPreview(o, bayCache)));
+    const avatarMap = await this.buildClientAvatarMapForOrders(orders);
+    const items = await Promise.all(orders.map((o) => this.toOrderJsonWithApprovalPreview(o, bayCache, avatarMap)));
     return { items, total };
   }
 
   /** Заказы клиента по номеру телефона (для Client-приложения). Учитывает 8/7 для РФ. */
   async findForClient(clientPhoneNorm: string) {
     const norm = this.normalizePhoneForCompare(clientPhoneNorm);
+    const userId = await this.usersService.findIdByNormalizedPhone(norm, 'client');
+    const hidden = userId ? await this.loadHiddenCarIdsForClientUser(userId) : new Set<string>();
     const digitsExpr = "REGEXP_REPLACE(COALESCE(order.client_phone, ''), '\\D', '', 'g')";
     const normalizedExpr = `CASE WHEN LENGTH(${digitsExpr}) = 11 AND LEFT(${digitsExpr}, 1) = '8' THEN '7' || SUBSTRING(${digitsExpr} FROM 2) ELSE ${digitsExpr} END`;
     const orders = await this.orderRepo
@@ -113,8 +169,17 @@ export class OrdersService {
       .where(`${normalizedExpr} = :phone`, { phone: norm })
       .orderBy('order.date_time', 'DESC')
       .getMany();
+    const visible =
+      hidden.size === 0
+        ? orders
+        : orders.filter((o) => {
+            const cid = (o as any).carId;
+            if (cid == null || String(cid).trim() === '') return true;
+            return !hidden.has(String(cid).trim());
+          });
     const bayCache = new Map<string, Map<string, string>>();
-    const items = await Promise.all(orders.map((o) => this.toOrderJsonWithApprovalPreview(o, bayCache)));
+    const avatarMap = await this.buildClientAvatarMapForOrders(visible);
+    const items = await Promise.all(visible.map((o) => this.toOrderJsonWithApprovalPreview(o, bayCache, avatarMap)));
     return { items };
   }
 
@@ -122,10 +187,17 @@ export class OrdersService {
    * Детали заказа. Поле items — фактические позиции в БД (для правок СТО).
    * При pending_approval дополнительно approval_preview — предлагаемый состав из последнего запроса согласования (только отображение).
    */
-  async findOne(id: string) {
+  async findOne(id: string, filterHiddenForClientUserId?: string | null) {
     const o = await this.orderRepo.findOne({ where: { id }, relations: ['items', 'master', 'organization'] });
     if (!o) return null;
-    return this.toOrderJsonWithApprovalPreview(o, new Map<string, Map<string, string>>());
+    if (
+      filterHiddenForClientUserId &&
+      (await this.isCarHiddenForClient(filterHiddenForClientUserId, (o as any).carId))
+    ) {
+      return null;
+    }
+    const avatarMap = await this.buildClientAvatarMapForOrders([o]);
+    return this.toOrderJsonWithApprovalPreview(o, new Map<string, Map<string, string>>(), avatarMap);
   }
 
   /**
@@ -164,6 +236,7 @@ export class OrdersService {
       engineType: (lastOrder as any)?.engineType ?? null,
       clientName: (lastOrder as any)?.clientName ?? null,
       clientPhone,
+      carPhotoUrl: (lastOrder as any)?.carPhotoUrl ?? null,
       status: 'pending_confirmation',
       previousStatus: null,
       dateTime,
@@ -199,6 +272,16 @@ export class OrdersService {
       if (!exists) return orderNumber;
     }
     return '#2024-' + String(Date.now()).slice(-6);
+  }
+
+  /** URL фото авто из клиентского приложения (https или относительный путь к API). */
+  private sanitizeCarPhotoUrl(raw: unknown): string | null {
+    const s = raw == null ? '' : String(raw).trim();
+    if (!s || s.length > 1024) return null;
+    const lower = s.toLowerCase();
+    if (lower.startsWith('http://') || lower.startsWith('https://')) return s;
+    if (s.startsWith('/')) return s;
+    return null;
   }
 
   async create(organizationId: string, dto: any) {
@@ -283,12 +366,13 @@ export class OrdersService {
     }
 
     const orderNumber = await this.nextOrderNumber(organizationId);
+    const vinNorm = normalizeOptionalVin(dto.vin);
     const order = this.orderRepo.create({
       organizationId,
       orderNumber,
       carId: dto.car_id || 'unknown',
       carInfo: dto.car_info || '',
-      vin: dto.vin ?? null,
+      vin: vinNorm,
       licensePlate: dto.license_plate ?? null,
       bodyType: dto.body_type ?? null,
       color: dto.color ?? null,
@@ -296,6 +380,7 @@ export class OrdersService {
       engineType: dto.engine_type ?? null,
       clientName: dto.client_name,
       clientPhone: dto.client_phone,
+      carPhotoUrl: this.sanitizeCarPhotoUrl(dto.car_photo_url ?? dto.carPhotoUrl),
       status: 'pending_confirmation',
       dateTime,
       plannedStartTime: dateTime,
@@ -320,11 +405,15 @@ export class OrdersService {
       }
     }
     for (const i of itemDtos) {
+      const row = i as Record<string, unknown>;
+      const refs = this.parseItemServiceRefs(row);
       const item = this.itemRepo.create({
         orderId: order.id,
-        name: i.name,
-        priceKopecks: i.price_kopecks ?? null,
-        estimatedMinutes: i.estimated_minutes ?? 60,
+        name: (row.name as string) ?? '',
+        priceKopecks: (row.price_kopecks as number) ?? (row.priceKopecks as number) ?? null,
+        estimatedMinutes: Number(row.estimated_minutes ?? row.estimatedMinutes ?? 60) || 60,
+        organizationServiceId: refs.organizationServiceId,
+        catalogItemId: refs.catalogItemId,
       });
       await this.itemRepo.save(item);
     }
@@ -415,6 +504,24 @@ export class OrdersService {
     return digits;
   }
 
+  /** Push в Business-приложение: сотрудники с user_id, если включены пуши по заказам. */
+  private async notifyOrgStaffClientBookingSystemLine(orderId: string, line: string): Promise<void> {
+    const order = await this.orderRepo.findOne({ where: { id: orderId } });
+    const orgId = (order as any)?.organizationId as string | undefined;
+    if (!orgId) return;
+    const chat = await this.chats.getChatByOrderId(orderId);
+    await this.notifications.notifyOrganizationStaffOrderEvent(orgId, {
+      title: 'Клиент и запись',
+      body: line,
+      payload: {
+        order_id: orderId,
+        ...(chat?.id ? { chat_id: chat.id } : {}),
+        target_type: 'order',
+        target_id: orderId,
+      },
+    });
+  }
+
   /**
    * Имена для системного сообщения после согласования: из payload последнего запроса, а не из устаревшего order.items.
    * Редактирования в object-формате применяются все; new_items фильтруются по approved_item_ids (или «принять всё» = ['0']).
@@ -463,6 +570,7 @@ export class OrdersService {
     orderId: string,
     newDateTime?: string,
     acceptProposed?: boolean,
+    filterHiddenForClientUserId?: string | null,
   ) {
     const updates: Record<string, unknown> = {};
     if (newDateTime) {
@@ -490,9 +598,10 @@ export class OrdersService {
             ? `Клиент подтвердил запись на ${dateStr} в ${timeStr}.`
             : `Клиент перенёс время на ${dateStr} в ${timeStr}.`;
         await this.chats.sendMessage(chat.id, { text, is_system: true }, false);
+        await this.notifyOrgStaffClientBookingSystemLine(orderId, text);
       }
     }
-    return this.findOne(orderId);
+    return this.findOne(orderId, filterHiddenForClientUserId);
   }
 
   /**
@@ -513,9 +622,13 @@ export class OrdersService {
     const orderPhone = this.normalizePhoneForCompare((order as any).clientPhone);
     const userPhone = this.normalizePhoneForCompare(clientPhoneNorm);
     if (orderPhone !== userPhone) return null;
+    const clientUserId = await this.usersService.findIdByNormalizedPhone(userPhone, 'client');
+    if (clientUserId && (await this.isCarHiddenForClient(clientUserId, (order as any).carId))) {
+      return null;
+    }
     const status = (order as any).status;
     if (status === 'confirmed' || status === 'in_progress') {
-      return this.applyClientTimeConfirmAfterApproval(orderId, newDateTime, acceptProposed);
+      return this.applyClientTimeConfirmAfterApproval(orderId, newDateTime, acceptProposed, clientUserId);
     }
     if (status !== 'pending_confirmation' && status !== 'pending_approval') return null;
 
@@ -533,14 +646,18 @@ export class OrdersService {
         }
         const newItems = (Array.isArray(payload) ? payload : (payload?.new_items ?? payload?.newItems ?? [])) as any[];
         for (const n of newItems) {
+          const nr = n as Record<string, unknown>;
+          const refs = this.parseItemServiceRefs(nr);
           const item = this.itemRepo.create({
             orderId,
             order: { id: orderId } as any,
-            name: n.name ?? '',
-            priceKopecks: n.price_kopecks ?? n.priceKopecks ?? null,
-            estimatedMinutes: n.estimated_minutes ?? n.estimatedMinutes ?? 60,
+            name: (nr.name as string) ?? '',
+            priceKopecks: (nr.price_kopecks as number) ?? (nr.priceKopecks as number) ?? null,
+            estimatedMinutes: Number(nr.estimated_minutes ?? nr.estimatedMinutes ?? 60) || 60,
             isCompleted: false,
             isAdditional: false,
+            organizationServiceId: refs.organizationServiceId,
+            catalogItemId: refs.catalogItemId,
           });
           await this.itemRepo.save(item);
         }
@@ -559,11 +676,15 @@ export class OrdersService {
           const dt = new Date(newDateTime);
           const dateStr = dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
           const timeStr = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-          await this.chats.sendMessage(chat.id, { text: `Клиент подтвердил запись на ${dateStr} в ${timeStr}.`, is_system: true }, false);
+          const line = `Клиент подтвердил запись на ${dateStr} в ${timeStr}.`;
+          await this.chats.sendMessage(chat.id, { text: line, is_system: true }, false);
+          await this.notifyOrgStaffClientBookingSystemLine(orderId, line);
         } else if (chat) {
-          await this.chats.sendMessage(chat.id, { text: 'Клиент подтвердил запись.', is_system: true }, false);
+          const line = 'Клиент подтвердил запись.';
+          await this.chats.sendMessage(chat.id, { text: line, is_system: true }, false);
+          await this.notifyOrgStaffClientBookingSystemLine(orderId, line);
         }
-        return this.findOne(orderId);
+        return this.findOne(orderId, clientUserId);
       }
     }
 
@@ -590,9 +711,12 @@ export class OrdersService {
             const dt = new Date(newDateTime);
             const dateStr = dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
             const timeStr = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-            await this.chats.sendMessage(chat.id, { text: `Клиент перенёс время на ${dateStr} в ${timeStr}.`, is_system: true }, false);
+            const line = `Клиент перенёс время на ${dateStr} в ${timeStr}.`;
+            await this.chats.sendMessage(chat.id, { text: line, is_system: true }, false);
+            await this.notifyOrgStaffClientBookingSystemLine(orderId, line);
           }
-          return this.findOne(orderId);
+          await this.chats.markApprovalRequestsResolvedForOrder(orderId, 'superseded');
+          return this.findOne(orderId, clientUserId);
         }
         throw e;
       }
@@ -627,9 +751,10 @@ export class OrdersService {
           ? `Клиент подтвердил запись на ${dateStr} в ${timeStr}.`
           : `Клиент перенёс время на ${dateStr} в ${timeStr}.`;
         await this.chats.sendMessage(chat.id, { text, is_system: true }, false);
+        await this.notifyOrgStaffClientBookingSystemLine(orderId, text);
       }
     }
-    return this.findOne(orderId);
+    return this.findOne(orderId, clientUserId);
   }
 
   async assignMaster(
@@ -705,15 +830,21 @@ export class OrdersService {
   async cancel(id: string, opts?: { organizationId?: string; clientPhone?: string }) {
     const order = await this.orderRepo.findOne({ where: { id } });
     if (!order) return null;
+    let filterHiddenForClientUserId: string | undefined;
     if (opts?.organizationId) {
       if ((order as any).organizationId !== opts.organizationId) return null;
     } else if (opts?.clientPhone) {
       const orderPhone = this.normalizePhoneForCompare((order as any).clientPhone);
       const userPhone = this.normalizePhoneForCompare(opts.clientPhone);
       if (orderPhone !== userPhone) return null;
+      const clientUserId = await this.usersService.findIdByNormalizedPhone(userPhone, 'client');
+      if (clientUserId && (await this.isCarHiddenForClient(clientUserId, (order as any).carId))) {
+        return null;
+      }
+      filterHiddenForClientUserId = clientUserId ?? undefined;
     }
     await this.orderRepo.update(id, { status: 'cancelled' });
-    return this.findOne(id);
+    return this.findOne(id, filterHiddenForClientUserId);
   }
 
   /**
@@ -733,9 +864,13 @@ export class OrdersService {
     const orderPhone = this.normalizePhoneForCompare((order as any).clientPhone);
     const userPhone = this.normalizePhoneForCompare(clientPhoneNorm);
     if (orderPhone !== userPhone) return null;
+    const clientUserId = await this.usersService.findIdByNormalizedPhone(userPhone, 'client');
+    if (clientUserId && (await this.isCarHiddenForClient(clientUserId, (order as any).carId))) {
+      return null;
+    }
     const status = (order as any).status;
     // Уже согласовано — возвращаем текущий заказ (идемпотентность), чтобы клиент обновил UI и убрал карточку.
-    if (status !== 'pending_approval') return this.findOne(orderId);
+    if (status !== 'pending_approval') return this.findOne(orderId, clientUserId);
 
     if (approvedItemIds.length === 0) {
       const previousStatus = ((order as any).previousStatus as string) ?? 'in_progress';
@@ -744,7 +879,8 @@ export class OrdersService {
       if (chat) {
         await this.chats.sendMessage(chat.id, { text: 'Клиент отказался от дополнительных работ.', is_system: true }, false);
       }
-      return this.findOne(orderId);
+      await this.chats.markApprovalRequestsResolvedForOrder(orderId, 'rejected');
+      return this.findOne(orderId, clientUserId);
     }
 
     const approvalMsg = await this.chats.resolveApprovalMessageForOrder(orderId, opts?.approvalMessageId);
@@ -827,14 +963,18 @@ export class OrdersService {
           continue;
         }
         console.log('[approveByClient] INSERT new_items[' + index + ']', n.name);
+        const nr = n as Record<string, unknown>;
+        const refs = this.parseItemServiceRefs(nr);
         const entity = this.itemRepo.create({
           orderId,
           order: { id: orderId } as any,
-          name: n.name ?? '',
-          priceKopecks: n.price_kopecks ?? n.priceKopecks ?? null,
-          estimatedMinutes: n.estimated_minutes ?? n.estimatedMinutes ?? 60,
+          name: (nr.name as string) ?? '',
+          priceKopecks: (nr.price_kopecks as number) ?? (nr.priceKopecks as number) ?? null,
+          estimatedMinutes: Number(nr.estimated_minutes ?? nr.estimatedMinutes ?? 60) || 60,
           isCompleted: false,
           isAdditional: true,
+          organizationServiceId: refs.organizationServiceId,
+          catalogItemId: refs.catalogItemId,
         });
         await this.itemRepo.save(entity);
         inserted++;
@@ -853,7 +993,8 @@ export class OrdersService {
           : 'Изменения применены: клиент подтвердил доп.работы.';
         await this.chats.sendMessage(chat.id, { text, is_system: true }, false);
       }
-      return this.findOne(orderId);
+      await this.chats.markApprovalRequestsResolvedForOrder(orderId, 'accepted');
+      return this.findOne(orderId, clientUserId);
     }
 
     const approvalItems = Array.isArray(payload) ? payload : [];
@@ -895,7 +1036,8 @@ export class OrdersService {
       const text = namesText ? `Изменения применены: ${approvedNames.map((n: string) => '+' + n).join(', ')}` : 'Изменения применены: клиент подтвердил доп.работы.';
       await this.chats.sendMessage(chat.id, { text, is_system: true }, false);
     }
-    return this.findOne(orderId);
+    await this.chats.markApprovalRequestsResolvedForOrder(orderId, 'accepted');
+    return this.findOne(orderId, clientUserId);
   }
 
   /**
@@ -938,14 +1080,18 @@ export class OrdersService {
       }
       for (let index = 0; index < newItems.length; index++) {
         const n = newItems[index];
+        const nr = n as Record<string, unknown>;
+        const refs = this.parseItemServiceRefs(nr);
         const entity = this.itemRepo.create({
           orderId,
           order: { id: orderId } as any,
-          name: n.name ?? '',
-          priceKopecks: n.price_kopecks ?? n.priceKopecks ?? null,
-          estimatedMinutes: n.estimated_minutes ?? n.estimatedMinutes ?? 60,
+          name: (nr.name as string) ?? '',
+          priceKopecks: (nr.price_kopecks as number) ?? (nr.priceKopecks as number) ?? null,
+          estimatedMinutes: Number(nr.estimated_minutes ?? nr.estimatedMinutes ?? 60) || 60,
           isCompleted: false,
           isAdditional: true,
+          organizationServiceId: refs.organizationServiceId,
+          catalogItemId: refs.catalogItemId,
         });
         await this.itemRepo.save(entity);
       }
@@ -996,6 +1142,7 @@ export class OrdersService {
         : 'Изменения применены: сервис подтвердил по телефону.';
       await this.chats.sendMessage(chat.id, { text, is_system: true }, false);
     }
+    await this.chats.markApprovalRequestsResolvedForOrder(orderId, 'accepted');
     return this.findOne(orderId);
   }
 
@@ -1051,14 +1198,20 @@ export class OrdersService {
     }
 
     await this.itemRepo.delete({ orderId: id });
-    const toInsert = (items || []).map((i) => this.itemRepo.create({
-      orderId: id,
-      name: i.name,
-      priceKopecks: i.price_kopecks ?? i.priceKopecks ?? null,
-      estimatedMinutes: i.estimated_minutes ?? i.estimatedMinutes ?? 60,
-      isCompleted: i.is_completed ?? false,
-      isAdditional: i.is_additional ?? false,
-    }));
+    const toInsert = (items || []).map((raw) => {
+      const i = raw as Record<string, unknown>;
+      const refs = this.parseItemServiceRefs(i);
+      return this.itemRepo.create({
+        orderId: id,
+        name: (i.name as string) ?? '',
+        priceKopecks: (i.price_kopecks as number) ?? (i.priceKopecks as number) ?? null,
+        estimatedMinutes: Number(i.estimated_minutes ?? i.estimatedMinutes ?? 60) || 60,
+        isCompleted: (i.is_completed as boolean) ?? false,
+        isAdditional: (i.is_additional as boolean) ?? false,
+        organizationServiceId: refs.organizationServiceId,
+        catalogItemId: refs.catalogItemId,
+      });
+    });
     await this.itemRepo.save(toInsert);
     return this.findOne(id);
   }
@@ -1076,6 +1229,10 @@ export class OrdersService {
       const orderPhone = this.normalizePhoneForCompare((order as any).clientPhone || '');
       const userPhone = this.normalizePhoneForCompare(opts.clientPhone);
       if (orderPhone !== userPhone) throw new NotFoundException('Order not found');
+      const uid = await this.usersService.findIdByNormalizedPhone(userPhone, 'client');
+      if (uid && (await this.isCarHiddenForClient(uid, (order as any).carId))) {
+        throw new NotFoundException('Order not found');
+      }
     } else {
       throw new NotFoundException('Order not found');
     }
@@ -1171,6 +1328,64 @@ export class OrdersService {
     return { deletedOrders, deletedItems, deletedPhotos };
   }
 
+  /**
+   * Полное удаление заказов по car_id (Control Center): медиа, позиции, отвязка чатов, удаление заказов.
+   */
+  async purgeOrdersByCarIdForInternal(carId: string): Promise<{
+    deletedOrders: number;
+    deletedItems: number;
+    deletedPhotos: number;
+  }> {
+    const cid = String(carId || '').trim();
+    if (!cid) {
+      return { deletedOrders: 0, deletedItems: 0, deletedPhotos: 0 };
+    }
+    const orders = await this.orderRepo.find({ where: { carId: cid }, select: ['id'] });
+    const orderIds = orders.map((o) => o.id);
+    if (orderIds.length === 0) {
+      return { deletedOrders: 0, deletedItems: 0, deletedPhotos: 0 };
+    }
+    const { deleted_assets: deletedMediaAssets } = await this.mediaService.purgeMediaForOrders(orderIds);
+    const photoResult = await this.photoRepo.createQueryBuilder().delete().where('order_id IN (:...ids)', { ids: orderIds }).execute();
+    const deletedLegacyPhotos = photoResult.affected ?? 0;
+    const deletedPhotos = deletedMediaAssets + deletedLegacyPhotos;
+    const itemResult = await this.itemRepo.createQueryBuilder().delete().where('order_id IN (:...ids)', { ids: orderIds }).execute();
+    const deletedItems = itemResult.affected ?? 0;
+    await this.chatMsgRepo.createQueryBuilder().update().set({ orderId: null }).where('order_id IN (:...ids)', { ids: orderIds }).execute();
+    await this.chatRepo.createQueryBuilder().update().set({ lastOrderId: null }).where('order_id IN (:...ids)', { ids: orderIds }).execute();
+    const result = await this.orderRepo.createQueryBuilder().delete().where('car_id = :cid', { cid }).execute();
+    const deletedOrders = result.affected ?? 0;
+    return { deletedOrders, deletedItems, deletedPhotos };
+  }
+
+  /**
+   * Модерация: очистить поля авто во всех заказах с данным телефоном клиента и car_id.
+   */
+  async moderateClearCarFieldsForInternal(
+    clientPhone: string,
+    carId: string,
+    fields: { vin?: boolean; license_plate?: boolean; car_info?: boolean; car_photo_url?: boolean },
+  ): Promise<{ updated: number }> {
+    const norm = this.normalizePhoneForCompare(clientPhone);
+    const cid = String(carId || '').trim();
+    if (!norm || !cid) return { updated: 0 };
+    const orders = await this.orderRepo.find({ where: { carId: cid } });
+    let n = 0;
+    for (const o of orders) {
+      const op = this.normalizePhoneForCompare((o as any).clientPhone || '');
+      if (op !== norm) continue;
+      const patch: Partial<Order> = {};
+      if (fields.vin) (patch as any).vin = null;
+      if (fields.license_plate) (patch as any).licensePlate = null;
+      if (fields.car_info) (patch as any).carInfo = '';
+      if (fields.car_photo_url) (patch as any).carPhotoUrl = null;
+      if (Object.keys(patch).length === 0) continue;
+      await this.orderRepo.update(o.id, patch as any);
+      n += 1;
+    }
+    return { updated: n };
+  }
+
   /** Агрегат авто из заказов (машины «в приложении» в терминах заказов с car_id). */
   async listClientCarsAggregatedForInternal() {
     const rows = await this.orderRepo.find({
@@ -1185,6 +1400,7 @@ export class OrdersService {
         client_name: string | null;
         orders_count: number;
         last_order_at: string;
+        car_photo_url: string | null;
       }
     >();
     for (const o of rows) {
@@ -1192,6 +1408,7 @@ export class OrdersService {
       const carId = (o as any).carId || '';
       if (!phone || !carId) continue;
       const key = `${phone}|${carId}`;
+      const photo = ((o as any).carPhotoUrl || '').trim() || null;
       if (!map.has(key)) {
         map.set(key, {
           client_phone: phone,
@@ -1200,9 +1417,14 @@ export class OrdersService {
           client_name: o.clientName ?? null,
           orders_count: 1,
           last_order_at: o.dateTime.toISOString(),
+          car_photo_url: photo,
         });
       } else {
-        map.get(key)!.orders_count += 1;
+        const e = map.get(key)!;
+        e.orders_count += 1;
+        if ((!e.car_photo_url || !String(e.car_photo_url).trim()) && photo) {
+          e.car_photo_url = photo;
+        }
       }
     }
     const items = [...map.values()].sort((a, b) => b.last_order_at.localeCompare(a.last_order_at));
@@ -1219,13 +1441,15 @@ export class OrdersService {
     });
     const filtered = orders.filter((o) => this.normalizePhoneForCompare((o as any).clientPhone || '') === norm);
     const bayCache = new Map<string, Map<string, string>>();
-    return Promise.all(filtered.map((o) => this.toOrderJsonWithApprovalPreview(o, bayCache)));
+    const avatarMap = await this.buildClientAvatarMapForOrders(filtered);
+    return Promise.all(filtered.map((o) => this.toOrderJsonWithApprovalPreview(o, bayCache, avatarMap)));
   }
 
   /** JSON заказа + при pending_approval блок approval_preview для карточек (состав/сумма как в запросе согласования). */
   async toOrderJsonWithApprovalPreview(
     o: Order,
     orgBayCaches: Map<string, Map<string, string>> = new Map(),
+    clientAvatarByPhoneKey?: Map<string, string | null>,
   ): Promise<Record<string, unknown>> {
     let orgMap = orgBayCaches.get(o.organizationId);
     if (!orgMap) {
@@ -1233,7 +1457,7 @@ export class OrdersService {
       orgMap = bayNameMapFromSlots((raw as { slots?: unknown }).slots);
       orgBayCaches.set(o.organizationId, orgMap);
     }
-    const json = this.toOrderJson(o, orgMap) as Record<string, unknown>;
+    const json = this.toOrderJson(o, orgMap, clientAvatarByPhoneKey) as Record<string, unknown>;
     const status = (o as any).status as string;
     if (status !== 'pending_approval') {
       return json;
@@ -1279,6 +1503,8 @@ export class OrdersService {
       price_kopecks: i.priceKopecks ?? null,
       estimated_minutes: i.estimatedMinutes ?? 60,
       is_additional: !!i.isAdditional,
+      service_id: (i as any).organizationServiceId ?? null,
+      catalog_item_id: (i as any).catalogItemId ?? null,
     }));
 
     if (Array.isArray(parsed)) {
@@ -1419,10 +1645,17 @@ export class OrdersService {
     };
   }
 
-  toOrderJson(o: Order, bayNames: Map<string, string> = new Map()) {
+  toOrderJson(
+    o: Order,
+    bayNames: Map<string, string> = new Map(),
+    clientAvatarByPhoneKey?: Map<string, string | null>,
+  ) {
     const org = (o as any).organization;
     const order = o as any;
     const bid = (o as any).bayId as string | null | undefined;
+    const phoneKey = this.usersService.clientPhoneMatchKey(String(o.clientPhone || ''));
+    const clientAvatarUrl =
+      clientAvatarByPhoneKey && phoneKey ? clientAvatarByPhoneKey.get(phoneKey) ?? null : null;
     return {
       id: o.id,
       order_number: o.orderNumber,
@@ -1436,6 +1669,8 @@ export class OrdersService {
       engine_type: (o as any).engineType ?? null,
       client_name: o.clientName,
       client_phone: o.clientPhone,
+      client_avatar_url: clientAvatarUrl,
+      car_photo_url: (o as any).carPhotoUrl ?? null,
       status: o.status,
       previous_status: (o as any).previousStatus ?? null,
       first_confirmed_at: (o as any).firstConfirmedAt?.toISOString?.() ?? null,
@@ -1467,6 +1702,8 @@ export class OrdersService {
         is_completed: i.isCompleted,
         is_additional: i.isAdditional,
         master_id: (i as any).masterId ?? null,
+        service_id: (i as any).organizationServiceId ?? null,
+        catalog_item_id: (i as any).catalogItemId ?? null,
       })),
     };
   }

@@ -12,6 +12,7 @@ const typeorm_1 = require("@nestjs/typeorm");
 const push_device_entity_1 = require("./push-device.entity");
 const notification_entity_1 = require("./notification.entity");
 const user_entity_1 = require("../users/user.entity");
+const staff_member_entity_1 = require("../organizations/staff-member.entity");
 const users_module_1 = require("../users/users.module");
 const notifications_controller_1 = require("./notifications.controller");
 const notifications_service_1 = require("./notifications.service");
@@ -21,7 +22,10 @@ let NotificationsModule = class NotificationsModule {
 exports.NotificationsModule = NotificationsModule;
 exports.NotificationsModule = NotificationsModule = __decorate([
     (0, common_1.Module)({
-        imports: [typeorm_1.TypeOrmModule.forFeature([push_device_entity_1.PushDevice, notification_entity_1.Notification, user_entity_1.User]), (0, common_1.forwardRef)(() => users_module_1.UsersModule)],
+        imports: [
+            typeorm_1.TypeOrmModule.forFeature([push_device_entity_1.PushDevice, notification_entity_1.Notification, user_entity_1.User, staff_member_entity_1.StaffMember]),
+            (0, common_1.forwardRef)(() => users_module_1.UsersModule),
+        ],
         controllers: [notifications_controller_1.NotificationsController],
         providers: [fcm_push_service_1.FcmPushService, notifications_service_1.NotificationsService],
         exports: [notifications_service_1.NotificationsService],

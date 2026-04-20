@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "autohub_client2 (dart-define-from-file)",
+      "name": "mp_servis_client2 (dart-define-from-file)",
       "request": "launch",
       "type": "dart",
       "program": "lib/main.dart",

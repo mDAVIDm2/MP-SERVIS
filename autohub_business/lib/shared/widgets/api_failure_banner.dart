@@ -46,7 +46,7 @@ class ApiFailureBanner extends StatelessWidget {
                   ),
                   Text(
                     'Проверьте, что бэкенд запущен, порт открыт в брандмауэре Windows и при сборке указан верный IP: '
-                    '--dart-define=AUTOHUB_API_HOST=…',
+                    '--dart-define=MP_SERVIS_API_HOST=…',
                     style: TextStyle(fontSize: dense ? 10 : 11, color: Colors.brown.shade700, height: 1.3),
                   ),
                 ],

@@ -33,6 +33,9 @@ export declare class InternalOrganizationsController {
             is_active: boolean;
             invited_at: any;
             skills: any;
+            can_see_chats: boolean;
+            can_write_chats: boolean;
+            can_manage_org_settings: boolean;
             schedule: any;
         }[];
         subscription: {
@@ -65,6 +68,9 @@ export declare class InternalOrganizationsController {
         longitude: number | null;
         photo_urls: string[] | null;
     }>;
+    deletePhotos(id: string, all?: string, url?: string): Promise<{
+        ok: boolean;
+    }>;
     update(id: string, body: {
         name?: string;
         address?: string;
@@ -95,6 +101,9 @@ export declare class InternalOrganizationsController {
             is_active: boolean;
             invited_at: any;
             skills: any;
+            can_see_chats: boolean;
+            can_write_chats: boolean;
+            can_manage_org_settings: boolean;
             schedule: any;
         }[];
     }>;

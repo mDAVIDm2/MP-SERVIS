@@ -9,6 +9,7 @@ import '../../../../core/utils/formatters.dart';
 import 'service_category_edit_screen.dart';
 import 'service_item_edit_screen.dart';
 import 'service_packages_screen.dart';
+import 'batch_add_services_from_catalog_screen.dart';
 
 class ServicesSettingsScreen extends ConsumerWidget {
   const ServicesSettingsScreen({super.key});
@@ -75,8 +76,7 @@ class ServicesSettingsScreen extends ConsumerWidget {
                         ),
                         IconButton(
                           icon: const Icon(Icons.add_circle_outline),
-                          onPressed: () =>
-                              _openAddService(context, ref, cat.id),
+                          onPressed: () => _openBatchCatalog(context),
                         ),
                         IconButton(
                           icon: const Icon(
@@ -232,19 +232,10 @@ class ServicesSettingsScreen extends ConsumerWidget {
     );
   }
 
-  void _openAddService(BuildContext context, WidgetRef ref, String categoryId) {
-    final cat = ref
-        .read(settingsRepositoryProvider)
-        .categories
-        .firstWhere((c) => c.id == categoryId);
-    Navigator.push(
+  void _openBatchCatalog(BuildContext context) {
+    Navigator.push<void>(
       context,
-      MaterialPageRoute(
-        builder: (_) => ServiceItemEditScreen(
-          categoryId: categoryId,
-          categoryName: cat.name,
-        ),
-      ),
+      MaterialPageRoute<void>(builder: (_) => const BatchAddServicesFromCatalogScreen()),
     );
   }
 }
@@ -309,14 +300,9 @@ class ServiceListScreen extends ConsumerWidget {
         },
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => Navigator.push(
+        onPressed: () => Navigator.push<void>(
           context,
-          MaterialPageRoute(
-            builder: (_) => ServiceItemEditScreen(
-              categoryId: category.id,
-              categoryName: category.name,
-            ),
-          ),
+          MaterialPageRoute<void>(builder: (_) => const BatchAddServicesFromCatalogScreen()),
         ),
         backgroundColor: AppColors.primary,
         child: const Icon(Icons.add),

@@ -1,4 +1,5 @@
 import 'organization_business_kind.dart';
+import 'organization_subscription_usage.dart';
 
 /// Профиль организации (точка для клиента).
 class OrganizationInfo {
@@ -16,6 +17,8 @@ class OrganizationInfo {
   final double? latitude;
   /// Координаты для отображения на карте у клиентов (долгота).
   final double? longitude;
+  /// Тариф и лимиты (если бэкенд вернул `subscription_usage`).
+  final OrganizationSubscriptionUsage? subscriptionUsage;
 
   const OrganizationInfo({
     this.name = 'Мой автосервис',
@@ -27,6 +30,7 @@ class OrganizationInfo {
     this.photoUrls = const [],
     this.latitude,
     this.longitude,
+    this.subscriptionUsage,
   });
 
   OrganizationInfo copyWith({
@@ -39,6 +43,7 @@ class OrganizationInfo {
     List<String>? photoUrls,
     double? latitude,
     double? longitude,
+    OrganizationSubscriptionUsage? subscriptionUsage,
   }) {
     return OrganizationInfo(
       name: name ?? this.name,
@@ -54,6 +59,7 @@ class OrganizationInfo {
       photoUrls: photoUrls ?? this.photoUrls,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
+      subscriptionUsage: subscriptionUsage ?? this.subscriptionUsage,
     );
   }
 
@@ -78,6 +84,7 @@ class OrganizationInfo {
       photoUrls: photoUrls,
       latitude: lat is num ? lat.toDouble() : null,
       longitude: lng is num ? lng.toDouble() : null,
+      subscriptionUsage: OrganizationSubscriptionUsage.tryParse(j['subscription_usage']),
     );
   }
 }

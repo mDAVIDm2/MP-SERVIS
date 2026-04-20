@@ -1,19 +1,52 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../../../core/config/platform_utils.dart';
 import '../../../../core/pdf/order_worksheet_pdf.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/app_colors_desktop.dart';
+import '../../../../core/theme/desktop_light_theme.dart';
 import '../../../../shared/models/order_model.dart';
-import '../../../../shared/models/organization_business_kind.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../core/auth/auth_provider.dart';
+import '../../../../core/repositories/chat_repository.dart';
 import '../../../../core/repositories/order_repository.dart';
 import '../../../../core/repositories/settings_repository.dart';
+import '../../../../core/utils/client_avatar_from_chats.dart';
 import '../../../../core/api/services/api_services_providers.dart';
 import 'master_picker_screen.dart';
 import 'order_payment_screen.dart';
 import 'confirm_correct_order_screen.dart';
 import '../../../chats/presentation/screens/chat_detail_screen.dart';
+import '../../../chats/presentation/widgets/authenticated_profile_avatar.dart';
+import '../../../../shared/widgets/authenticated_api_image.dart';
+import '../widgets/order_detail_panel.dart';
+
+Widget _mobileServiceCompletionLeading(bool completed) {
+  if (completed) {
+    return Container(
+      width: 28,
+      height: 28,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: AppColors.success.withValues(alpha: 0.14),
+        border: Border.all(color: AppColors.success.withValues(alpha: 0.45)),
+      ),
+      alignment: Alignment.center,
+      child: const Icon(Icons.check_rounded, size: 16, color: AppColors.success),
+    );
+  }
+  return Container(
+    width: 28,
+    height: 28,
+    decoration: BoxDecoration(
+      shape: BoxShape.circle,
+      border: Border.all(color: AppColors.borderLight, width: 1.5),
+      color: AppColors.nestedBg,
+    ),
+  );
+}
 
 class OrderDetailScreen extends ConsumerStatefulWidget {
   final String orderId;
@@ -37,8 +70,56 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final order = ref.watch(orderByIdProvider(widget.orderId));
+    final chatPreviews = ref.watch(chatRepositoryProvider).chats;
     final canSeePrices = ref.watch(authProvider).user?.role.canSeePrices ?? true;
     final canAssignMaster = ref.watch(authProvider).user?.role.canAssignMaster ?? false;
+
+    if (isDesktopPlatform) {
+      if (order == null) {
+        return themeDesktopLight(
+          child: Scaffold(
+            backgroundColor: AppColorsDesktop.background,
+            appBar: AppBar(title: const Text('Заказ')),
+            body: const Center(
+              child: Text(
+                'Заказ не найден',
+                style: TextStyle(color: AppColorsDesktop.textSecondary),
+              ),
+            ),
+          ),
+        );
+      }
+      return themeDesktopLight(
+        child: Scaffold(
+          backgroundColor: AppColorsDesktop.background,
+          appBar: AppBar(
+            title: const Text('Заказ'),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.picture_as_pdf_outlined),
+                tooltip: 'Заказ-наряд (PDF)',
+                onPressed: () => printOrderWorksheet(context, order, showPrices: canSeePrices),
+              ),
+            ],
+          ),
+          body: LayoutBuilder(
+            builder: (context, constraints) {
+              return Align(
+                alignment: Alignment.topCenter,
+                child: SizedBox(
+                  width: kOrderDetailPanelWidth,
+                  height: constraints.maxHeight,
+                  child: OrderDetailPanel(
+                    orderId: widget.orderId,
+                    onClose: () => Navigator.maybePop(context),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      );
+    }
 
     if (order == null) {
       return Scaffold(
@@ -50,34 +131,14 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
       );
     }
 
+    final hasBays = ref.watch(settingsRepositoryProvider).slotsSettings.hasNamedBays;
+    final mainItems = order.itemsForDisplay.where((i) => !i.isAdditional).toList();
+    final addItems = order.itemsForDisplay.where((i) => i.isAdditional).toList();
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
-        title: Row(
-          children: [
-            Expanded(
-              child: Text(
-                order.displayNumber,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: order.status.color.withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                order.status.label,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: order.status.color,
-                ),
-              ),
-            ),
-          ],
-        ),
+        centerTitle: true,
+        title: const Text('Заказ'),
         actions: [
           IconButton(
             icon: const Icon(Icons.picture_as_pdf_outlined),
@@ -87,222 +148,331 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 24),
         children: [
-          if (order.clientName != null)
-            _Section(
-              title: 'Клиент',
-              child: Text(
-                order.clientName!,
-                style: const TextStyle(fontSize: 16, color: AppColors.textPrimary),
-              ),
-            ),
-          if (order.clientPhone != null)
-            _Section(
-              title: 'Телефон',
-              child: Row(
-                children: [
-                  Expanded(
-                    child: SelectableText(
-                      order.clientPhone!,
-                      style: const TextStyle(fontSize: 16, color: AppColors.primary),
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.phone_rounded, color: AppColors.primary),
-                    onPressed: () {
-                      final uri = Uri(scheme: 'tel', path: order.clientPhone!.replaceAll(RegExp(r'[^\d+]'), ''));
-                      launchUrl(uri);
-                    },
-                  ),
-                ],
-              ),
-            ),
-          _Section(
-            title: 'Автомобиль',
-            child: Text(
-              order.carInfo,
-              style: const TextStyle(fontSize: 16, color: AppColors.textPrimary),
-            ),
-          ),
-          _Section(
-            title: 'Дата и время',
-            child: Text(
-              formatDateTimeOrNull(order.dateTime),
-              style: const TextStyle(fontSize: 16, color: AppColors.textPrimary),
-            ),
-          ),
-          if (OrganizationBusinessKindCodes.labelForOrderSnapshot(order.organizationBusinessKind).isNotEmpty ||
-              OrganizationBusinessKindCodes.schedulingModeShortLabel(order.organizationSchedulingMode).isNotEmpty)
-            _Section(
-              title: 'Точка',
+          _MobileOrderHeaderCard(order: order),
+          if (order.carInfo.trim().isNotEmpty ||
+              (order.carPhotoUrl != null && order.carPhotoUrl!.trim().isNotEmpty)) ...[
+            const SizedBox(height: 12),
+            _MobileSheet(child: _MobileCarBlock(order: order)),
+          ],
+          if (order.clientName != null || order.clientPhone != null) ...[
+            const SizedBox(height: 12),
+            _MobileSheet(
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  if (OrganizationBusinessKindCodes.labelForOrderSnapshot(order.organizationBusinessKind).isNotEmpty)
-                    Text(
-                      OrganizationBusinessKindCodes.labelForOrderSnapshot(order.organizationBusinessKind),
-                      style: const TextStyle(fontSize: 16, color: AppColors.textPrimary),
-                    ),
-                  if (OrganizationBusinessKindCodes.schedulingModeShortLabel(order.organizationSchedulingMode).isNotEmpty) ...[
-                    if (OrganizationBusinessKindCodes.labelForOrderSnapshot(order.organizationBusinessKind).isNotEmpty)
-                      const SizedBox(height: 6),
-                    Text(
-                      'Запись: ${OrganizationBusinessKindCodes.schedulingModeShortLabel(order.organizationSchedulingMode)}',
-                      style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      AuthenticatedProfileAvatar(
+                        imageUrl: resolvedClientAvatarUrl(
+                          chats: chatPreviews,
+                          orderClientAvatarUrl: order.clientAvatarUrl,
+                          clientPhone: order.clientPhone,
+                        ),
+                        fallbackLetter: (order.clientName != null && order.clientName!.isNotEmpty)
+                            ? order.clientName![0]
+                            : '?',
+                        size: 40,
+                      ),
+                      if (order.clientName != null) ...[
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            order.clientName!,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              height: 1.2,
+                              color: AppColors.textPrimary,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  if (order.clientPhone != null) ...[
+                    const SizedBox(height: 8),
+                    InkWell(
+                      onTap: () {
+                        final uri = Uri(
+                          scheme: 'tel',
+                          path: order.clientPhone!.replaceAll(RegExp(r'[^\d+]'), ''),
+                        );
+                        launchUrl(uri);
+                      },
+                      borderRadius: BorderRadius.circular(10),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Row(
+                          children: [
+                            Icon(Icons.phone_in_talk_rounded,
+                                color: AppColors.primary.withValues(alpha: 0.95), size: 18),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: SelectableText(
+                                order.clientPhone!,
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w500,
+                                  color: AppColors.primary,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ],
                 ],
               ),
             ),
+          ],
           if (canAssignMaster && order.status.isActive) ...[
-            _Section(
-              title: 'Плановое время (бронь С — По)',
+            const SizedBox(height: 10),
+            _MobileSectionCaption(icon: Icons.schedule_rounded, label: 'Плановое время'),
+            const SizedBox(height: 6),
+            _MobileSheet(
               child: _PlannedTimeBlock(
                 orderId: widget.orderId,
                 order: order,
+                compact: true,
                 onEditTime: (start, end) => _showEditDialog(context, ref, widget.orderId, start, end),
               ),
             ),
           ],
-          _Section(
-            title: order.itemsForDisplay.any((i) => i.isAdditional) ? 'Основное' : 'Услуги',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: order.itemsForDisplay
-                  .where((item) => !item.isAdditional)
-                  .map<Widget>((item) => _buildOrderItemTile(context, order, item, canSeePrices))
-                  .toList(),
+          if (mainItems.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            _MobileSectionCaption(
+              icon: Icons.build_circle_outlined,
+              label: addItems.isNotEmpty ? 'Основные работы' : 'Услуги',
             ),
-          ),
-          if (order.itemsForDisplay.any((i) => i.isAdditional)) ...[
-            _Section(
-              title: 'Добавлено после согласования',
+            const SizedBox(height: 6),
+            _MobileSheet(
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: order.itemsForDisplay
-                    .where((item) => item.isAdditional)
-                    .map<Widget>((item) => _buildOrderItemTile(context, order, item, canSeePrices))
-                    .toList(),
+                children: [
+                  for (var i = 0; i < mainItems.length; i++) ...[
+                    if (i > 0) Divider(height: 1, color: AppColors.border.withValues(alpha: 0.4)),
+                    _buildOrderServiceRow(context, order, mainItems[i], canSeePrices),
+                  ],
+                ],
               ),
             ),
           ],
-          if (canSeePrices && order.totalKopecksForDisplay > 0)
-            _Section(
-              title: 'Итого',
-              child: Text(
-                formatMoney(order.totalKopecksForDisplay),
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.primary,
-                ),
-              ),
-            ),
-          if (order.comment != null && order.comment!.isNotEmpty)
-            _Section(
-              title: 'Комментарий',
-              child: Text(
-                order.comment!,
-                style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
-              ),
-            ),
-          if (canAssignMaster && order.status.isActive)
-            _Section(
-              title: 'Мастер',
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
+          if (addItems.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            _MobileSectionCaption(icon: Icons.add_task_rounded, label: 'Доп. работы'),
+            const SizedBox(height: 6),
+            _MobileSheet(
+              child: Column(
                 children: [
-                  Expanded(
-                    child: Text(
-                      order.masterName ?? 'Не назначен',
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: order.masterName == null ? AppColors.textSecondary : AppColors.textPrimary,
-                      ),
-                    ),
-                  ),
-                  if (order.masterId != null && order.masterId!.isNotEmpty) ...[
-                    IconButton(
-                      tooltip: 'Сменить мастера',
-                      icon: const Icon(Icons.edit_rounded, color: AppColors.primary),
-                      onPressed: () async {
-                        await Navigator.push<void>(
-                          context,
-                          MaterialPageRoute<void>(builder: (_) => MasterPickerScreen(orderId: widget.orderId)),
-                        );
-                      },
-                    ),
-                    IconButton(
-                      tooltip: 'Снять мастера',
-                      icon: const Icon(Icons.close_rounded, color: AppColors.error),
-                      onPressed: () async {
-                        final repo = ref.read(orderRepositoryProvider.notifier);
-                        final r = await repo.clearMaster(widget.orderId);
-                        if (!context.mounted) return;
-                        if (r.errorOrNull != null) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text(r.errorOrNull!.message), backgroundColor: AppColors.error),
-                          );
-                        } else {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Мастер снят с заказа')),
-                          );
-                        }
-                      },
-                    ),
-                  ] else
-                    IconButton(
-                      tooltip: 'Назначить мастера',
-                      icon: const Icon(Icons.person_add_rounded, color: AppColors.primary),
-                      onPressed: () async {
-                        await Navigator.push<void>(
-                          context,
-                          MaterialPageRoute<void>(builder: (_) => MasterPickerScreen(orderId: widget.orderId)),
-                        );
-                      },
-                    ),
+                  for (var i = 0; i < addItems.length; i++) ...[
+                    if (i > 0) Divider(height: 1, color: AppColors.border.withValues(alpha: 0.4)),
+                    _buildOrderServiceRow(context, order, addItems[i], canSeePrices),
+                  ],
                 ],
               ),
-            )
-          else if (order.masterName != null)
-            _Section(
-              title: 'Мастер',
-              child: Text(
-                order.masterName!,
-                style: const TextStyle(fontSize: 16, color: AppColors.textPrimary),
+            ),
+          ],
+          if (canSeePrices && order.totalKopecksForDisplay > 0) ...[
+            const SizedBox(height: 10),
+            _MobileTotalBar(order: order),
+          ],
+          if (order.comment != null && order.comment!.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.07),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.primary.withValues(alpha: 0.22)),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(top: 1),
+                    child: Icon(Icons.chat_bubble_outline_rounded,
+                        size: 16, color: AppColors.primary.withValues(alpha: 0.55)),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      order.comment!,
+                      style: const TextStyle(fontSize: 13, height: 1.4, color: AppColors.textSecondary),
+                    ),
+                  ),
+                ],
               ),
             ),
-          if (ref.watch(settingsRepositoryProvider).slotsSettings.hasNamedBays)
-            _Section(
-              title: 'Пост',
-              child: Text(
-                order.bayName != null && order.bayName!.trim().isNotEmpty
-                    ? order.bayName!.trim()
-                    : (order.bayId != null && order.bayId!.trim().isNotEmpty
-                        ? order.bayId!.trim()
-                        : 'Не назначен'),
-                style: TextStyle(
-                  fontSize: 16,
-                  color: (order.bayId == null || order.bayId!.isEmpty) ? AppColors.textSecondary : AppColors.textPrimary,
-                ),
+          ],
+          if ((canAssignMaster && order.status.isActive) ||
+              order.masterName != null ||
+              hasBays) ...[
+            const SizedBox(height: 10),
+            _MobileSectionCaption(icon: Icons.engineering_outlined, label: 'Назначение'),
+            const SizedBox(height: 6),
+            _MobileSheet(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (canAssignMaster && order.status.isActive) ...[
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Мастер',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.textTertiary,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                order.masterName ?? 'Не назначен',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                  color: order.masterName == null
+                                      ? AppColors.textSecondary
+                                      : AppColors.textPrimary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (order.masterId != null && order.masterId!.isNotEmpty) ...[
+                          IconButton(
+                            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                            padding: EdgeInsets.zero,
+                            tooltip: 'Сменить мастера',
+                            icon: const Icon(Icons.edit_rounded, color: AppColors.primary, size: 22),
+                            onPressed: () async {
+                              await Navigator.push<void>(
+                                context,
+                                MaterialPageRoute<void>(
+                                    builder: (_) => MasterPickerScreen(orderId: widget.orderId)),
+                              );
+                            },
+                          ),
+                          IconButton(
+                            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                            padding: EdgeInsets.zero,
+                            tooltip: 'Снять мастера',
+                            icon: const Icon(Icons.close_rounded, color: AppColors.error, size: 22),
+                            onPressed: () async {
+                              final repo = ref.read(orderRepositoryProvider.notifier);
+                              final r = await repo.clearMaster(widget.orderId);
+                              if (!context.mounted) return;
+                              if (r.errorOrNull != null) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                      content: Text(r.errorOrNull!.message),
+                                      backgroundColor: AppColors.error),
+                                );
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Мастер снят с заказа')),
+                                );
+                              }
+                            },
+                          ),
+                        ] else
+                          IconButton(
+                            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                            padding: EdgeInsets.zero,
+                            tooltip: 'Назначить мастера',
+                            icon: const Icon(Icons.person_add_rounded, color: AppColors.primary, size: 22),
+                            onPressed: () async {
+                              await Navigator.push<void>(
+                                context,
+                                MaterialPageRoute<void>(
+                                    builder: (_) => MasterPickerScreen(orderId: widget.orderId)),
+                              );
+                            },
+                          ),
+                      ],
+                    ),
+                  ] else if (order.masterName != null) ...[
+                    Text(
+                      'Мастер',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textTertiary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      order.masterName!,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                  ],
+                  if (hasBays &&
+                      ((canAssignMaster && order.status.isActive) || order.masterName != null)) ...[
+                    const SizedBox(height: 10),
+                    Divider(height: 1, color: AppColors.border.withValues(alpha: 0.4)),
+                    const SizedBox(height: 10),
+                  ],
+                  if (hasBays) ...[
+                    Text(
+                      'Пост',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textTertiary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      order.bayName != null && order.bayName!.trim().isNotEmpty
+                          ? order.bayName!.trim()
+                          : (order.bayId != null && order.bayId!.trim().isNotEmpty
+                              ? order.bayId!.trim()
+                              : 'Не назначен'),
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: (order.bayId == null || order.bayId!.isEmpty)
+                            ? AppColors.textSecondary
+                            : AppColors.textPrimary,
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
-          const SizedBox(height: 24),
-          _Actions(
-            orderId: widget.orderId,
-            order: order,
-            canAssignMaster: canAssignMaster,
+          ],
+          const SizedBox(height: 12),
+          _MobileSectionCaption(icon: Icons.touch_app_outlined, label: 'Действия'),
+          const SizedBox(height: 6),
+          _MobileSheet(
+            child: _Actions(
+              orderId: widget.orderId,
+              order: order,
+              canAssignMaster: canAssignMaster,
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildOrderItemTile(BuildContext context, Order order, OrderItem item, bool canSeePrices) {
+  Widget _buildOrderServiceRow(BuildContext context, Order order, OrderItem item, bool canSeePrices) {
     final canTap = order.status.isActive && order.status != OrderStatus.pendingApproval;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+    return Material(
+      color: Colors.transparent,
       child: InkWell(
         onTap: canTap
             ? () async {
@@ -318,39 +488,52 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
                 }
               }
             : null,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(10),
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
+          padding: const EdgeInsets.symmetric(vertical: 8),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(
-                item.isCompleted ? Icons.check_circle : Icons.radio_button_unchecked,
-                size: 20,
-                color: item.isCompleted ? AppColors.success : AppColors.textTertiary,
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: _mobileServiceCompletionLeading(item.isCompleted),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 10),
               Expanded(
-                child: Text(
-                  item.name,
-                  style: TextStyle(
-                    decoration: item.isCompleted ? TextDecoration.lineThrough : null,
-                    color: AppColors.textPrimary,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      item.name,
+                      style: TextStyle(
+                        fontSize: 14,
+                        height: 1.3,
+                        fontWeight: FontWeight.w600,
+                        decoration: item.isCompleted ? TextDecoration.lineThrough : null,
+                        decorationColor: AppColors.textSecondary,
+                        color: item.isCompleted ? AppColors.textSecondary : AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      item.durationLabel,
+                      style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
+                    ),
+                  ],
                 ),
               ),
-              if (canSeePrices && item.priceKopecks != null)
+              if (canSeePrices && item.priceKopecks != null) ...[
+                const SizedBox(width: 6),
                 Text(
                   formatMoney(item.priceKopecks!),
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: item.isCompleted ? AppColors.textSecondary : AppColors.primary,
                   ),
                 ),
-              const SizedBox(width: 8),
-              Text(
-                item.durationLabel,
-                style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
-              ),
+              ],
             ],
           ),
         ),
@@ -418,39 +601,180 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
   }
 }
 
-/// Блок планового времени с кнопкой «Изменить» (вызов PATCH /orders/:id/time).
-class _PlannedTimeBlock extends StatelessWidget {
-  final String orderId;
-  final Order order;
-  final void Function(DateTime start, DateTime end)? onEditTime;
+/// Компактная шапка: номер, дата/время, статус (акцент на статусе цветом).
+class _MobileOrderHeaderCard extends StatelessWidget {
+  const _MobileOrderHeaderCard({required this.order});
 
-  const _PlannedTimeBlock({required this.orderId, required this.order, this.onEditTime});
+  final Order order;
 
   @override
   Widget build(BuildContext context) {
-    final startRaw = order.plannedStartTime ?? order.effectiveDateTime;
-    final endRaw = order.plannedEndTime ?? order.effectiveDateTime.add(Duration(minutes: order.items.fold<int>(0, (s, i) => s + i.estimatedMinutes)));
-    final start = startRaw.isUtc ? startRaw.toLocal() : startRaw;
-    final end = endRaw.isUtc ? endRaw.toLocal() : endRaw;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('С ${formatTime(start)}', style: const TextStyle(fontSize: 15, color: AppColors.textPrimary)),
-                  const SizedBox(height: 4),
-                  Text('По ${formatTime(end)}', style: const TextStyle(fontSize: 15, color: AppColors.textPrimary)),
-                ],
+    final c = order.status.color;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: AppColors.cardBg,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.border.withValues(alpha: 0.55)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  order.displayNumber,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.4,
+                    height: 1.15,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  formatDateTimeOrNull(order.dateTime),
+                  style: const TextStyle(fontSize: 12, height: 1.25, color: AppColors.textTertiary),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: c.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: c.withValues(alpha: 0.45)),
+            ),
+            child: Text(
+              order.status.label,
+              style: TextStyle(
+                color: c,
+                fontWeight: FontWeight.w700,
+                fontSize: 12,
+                height: 1.15,
               ),
             ),
-            TextButton.icon(
-              onPressed: onEditTime != null ? () => onEditTime!(start, end) : null,
-              icon: const Icon(Icons.edit_rounded, size: 18),
-              label: const Text('Изменить'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MobileSheet extends StatelessWidget {
+  const _MobileSheet({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: AppColors.cardBg,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.border.withValues(alpha: 0.55)),
+      ),
+      padding: const EdgeInsets.all(12),
+      child: child,
+    );
+  }
+}
+
+class _MobileSectionCaption extends StatelessWidget {
+  const _MobileSectionCaption({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 15, color: AppColors.textTertiary),
+        const SizedBox(width: 6),
+        Text(
+          label.toUpperCase(),
+          style: const TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.85,
+            color: AppColors.textTertiary,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Фото автомобиля сверху (как аватарка), ниже — описание и реквизиты.
+class _MobileCarBlock extends ConsumerWidget {
+  const _MobileCarBlock({required this.order});
+
+  final Order order;
+
+  @override
+  Widget build(BuildContext context, WidgetRef _) {
+    final hasPhoto = order.carPhotoUrl != null && order.carPhotoUrl!.trim().isNotEmpty;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Center(
+          child: hasPhoto
+              ? AuthenticatedApiImage(
+                  imageUrl: order.carPhotoUrl,
+                  width: 112,
+                  height: 112,
+                  borderRadius: 56,
+                  fit: BoxFit.cover,
+                )
+              : Container(
+                  width: 112,
+                  height: 112,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: AppColors.nestedBg,
+                    border: Border.all(color: AppColors.border.withValues(alpha: 0.65)),
+                  ),
+                  child: Icon(
+                    Icons.directions_car_rounded,
+                    size: 52,
+                    color: AppColors.textTertiary,
+                  ),
+                ),
+        ),
+        if (order.carInfo.trim().isNotEmpty) ...[
+          const SizedBox(height: 14),
+          Text(
+            order.carInfo,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              height: 1.3,
+              color: AppColors.textPrimary,
+            ),
+          ),
+        ],
+        _MobileCarMetaWrap(order: order),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.event_rounded, size: 15, color: AppColors.textTertiary),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                order.appointmentRangeLabel,
+                style: const TextStyle(fontSize: 13, height: 1.3, color: AppColors.textSecondary),
+                textAlign: TextAlign.center,
+              ),
             ),
           ],
         ),
@@ -459,31 +783,316 @@ class _PlannedTimeBlock extends StatelessWidget {
   }
 }
 
-class _Section extends StatelessWidget {
-  final String title;
-  final Widget child;
+class _MobileCarMetaWrap extends StatelessWidget {
+  const _MobileCarMetaWrap({required this.order});
 
-  const _Section({required this.title, required this.child});
+  final Order order;
+
+  void _copy(BuildContext context, String label, String value) {
+    Clipboard.setData(ClipboardData(text: value));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$label скопирован в буфер'),
+        duration: const Duration(seconds: 1),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final plate = order.licensePlate?.trim();
+    final vin = order.vin?.trim();
+    final secondary = <String>[];
+    if (order.bodyType != null && order.bodyType!.trim().isNotEmpty) {
+      secondary.add(order.bodyType!.trim());
+    }
+    if (order.color != null && order.color!.trim().isNotEmpty) {
+      secondary.add(order.color!.trim());
+    }
+    if (order.mileage != null) {
+      secondary.add('${order.mileage} км');
+    }
+    if (order.engineType != null && order.engineType!.trim().isNotEmpty) {
+      secondary.add(order.engineType!.trim());
+    }
+
+    final hasPrimary =
+        (plate != null && plate.isNotEmpty) || (vin != null && vin.isNotEmpty);
+    if (!hasPrimary && secondary.isEmpty) return const SizedBox.shrink();
+
     return Padding(
-      padding: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.only(top: 10),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 12,
-              color: AppColors.textSecondary,
-              fontWeight: FontWeight.w500,
+          if (plate != null && plate.isNotEmpty)
+            _MobileVehicleCopyTile(
+              label: 'Госномер',
+              value: plate,
+              monospaceValue: false,
+              onTap: () => _copy(context, 'Госномер', plate),
             ),
-          ),
-          const SizedBox(height: 6),
-          child,
+          if (plate != null && plate.isNotEmpty && vin != null && vin.isNotEmpty)
+            const SizedBox(height: 8),
+          if (vin != null && vin.isNotEmpty)
+            _MobileVehicleCopyTile(
+              label: 'VIN',
+              value: vin,
+              monospaceValue: true,
+              onTap: () => _copy(context, 'VIN', vin),
+            ),
+          if (secondary.isNotEmpty) ...[
+            if (hasPrimary) const SizedBox(height: 10),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: secondary
+                  .map(
+                    (t) => Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: AppColors.nestedBg,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: AppColors.border.withValues(alpha: 0.35)),
+                      ),
+                      child: Text(
+                        t,
+                        style: const TextStyle(fontSize: 11, height: 1.2, color: AppColors.textSecondary),
+                      ),
+                    ),
+                  )
+                  .toList(),
+            ),
+          ],
         ],
       ),
+    );
+  }
+}
+
+class _MobileVehicleCopyTile extends StatelessWidget {
+  const _MobileVehicleCopyTile({
+    required this.label,
+    required this.value,
+    required this.monospaceValue,
+    required this.onTap,
+  });
+
+  final String label;
+  final String value;
+  final bool monospaceValue;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppColors.nestedBg,
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textSecondary.withValues(alpha: 0.95),
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      value,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        height: 1.25,
+                        color: AppColors.textPrimary,
+                        fontFamily: monospaceValue ? 'monospace' : null,
+                        letterSpacing: monospaceValue ? 0.4 : 0.6,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.copy_rounded, size: 18, color: AppColors.textTertiary),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MobileTotalBar extends StatelessWidget {
+  const _MobileTotalBar({required this.order});
+
+  final Order order;
+
+  @override
+  Widget build(BuildContext context) {
+    final totalKopecks = order.totalKopecksForDisplay;
+    final dm = order.effectiveDurationMinutes > 0 ? order.effectiveDurationMinutes : 60;
+    final hourly = formatEquivalentHourlyRateLine(totalKopecks, dm);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.28)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Expanded(
+            child: Text(
+              'Итого',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textSecondary,
+              ),
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                formatMoney(totalKopecks),
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.primary,
+                  letterSpacing: -0.3,
+                ),
+              ),
+              Text(
+                'на ${formatDurationMinutes(dm)}',
+                style: TextStyle(fontSize: 11, color: AppColors.textSecondary.withValues(alpha: 0.95)),
+              ),
+              if (hourly != null)
+                Text(
+                  hourly,
+                  style: TextStyle(fontSize: 11, color: AppColors.textTertiary.withValues(alpha: 0.9)),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Блок планового времени с кнопкой «Изменить» (вызов PATCH /orders/:id/time).
+class _PlannedTimeBlock extends StatelessWidget {
+  final String orderId;
+  final Order order;
+  final void Function(DateTime start, DateTime end)? onEditTime;
+  final bool compact;
+
+  const _PlannedTimeBlock({
+    required this.orderId,
+    required this.order,
+    this.onEditTime,
+    this.compact = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final startRaw = order.plannedStartTime ?? order.effectiveDateTime;
+    final endRaw = order.plannedEndTime ?? order.effectiveDateTime.add(Duration(minutes: order.items.fold<int>(0, (s, i) => s + i.estimatedMinutes)));
+    final start = startRaw.isUtc ? startRaw.toLocal() : startRaw;
+    final end = endRaw.isUtc ? endRaw.toLocal() : endRaw;
+    if (compact) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Icon(Icons.schedule_rounded, size: 18, color: AppColors.primary.withValues(alpha: 0.9)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '${formatTime(start)} — ${formatTime(end)}',
+              style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textPrimary,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: onEditTime != null ? () => onEditTime!(start, end) : null,
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text('Изменить'),
+          ),
+        ],
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.nestedBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.borderLight),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.play_circle_outline_rounded, size: 22, color: AppColors.primary.withValues(alpha: 0.9)),
+                    const SizedBox(width: 10),
+                    Text('С ${formatTime(start)}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.nestedBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.borderLight),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.stop_circle_outlined, size: 22, color: AppColors.textSecondary),
+                    const SizedBox(width: 10),
+                    Text('По ${formatTime(end)}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton.icon(
+            onPressed: onEditTime != null ? () => onEditTime!(start, end) : null,
+            icon: const Icon(Icons.edit_calendar_rounded, size: 20),
+            label: const Text('Изменить время'),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -613,7 +1222,7 @@ class _Actions extends ConsumerWidget {
             child: const Text('Подтвердить без изменений'),
           ),
         ],
-        if (order.status == OrderStatus.confirmed && canAssignMaster) ...[
+        if (order.status == OrderStatus.confirmed) ...[
           OutlinedButton(
             onPressed: () async {
               await openComposeOverlay();
@@ -622,19 +1231,21 @@ class _Actions extends ConsumerWidget {
             child: const Text('Изменить состав заказа'),
           ),
           const SizedBox(height: 8),
-          OutlinedButton(
-            onPressed: () async {
-              final updated = await Navigator.push<bool>(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => MasterPickerScreen(orderId: orderId),
-                ),
-              );
-              if (updated == true && context.mounted) {}
-            },
-            child: const Text('Назначить мастера'),
-          ),
-          const SizedBox(height: 8),
+          if (canAssignMaster) ...[
+            OutlinedButton(
+              onPressed: () async {
+                final updated = await Navigator.push<bool>(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => MasterPickerScreen(orderId: orderId),
+                  ),
+                );
+                if (updated == true && context.mounted) {}
+              },
+              child: const Text('Назначить мастера'),
+            ),
+            const SizedBox(height: 8),
+          ],
           ElevatedButton(
             onPressed: () => setStatus(OrderStatus.inProgress, 'Статус: В работе'),
             child: const Text('В работу'),

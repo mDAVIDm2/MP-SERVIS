@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/providers/app_providers.dart';
 import '../../../../shared/models/profile_note_model.dart';
 import '../../../../shared/widgets/common_widgets.dart';
@@ -48,12 +48,12 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     final notes = _notes;
     final noCar = widget.selectedCarId == null;
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       appBar: AppBar(
-        backgroundColor: AppColors.background,
-        title: const Text('Заметки', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+        backgroundColor: context.palette.background,
+        title: Text('Заметки', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
         actions: [
-          if (!noCar) IconButton(onPressed: _addNote, icon: const Icon(Icons.add_rounded)),
+          if (!noCar) IconButton(onPressed: _addNote, icon: Icon(Icons.add_rounded)),
         ],
       ),
       body: noCar
@@ -74,7 +74,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                   physics: const BouncingScrollPhysics(),
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
                   itemCount: notes.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  separatorBuilder: (_, __) => SizedBox(height: 8),
                   itemBuilder: (_, i) {
                     final n = notes[i];
                     return Dismissible(
@@ -84,10 +84,10 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                         alignment: Alignment.centerRight,
                         padding: const EdgeInsets.only(right: 24),
                         decoration: BoxDecoration(
-                          color: AppColors.error,
+                          color: context.palette.error,
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: const Icon(Icons.delete_rounded, color: Colors.white),
+                        child: Icon(Icons.delete_rounded, color: Colors.white),
                       ),
                       onDismissed: (_) => _removeNote(n),
                       child: GestureDetector(
@@ -95,9 +95,9 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                         child: Container(
                           padding: const EdgeInsets.all(16),
                           decoration: BoxDecoration(
-                            color: AppColors.cardBg,
+                            color: context.palette.cardBg,
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: AppColors.border),
+                            border: Border.all(color: context.palette.border),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -105,15 +105,15 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                               Row(
                                 children: [
                                   Expanded(
-                                    child: Text(n.title, style: const TextStyle(
-                                      fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textPrimary,
+                                    child: Text(n.title, style: TextStyle(
+                                      fontSize: 16, fontWeight: FontWeight.w600, color: context.palette.textPrimary,
                                     ), maxLines: 1, overflow: TextOverflow.ellipsis)),
                                   Text('${n.date.day}.${n.date.month.toString().padLeft(2, '0')}',
-                                    style: const TextStyle(fontSize: 12, color: AppColors.textTertiary)),
+                                    style: TextStyle(fontSize: 12, color: context.palette.textTertiary)),
                                 ],
                               ),
-                              const SizedBox(height: 6),
-                              Text(n.body, style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+                              SizedBox(height: 6),
+                              Text(n.body, style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
                                 maxLines: 2, overflow: TextOverflow.ellipsis),
                             ],
                           ),
@@ -124,8 +124,8 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                 ),
       floatingActionButton: noCar ? null : FloatingActionButton(
         onPressed: _addNote,
-        backgroundColor: AppColors.primary,
-        child: const Icon(Icons.add_rounded, color: Color(0xFF0D0D0D)),
+        backgroundColor: context.palette.primary,
+        child: Icon(Icons.add_rounded, color: context.palette.onAccent),
       ),
     );
   }
@@ -187,15 +187,15 @@ class _EditNoteScreenState extends State<_EditNoteScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       appBar: AppBar(
-        backgroundColor: AppColors.background,
+        backgroundColor: context.palette.background,
         title: Text(widget.note == null ? 'Новая заметка' : 'Редактировать',
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
         actions: [
           TextButton(
             onPressed: _save,
-            child: const Text('Сохранить', style: TextStyle(fontWeight: FontWeight.w600)),
+            child: Text('Сохранить', style: TextStyle(fontWeight: FontWeight.w600)),
           ),
         ],
       ),
@@ -205,24 +205,24 @@ class _EditNoteScreenState extends State<_EditNoteScreen> {
           children: [
             TextField(
               controller: _titleController,
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
-              decoration: const InputDecoration(
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: context.palette.textPrimary),
+              decoration: InputDecoration(
                 hintText: 'Заголовок',
-                hintStyle: TextStyle(color: AppColors.textPlaceholder),
+                hintStyle: TextStyle(color: context.palette.textPlaceholder),
                 border: InputBorder.none,
               ),
               autofocus: widget.note == null,
             ),
-            const Divider(color: AppColors.border),
+            Divider(color: context.palette.border),
             Expanded(
               child: TextField(
                 controller: _bodyController,
                 maxLines: null,
                 expands: true,
-                style: const TextStyle(fontSize: 16, color: AppColors.textPrimary),
-                decoration: const InputDecoration(
+                style: TextStyle(fontSize: 16, color: context.palette.textPrimary),
+                decoration: InputDecoration(
                   hintText: 'Текст заметки...',
-                  hintStyle: TextStyle(color: AppColors.textPlaceholder),
+                  hintStyle: TextStyle(color: context.palette.textPlaceholder),
                   border: InputBorder.none,
                 ),
               ),

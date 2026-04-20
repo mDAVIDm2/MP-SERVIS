@@ -31,10 +31,10 @@ const TEST_PHONES = {
     '79197341904': { role: 'owner', name: 'Владелец' },
 };
 const TEST_EMAILS = {
-    'owner@autohub.test': { role: 'owner', name: 'Владелец (тест)' },
-    'admin@autohub.test': { role: 'admin', name: 'Администратор (тест)' },
-    'master@autohub.test': { role: 'master', name: 'Мастер (тест)' },
-    'solo@autohub.test': { role: 'solo', name: 'Самозанятый (тест)' },
+    'owner@mpservis.test': { role: 'owner', name: 'Владелец (тест)' },
+    'admin@mpservis.test': { role: 'admin', name: 'Администратор (тест)' },
+    'master@mpservis.test': { role: 'master', name: 'Мастер (тест)' },
+    'solo@mpservis.test': { role: 'solo', name: 'Самозанятый (тест)' },
 };
 function userAuthJson(user, organizations) {
     return {
@@ -44,10 +44,15 @@ function userAuthJson(user, organizations) {
         phone: user.phone,
         phone_verified_at: user.phoneVerifiedAt ? user.phoneVerifiedAt.toISOString() : null,
         name: user.name,
+        avatar_url: user.avatarUrl ?? null,
+        account_realm: user.accountRealm ?? 'business',
         role: user.role,
         organization_id: user.organizationId,
         organizations,
     };
+}
+function realmFromAudience(aud) {
+    return aud === 'business' ? 'business' : 'client';
 }
 let AuthService = class AuthService {
     constructor(userRepo, orgRepo, usersService, otp, sessions, securityEvents) {
@@ -71,13 +76,51 @@ let AuthService = class AuthService {
         }
         return org;
     }
+    async findUserByEmailNormalized(normalizedEmail, realm, withOrganization = false) {
+        const e = normalizedEmail.trim().toLowerCase();
+        if (!e)
+            return null;
+        const qb = this.userRepo
+            .createQueryBuilder('u')
+            .where('u.email IS NOT NULL AND LOWER(TRIM(u.email)) = :e', { e })
+            .andWhere('u.account_realm = :realm', { realm });
+        if (withOrganization) {
+            qb.leftJoinAndSelect('u.organization', 'organization');
+        }
+        return qb.getOne();
+    }
+    async findUserByPhoneDigits(phoneDigits, realm, withOrganization = false) {
+        const qb = this.userRepo
+            .createQueryBuilder('u')
+            .where('u.phone = :p', { p: phoneDigits })
+            .andWhere('u.account_realm = :realm', { realm });
+        if (withOrganization) {
+            qb.leftJoinAndSelect('u.organization', 'organization');
+        }
+        return qb.getOne();
+    }
     async sendCode(params) {
-        return this.otp.createChallenge({
+        const realm = realmFromAudience(params.audience);
+        const base = await this.otp.createChallenge({
             email: params.email,
             phone: params.phone,
             requestedChannel: params.channel,
             ip: params.ip,
         });
+        let accountExists = false;
+        try {
+            if (params.email != null && String(params.email).trim() !== '') {
+                const e = this.otp.normalizeEmail(params.email);
+                accountExists = !!(await this.findUserByEmailNormalized(e, realm));
+            }
+            else if (params.phone != null && String(params.phone).trim() !== '') {
+                const p = this.otp.normalizePhoneDigits(params.phone);
+                accountExists = !!(await this.userRepo.findOne({ where: { phone: p, accountRealm: realm }, select: ['id'] }));
+            }
+        }
+        catch {
+        }
+        return { ...base, account_exists: accountExists };
     }
     applyPhoneUnverified(user, raw, otpKind) {
         if (otpKind !== 'email' || raw == null || !String(raw).trim())
@@ -109,10 +152,11 @@ let AuthService = class AuthService {
             throw new common_1.BadRequestException('Укажите email или phone (как при отправке кода)');
         }
         await this.otp.verifyChallenge(dto.challenge_id, dto.code, expectedRecipient, expectedKind);
+        const realm = realmFromAudience(audience);
         let user = null;
         if (expectedKind === 'email') {
-            user = await this.userRepo.findOne({ where: { email: expectedRecipient }, relations: ['organization'] });
-            const testEntry = TEST_EMAILS[expectedRecipient];
+            user = await this.findUserByEmailNormalized(expectedRecipient, realm, true);
+            const testEntry = audience === 'business' ? TEST_EMAILS[expectedRecipient] : undefined;
             if (!user) {
                 if (!testEntry) {
                     if (!dto.name?.trim())
@@ -135,6 +179,7 @@ let AuthService = class AuthService {
                     phone: null,
                     phoneVerifiedAt: null,
                     organizationId: null,
+                    accountRealm: realm,
                 });
                 this.applyPhoneUnverified(user, dto.phone_unverified, 'email');
                 if (testEntry) {
@@ -149,12 +194,15 @@ let AuthService = class AuthService {
                 catch (e) {
                     const err = e;
                     if (err?.code === '23505') {
-                        throw new common_1.ConflictException('Этот телефон уже привязан к другому аккаунту');
+                        throw new common_1.ConflictException(realm === 'client'
+                            ? 'Этот email или телефон уже занят в клиентском аккаунте'
+                            : 'Этот email или телефон уже занят в бизнес-аккаунте');
                     }
                     throw e;
                 }
             }
             else {
+                user.email = expectedRecipient;
                 if (!user.emailVerifiedAt) {
                     user.emailVerifiedAt = new Date();
                 }
@@ -171,7 +219,9 @@ let AuthService = class AuthService {
                 catch (e) {
                     const err = e;
                     if (err?.code === '23505') {
-                        throw new common_1.ConflictException('Этот телефон уже привязан к другому аккаунту');
+                        throw new common_1.ConflictException(realm === 'client'
+                            ? 'Этот email или телефон уже занят в клиентском аккаунте'
+                            : 'Этот email или телефон уже занят в бизнес-аккаунте');
                     }
                     throw e;
                 }
@@ -179,8 +229,8 @@ let AuthService = class AuthService {
         }
         else {
             const n = expectedRecipient;
-            const testEntry = TEST_PHONES[n];
-            user = await this.userRepo.findOne({ where: { phone: n }, relations: ['organization'] });
+            const testEntry = audience === 'business' ? TEST_PHONES[n] : undefined;
+            user = await this.findUserByPhoneDigits(n, realm, true);
             if (testEntry) {
                 const org = await this.getOrCreateTestOrg();
                 if (!user) {
@@ -192,6 +242,7 @@ let AuthService = class AuthService {
                         organizationId: org.id,
                         email: null,
                         emailVerifiedAt: null,
+                        accountRealm: realm,
                     });
                     await this.userRepo.save(user);
                 }
@@ -212,6 +263,8 @@ let AuthService = class AuthService {
                         role: 'solo',
                         email: null,
                         emailVerifiedAt: null,
+                        organizationId: null,
+                        accountRealm: realm,
                     });
                     await this.userRepo.save(user);
                 }
@@ -221,7 +274,9 @@ let AuthService = class AuthService {
                 }
             }
         }
-        await this.usersService.ensureMembership(user.id, user.organizationId ?? undefined, user.role);
+        if (user.accountRealm === 'business') {
+            await this.usersService.ensureMembership(user.id, user.organizationId ?? undefined, user.role);
+        }
         const pair = await this.sessions.createSession(user, audience, meta);
         const organizations = await this.usersService.getOrganizationSummariesForUser(user);
         await this.securityEvents.record(user.id, 'login_success', {
@@ -229,12 +284,14 @@ let AuthService = class AuthService {
             ip: meta.ip ?? null,
             userAgent: meta.userAgent ?? null,
         });
+        const userPayload = userAuthJson(user, organizations);
+        await this.usersService.appendStaffCapabilities(user, userPayload);
         return {
             access_token: pair.access_token,
             refresh_token: pair.refresh_token,
             expires_in: pair.expires_in,
             session_id: pair.session_id,
-            user: userAuthJson(user, organizations),
+            user: userPayload,
         };
     }
     async refresh(refreshToken, audience, meta) {
@@ -243,12 +300,14 @@ let AuthService = class AuthService {
         if (!user)
             throw new Error('User not found');
         const organizations = await this.usersService.getOrganizationSummariesForUser(user);
+        const userPayload = userAuthJson(user, organizations);
+        await this.usersService.appendStaffCapabilities(user, userPayload);
         return {
             access_token: pair.access_token,
             refresh_token: pair.refresh_token,
             expires_in: pair.expires_in,
             session_id: pair.session_id,
-            user: userAuthJson(user, organizations),
+            user: userPayload,
         };
     }
     async logoutByRefresh(refreshToken) {

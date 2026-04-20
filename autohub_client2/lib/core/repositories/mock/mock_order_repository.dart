@@ -54,6 +54,8 @@ class MockOrderRepository implements OrderRepository {
     String? color,
     int? mileage,
     String? engineType,
+    String? carPhotoUrl,
+    List<ClientOrderLineDraft>? orderLineItems,
   }) async {
     await _delay(1000);
 
@@ -61,12 +63,29 @@ class MockOrderRepository implements OrderRepository {
         .where((s) => serviceIds.contains(s.id))
         .toList();
 
-    final items = services.map((s) => OrderItem(
-      id: 'oi_${DateTime.now().millisecondsSinceEpoch}_${s.id}',
-      name: s.name,
-      priceKopecks: s.priceKopecks,
-      estimatedMinutes: s.durationMinutes,
-    )).toList();
+    final List<OrderItem> items;
+    if (orderLineItems != null && orderLineItems.isNotEmpty) {
+      var i = 0;
+      items = orderLineItems
+          .map(
+            (e) => OrderItem(
+              id: 'oi_${DateTime.now().millisecondsSinceEpoch}_${i++}',
+              name: e.name,
+              priceKopecks: e.priceKopecks,
+              estimatedMinutes: e.estimatedMinutes,
+            ),
+          )
+          .toList();
+    } else {
+      items = services.map((s) => OrderItem(
+        id: 'oi_${DateTime.now().millisecondsSinceEpoch}_${s.id}',
+        name: s.name,
+        priceKopecks: s.priceKopecks,
+        estimatedMinutes: s.durationMinutes,
+        serviceId: s.id,
+        catalogItemId: s.catalogItemId,
+      )).toList();
+    }
 
     final order = Order(
       id: 'order_${DateTime.now().millisecondsSinceEpoch}',
@@ -78,6 +97,7 @@ class MockOrderRepository implements OrderRepository {
       dateTime: scheduledDate,
       items: items,
       comment: comment,
+      carPhotoUrl: carPhotoUrl,
     );
 
     MockData.orders.insert(0, order);

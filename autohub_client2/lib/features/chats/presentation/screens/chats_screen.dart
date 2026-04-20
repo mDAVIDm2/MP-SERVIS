@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../../core/config/app_config.dart';
+import '../../../../core/l10n/l10n_scope.dart';
 import '../../../../core/navigation/app_routes.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/theme/app_text_styles.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../core/providers/app_providers.dart';
@@ -53,19 +55,20 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
     Chat c, {
     required int displayUnread,
   }) {
+    final l10n = L10nScope.of(context);
     final isArchived = _showArchived;
     return Dismissible(
       key: ValueKey(c.id),
       direction: DismissDirection.startToEnd,
       background: Container(
-        color: AppColors.nestedBg,
+        color: context.palette.nestedBg,
         alignment: Alignment.centerLeft,
         padding: const EdgeInsets.only(left: 20),
         child: Text(
-          isArchived ? 'Вернуть из архива' : 'В архив',
-          style: const TextStyle(
+          isArchived ? l10n.chatsArchivedRestoreSwipe : l10n.chatsArchivedSwipe,
+          style: TextStyle(
             fontSize: 14,
-            color: AppColors.textSecondary,
+            color: context.palette.textSecondary,
             fontWeight: FontWeight.w500,
           ),
         ),
@@ -96,7 +99,7 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
           }
           if (context.mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Не удалось открыть заказ. Проверьте подключение.')),
+              SnackBar(content: Text(l10n.orderOpenFailed)),
             );
           }
         },
@@ -106,6 +109,8 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = L10nScope.of(context);
+    final p = context.palette;
     final chatsAsync = ref.watch(chatsProvider);
     final allChats = chatsAsync.valueOrNull ?? [];
     final archivedIds = ref.watch(archivedChatIdsProvider);
@@ -158,7 +163,7 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
     final regularChats = chats.where((c) => !c.isPinned && !c.needsAction).toList();
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       body: SafeArea(
         child: Column(
           children: [
@@ -169,25 +174,25 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
                 height: 56,
                 child: Row(
                   children: [
-                    const Expanded(
+                    Expanded(
                       child: Align(
                         alignment: Alignment.centerLeft,
-                        child: Text('Чаты', style: AppTextStyles.screenTitle),
+                        child: Text(l10n.chatsTitle, style: AppTextStyles.screenTitle(p)),
                       ),
                     ),
                     if (headerUnreadTotal > 0)
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                         decoration: BoxDecoration(
-                          color: AppColors.primary,
+                          color: context.palette.primary,
                           borderRadius: BorderRadius.circular(14),
                         ),
                         child: Text(
                           headerUnreadTotal > 99 ? '99+' : '$headerUnreadTotal',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w700,
-                            color: Color(0xFF0D0D0D),
+                            color: p.onAccent,
                           ),
                         ),
                       ),
@@ -201,21 +206,21 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
               child: Container(
                 height: 44,
                 decoration: BoxDecoration(
-                  color: AppColors.cardBg,
+                  color: context.palette.cardBg,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.border),
+                  border: Border.all(color: context.palette.border),
                 ),
-                child: const Row(
+                child: Row(
                   children: [
                     SizedBox(width: 14),
-                    Icon(Icons.search_rounded, size: 20, color: AppColors.textSecondary),
+                    Icon(Icons.search_rounded, size: 20, color: p.textSecondary),
                     SizedBox(width: 10),
                     Expanded(
                       child: TextField(
-                        style: TextStyle(fontSize: 14, color: AppColors.textPrimary),
+                        style: TextStyle(fontSize: 14, color: p.textPrimary),
                         decoration: InputDecoration(
-                          hintText: 'Поиск по чатам...',
-                          hintStyle: TextStyle(color: AppColors.textPlaceholder, fontSize: 14),
+                          hintText: l10n.searchChatsHint,
+                          hintStyle: TextStyle(color: p.textPlaceholder, fontSize: 14),
                           border: InputBorder.none,
                           contentPadding: EdgeInsets.zero,
                           isDense: true,
@@ -237,13 +242,13 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
                       icon: Icon(
                         _showArchived ? Icons.inbox_rounded : Icons.archive_rounded,
                         size: 20,
-                        color: _showArchived ? AppColors.primary : AppColors.textSecondary,
+                        color: _showArchived ? context.palette.primary : context.palette.textSecondary,
                       ),
                       label: Text(
-                        _showArchived ? 'Чаты' : 'Архив (${archivedChats.length})',
+                        _showArchived ? l10n.chatsBackToList : l10n.chatsArchiveTitle(archivedChats.length),
                         style: TextStyle(
                           fontSize: 14,
-                          color: _showArchived ? AppColors.primary : AppColors.textSecondary,
+                          color: _showArchived ? context.palette.primary : context.palette.textSecondary,
                         ),
                       ),
                     ),
@@ -254,33 +259,33 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
             Expanded(
               child: chatsAsync.when(
                 loading: () => const Center(child: CircularProgressIndicator()),
-                error: (e, st) => Center(child: Text('Ошибка: $e')),
+                error: (e, st) => Center(child: Text(l10n.errorColon(e))),
                 data: (_) => chats.isEmpty
                     ? EmptyState(
                         icon: _showArchived ? '📦' : '💬',
-                        title: _showArchived ? 'Нет чатов в архиве' : 'Нет чатов',
+                        title: _showArchived ? l10n.chatsNoInArchive : l10n.noChatsTitle,
                         subtitle: _showArchived
-                            ? 'Смахните чат вправо в основном списке, чтобы перенести в архив.'
-                            : 'Чаты создаются при записи в автосервис.\nЗакажите услугу в разделе Поиск.',
-                        buttonText: _showArchived ? null : 'Найти сервис',
+                            ? l10n.chatsArchiveEmptyHint
+                            : l10n.noChatsSubtitle,
+                        buttonText: _showArchived ? null : l10n.findService,
                       )
                     : ListView(
                       physics: const BouncingScrollPhysics(),
                       padding: const EdgeInsets.only(bottom: 24),
                       children: [
                         if (pinnedChats.isNotEmpty) ...[
-                          const Padding(
-                            padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
-                            child: Text('📌 ЗАКРЕПЛЁННЫЕ', style: TextStyle(
-                              fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textTertiary,
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                            child: Text(l10n.chatsPinnedHeading, style: TextStyle(
+                              fontSize: 12, fontWeight: FontWeight.w600, color: p.textTertiary,
                               letterSpacing: 0.5,
                             )),
                           ),
                           ...pinnedChats.map((c) => _buildSwipeableChatCard(context, ref, c, displayUnread: unreadForList(c))),
-                          const Padding(
-                            padding: EdgeInsets.fromLTRB(16, 12, 16, 8),
-                            child: Text('ВСЕ ЧАТЫ', style: TextStyle(
-                              fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textTertiary,
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                            child: Text(l10n.allChatsSection, style: TextStyle(
+                              fontSize: 12, fontWeight: FontWeight.w600, color: p.textTertiary,
                               letterSpacing: 0.5,
                             )),
                           ),
@@ -307,31 +312,20 @@ class _ChatCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = L10nScope.of(context);
     final hasUnread = displayUnreadCount > 0;
     final isSupportChat = chat.isSupportChat;
 
     return GestureDetector(
       onTap: () => pushCupertino(context, ChatDetailScreen(chat: chat)),
       child: Container(
-        color: hasUnread ? AppColors.cardBg : AppColors.background,
+        color: hasUnread ? context.palette.cardBg : context.palette.background,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Лого организации
-            Container(
-              width: 48, height: 48,
-              decoration: BoxDecoration(
-                color: AppColors.nestedBg,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Center(
-                child: Text(chat.stoName.isNotEmpty ? chat.stoName[0] : '?', style: const TextStyle(
-                  fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.primary,
-                )),
-              ),
-            ),
-            const SizedBox(width: 12),
+            _ChatListOrgAvatar(logoUrl: chat.stoLogoUrl, name: chat.stoName),
+            SizedBox(width: 12),
             // Контент
             Expanded(
               child: Column(
@@ -346,7 +340,7 @@ class _ChatCard extends StatelessWidget {
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: hasUnread ? FontWeight.w700 : FontWeight.w600,
-                            color: AppColors.textPrimary,
+                            color: context.palette.textPrimary,
                           ),
                           maxLines: 1, overflow: TextOverflow.ellipsis,
                         ),
@@ -354,28 +348,28 @@ class _ChatCard extends StatelessWidget {
                       if (chat.lastMessageTime != null)
                         Text(
                           Formatters.chatTime(chat.lastMessageTime!),
-                          style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                          style: TextStyle(fontSize: 12, color: context.palette.textSecondary),
                         ),
                     ],
                   ),
-                  const SizedBox(height: 4),
+                  SizedBox(height: 4),
                   // Строка 2: статус заказа
                   if (isSupportChat)
-                    const Row(
+                    Row(
                       children: [
-                        Icon(Icons.support_agent_rounded, size: 14, color: AppColors.info),
+                        Icon(Icons.support_agent_rounded, size: 14, color: context.palette.info),
                         SizedBox(width: 6),
                         Text(
-                          'Поддержка',
-                          style: TextStyle(fontSize: 14, color: AppColors.info, fontWeight: FontWeight.w600),
+                          l10n.supportShortLabel,
+                          style: TextStyle(fontSize: 14, color: context.palette.info, fontWeight: FontWeight.w600),
                         ),
                       ],
                     )
                   else if (chat.needsAction)
                     Text(
-                      '⚠️ Требуется согласование',
+                      l10n.approvalRequiredShort,
                       style: TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.statusApproval,
+                        fontSize: 14, fontWeight: FontWeight.w600, color: context.palette.statusApproval,
                       ),
                     )
                   else
@@ -388,25 +382,25 @@ class _ChatCard extends StatelessWidget {
                             shape: BoxShape.circle,
                           ),
                         ),
-                        const SizedBox(width: 6),
-                        Text(chat.orderStatus.label, style: const TextStyle(
-                          fontSize: 14, color: AppColors.textSecondary,
+                        SizedBox(width: 6),
+                        Text(chat.orderStatus.label, style: TextStyle(
+                          fontSize: 14, color: context.palette.textSecondary,
                         )),
                       ],
                     ),
-                  const SizedBox(height: 4),
+                  SizedBox(height: 4),
                   // Строка 3: последнее сообщение + badge
                   Row(
                     children: [
                       Expanded(
                         child: Text(
                           chat.lastMessageFromUser
-                              ? 'Вы: ${chat.lastMessage ?? ''}'
+                              ? '${l10n.chatYouPrefix}${chat.lastMessage ?? ''}'
                               : chat.lastMessage ?? '',
                           style: TextStyle(
                             fontSize: 14,
                             fontWeight: hasUnread ? FontWeight.w600 : FontWeight.w400,
-                            color: AppColors.textSecondary,
+                            color: context.palette.textSecondary,
                           ),
                           maxLines: 1, overflow: TextOverflow.ellipsis,
                         ),
@@ -414,18 +408,18 @@ class _ChatCard extends StatelessWidget {
                       if (chat.lastMessageFromUser && !hasUnread)
                         _DeliveryStatus(status: chat.lastMessageStatus),
                       if (hasUnread) ...[
-                        const SizedBox(width: 8),
+                        SizedBox(width: 8),
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                           decoration: BoxDecoration(
-                            color: AppColors.primary,
+                            color: context.palette.primary,
                             borderRadius: BorderRadius.circular(10),
                           ),
                           constraints: const BoxConstraints(minWidth: 20),
                           child: Text(
                             displayUnreadCount > 99 ? '99+' : '$displayUnreadCount',
-                            style: const TextStyle(
-                              fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF0D0D0D),
+                            style: TextStyle(
+                              fontSize: 11, fontWeight: FontWeight.w700, color: context.palette.onAccent,
                             ),
                             textAlign: TextAlign.center,
                           ),
@@ -433,16 +427,60 @@ class _ChatCard extends StatelessWidget {
                       ],
                     ],
                   ),
-                  const SizedBox(height: 4),
+                  SizedBox(height: 4),
                   // Общий чат: не показываем #orderNumber (один чат на пару клиент↔сервис).
                   Text(
                     chat.chatWithOrganizationSubtitle,
-                    style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
+                    style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
                   ),
                 ],
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatListOrgAvatar extends StatelessWidget {
+  const _ChatListOrgAvatar({required this.logoUrl, required this.name});
+
+  final String? logoUrl;
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    final u = logoUrl?.trim();
+    if (u != null && u.isNotEmpty) {
+      final resolved = AppConfig.resolveOrganizationPhotoUrl(u);
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Image.network(
+          resolved,
+          width: 48,
+          height: 48,
+          fit: BoxFit.cover,
+          errorBuilder: (ctx, __, ___) => _letter(ctx),
+        ),
+      );
+    }
+    return _letter(context);
+  }
+
+  Widget _letter(BuildContext context) {
+    final p = context.palette;
+    return Container(
+      width: 48,
+      height: 48,
+      decoration: BoxDecoration(
+        color: p.nestedBg,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Center(
+        child: Text(
+          name.isNotEmpty ? name[0].toUpperCase() : '?',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: p.primary),
         ),
       ),
     );
@@ -457,15 +495,15 @@ class _DeliveryStatus extends StatelessWidget {
   Widget build(BuildContext context) {
     switch (status) {
       case MessageDeliveryStatus.sent:
-        return const Icon(Icons.check, size: 14, color: AppColors.textTertiary);
+        return Icon(Icons.check, size: 14, color: context.palette.textTertiary);
       case MessageDeliveryStatus.delivered:
-        return const Icon(Icons.done_all, size: 14, color: AppColors.textTertiary);
+        return Icon(Icons.done_all, size: 14, color: context.palette.textTertiary);
       case MessageDeliveryStatus.read:
-        return const Icon(Icons.done_all, size: 14, color: AppColors.info);
+        return Icon(Icons.done_all, size: 14, color: context.palette.info);
       case MessageDeliveryStatus.pending:
-        return const Icon(Icons.access_time, size: 14, color: AppColors.textTertiary);
+        return Icon(Icons.access_time, size: 14, color: context.palette.textTertiary);
       case MessageDeliveryStatus.error:
-        return const Icon(Icons.error_outline, size: 14, color: AppColors.error);
+        return Icon(Icons.error_outline, size: 14, color: context.palette.error);
     }
   }
 }

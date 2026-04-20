@@ -6,13 +6,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../auth/auth_provider.dart';
 import '../providers/app_providers.dart';
 import '../settings/client_notification_prefs_provider.dart';
 import 'firebase_bootstrap.dart';
 import 'push_navigation_handler.dart';
 import 'push_payload_codec.dart';
 
-const _androidChannelId = 'autohub_messages';
+const _androidChannelId = 'mp_servis_messages';
 const _androidChannelName = 'Сообщения и заказы';
 
 /// Фоновый обработчик FCM (должен быть top-level, регистрируется до runApp).
@@ -53,7 +54,7 @@ class ClientPushService {
         if (kDebugMode) {
           debugPrint(
             '[Push] Firebase не инициализирован — FCM-токен не регистрируется '
-            '(dart-define или android/app/google-services.json). См. autohub_firebase_options.dart',
+            '(dart-define или android/app/google-services.json). См. mp_servis_firebase_options.dart',
           );
         }
         return;
@@ -80,6 +81,12 @@ class ClientPushService {
 
     final token = await FirebaseMessaging.instance.getToken();
     if (token != null) await _registerToken(ref, token);
+    // После cold start токен API может появиться чуть позже FCM — повторим регистрацию один раз.
+    Future<void>.delayed(const Duration(milliseconds: 900), () async {
+      if (_ref != ref) return;
+      final t = await FirebaseMessaging.instance.getToken();
+      if (t != null) await _registerToken(ref, t);
+    });
 
     FirebaseMessaging.instance.onTokenRefresh.listen((t) => _registerToken(ref, t));
 
@@ -136,6 +143,17 @@ class ClientPushService {
   }
 
   Future<void> _registerToken(WidgetRef ref, String token) async {
+    final auth = ref.read(authProvider);
+    if (!auth.isAuthenticated ||
+        auth.accessToken == null ||
+        auth.accessToken!.trim().isEmpty) {
+      if (kDebugMode) {
+        debugPrint(
+          '[Push] register-device пропущен: нет access-токена (запрос выполнится после входа).',
+        );
+      }
+      return;
+    }
     final repo = ref.read(notificationRepositoryProvider);
     final platform = Platform.isIOS ? 'ios' : 'android';
     final r = await repo.registerPushToken(token, platform: platform);
@@ -150,7 +168,7 @@ class ClientPushService {
     if (!notifier.allowsBackendType(type)) return;
 
     final prefs = ref.read(clientNotificationPrefsProvider).valueOrNull;
-    final title = msg.notification?.title ?? msg.data['title']?.toString() ?? 'AutoHub';
+    final title = msg.notification?.title ?? msg.data['title']?.toString() ?? 'MP-Servis';
     final body = msg.notification?.body ?? msg.data['body']?.toString() ?? '';
 
     final androidDetails = AndroidNotificationDetails(

@@ -8,7 +8,7 @@ import { JwtAudience, SessionDeviceMeta } from './auth-session.service';
 import { User } from '../users/user.entity';
 
 function audienceFromReq(req: Request): JwtAudience {
-  const raw = String(req.headers['x-autohub-app'] ?? '').toLowerCase();
+  const raw = String(req.headers['x-mp-servis-app'] ?? '').toLowerCase();
   return raw === 'business' ? 'business' : 'client';
 }
 
@@ -49,11 +49,13 @@ export class AuthController {
     ) {
       throw new BadRequestException('Укажите только email или только phone');
     }
+    const aud = audienceFromReq(req);
     return this.auth.sendCode({
       email: dto.email,
       phone: dto.phone,
       channel: dto.channel,
       ip: ip || null,
+      audience: aud,
     });
   }
 

@@ -3,10 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../../../core/navigation/app_navigator_key.dart';
 import '../../../../core/navigation/app_routes.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/navigation/driving_route_launcher.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../core/utils/scroll_center.dart';
 import '../../../../core/availability/availability_helper.dart';
@@ -14,7 +15,6 @@ import '../../../../core/providers/app_providers.dart';
 import '../../../../core/repositories/sto_repository.dart';
 import '../../../../core/settings/filter_by_car_setting.dart';
 import '../../../../core/settings/favorite_sto_ids_provider.dart';
-import '../../../../core/settings/map_provider_setting.dart';
 import '../../../../core/settings/sto_reviews_provider.dart';
 import '../../../../core/auth/auth_provider.dart';
 import '../../../../shared/models/car_model.dart';
@@ -22,7 +22,122 @@ import '../../../../shared/models/sto_model.dart';
 import '../../../../shared/organization_ui_copy.dart';
 import '../../../../shared/models/user_sto_review.dart';
 import '../../../../shared/widgets/common_widgets.dart';
+import '../../../../shared/widgets/services_packages_toggle.dart';
+import '../../../../core/repositories/order_repository.dart';
+import '../../../../core/catalog/client_catalog_service_ids.dart';
 import '../../../orders/presentation/screens/order_detail_screen.dart';
+import '../../../chats/presentation/screens/chat_detail_screen.dart';
+import '../widgets/location_preview_card.dart';
+
+int _packageDurationMinutes(STOPackage p, List<STOService> services, String? bodyType) {
+  if (p.packageDurationMinutes > 0) return p.packageDurationMinutes;
+  final byId = {for (final s in services) s.id: s};
+  return p.includedServiceIds.fold(
+    0,
+    (a, id) => a + (byId[id]?.effectiveDurationMinutes(bodyType) ?? 0),
+  );
+}
+
+int _packageAddonsExtraDuration(
+  STOPackage p,
+  Set<String> addonIds,
+  List<STOService> services,
+  String? bodyType,
+) {
+  final byId = {for (final s in services) s.id: s};
+  var d = 0;
+  for (final a in p.addons) {
+    if (!addonIds.contains(a.serviceId)) continue;
+    final s = byId[a.serviceId];
+    if (s == null) continue;
+    d += a.extraDurationMinutes > 0
+        ? a.extraDurationMinutes
+        : s.effectiveDurationMinutes(bodyType);
+  }
+  return d;
+}
+
+int _packageBookingTotalKopecks(STOPackage p, Set<String> addonIds) {
+  var t = p.packagePriceKopecks;
+  for (final ad in p.addons) {
+    if (addonIds.contains(ad.serviceId)) t += ad.extraPriceKopecks;
+  }
+  return t;
+}
+
+/// После [Navigator.pop] с экрана брони overlay ещё перестраивается — SnackBar в том же кадре даёт assert
+/// (`_elements.contains(element)` / `_owner != null`).
+void _showBookingCreatedSnackBar(String message) {
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final rootCtx = appRootNavigatorKey.currentContext;
+      if (rootCtx == null || !rootCtx.mounted) return;
+      final messenger = ScaffoldMessenger.maybeOf(rootCtx);
+      messenger?.hideCurrentSnackBar();
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    });
+  });
+}
+
+/// Только http(s) — локальный путь серверу не отправляем.
+String? _carPhotoUrlForApi(String? raw) {
+  final p = raw?.trim() ?? '';
+  if (p.isEmpty) return null;
+  final l = p.toLowerCase();
+  if (l.startsWith('http://') || l.startsWith('https://')) return p;
+  return null;
+}
+
+List<ClientOrderLineDraft> _packageOrderLines(
+  STOPackage p,
+  Set<String> addonIds,
+  List<STOService> services,
+  String? bodyType,
+) {
+  final byId = {for (final s in services) s.id: s};
+  final includedNames = <String>[];
+  for (final sid in p.includedServiceIds) {
+    final s = byId[sid];
+    if (s != null) includedNames.add(s.name);
+  }
+  var packageDisplayName = p.name;
+  if (includedNames.isNotEmpty) {
+    packageDisplayName =
+        '$packageDisplayName\n${includedNames.map((n) => '• $n').join('\n')}';
+  }
+  final lines = <ClientOrderLineDraft>[
+    ClientOrderLineDraft(
+      name: packageDisplayName,
+      priceKopecks: p.packagePriceKopecks,
+      estimatedMinutes: _packageDurationMinutes(p, services, bodyType),
+    ),
+  ];
+  for (final ad in p.addons) {
+    if (!addonIds.contains(ad.serviceId)) continue;
+    final s = byId[ad.serviceId];
+    if (s == null) continue;
+    lines.add(
+      ClientOrderLineDraft(
+        name: s.name,
+        priceKopecks: ad.extraPriceKopecks,
+        estimatedMinutes: ad.extraDurationMinutes > 0
+            ? ad.extraDurationMinutes
+            : s.effectiveDurationMinutes(bodyType),
+      ),
+    );
+  }
+  return lines;
+}
+
+List<String> _packageBookingServiceIds(STOPackage p, Iterable<String> addonIds) {
+  return {...p.includedServiceIds, ...addonIds}.toList();
+}
 
 class STODetailScreen extends ConsumerStatefulWidget {
   final STO sto;
@@ -30,7 +145,15 @@ class STODetailScreen extends ConsumerStatefulWidget {
   /// Предвыбранные услуги (например, с карточки рекомендации «Замена масла»).
   final List<String>? initialServiceIds;
 
-  const STODetailScreen({super.key, required this.sto, this.initialServiceIds});
+  /// Если `false`, в предвыборе остаются и «моторное масло», и «масляный фильтр» (запись из напоминаний).
+  final bool mergeOilEngineWithFilter;
+
+  const STODetailScreen({
+    super.key,
+    required this.sto,
+    this.initialServiceIds,
+    this.mergeOilEngineWithFilter = true,
+  });
 
   @override
   ConsumerState<STODetailScreen> createState() => _STODetailScreenState();
@@ -38,15 +161,159 @@ class STODetailScreen extends ConsumerStatefulWidget {
 
 class _STODetailScreenState extends ConsumerState<STODetailScreen> {
   final Set<String> _selectedServices = {};
+  final TextEditingController _serviceSearchController = TextEditingController();
   bool _showPackages = false;
+  /// Нормализованные id каталога из поиска; сопоставляются со строками прайса после загрузки [stoServicesProvider].
+  List<String> _pendingCatalogIds = const [];
+  bool _didApplyInitialCatalog = false;
+  final Map<String, GlobalKey> _serviceRowKeys = {};
+
+  List<String> _normalizedInitialCatalogIds() {
+    final raw = widget.initialServiceIds;
+    if (raw == null || raw.isEmpty) return const [];
+    return normalizeClientServiceFilterIds(
+      raw,
+      mergeOilEngineWithFilter: widget.mergeOilEngineWithFilter,
+    );
+  }
+
+  GlobalKey _keyForServiceRow(String serviceId) =>
+      _serviceRowKeys.putIfAbsent(serviceId, GlobalKey.new);
+
+  /// Первая строка прайса в порядке списка [services], подходящая под фильтр каталога.
+  String? _firstRowIdForCatalogFilter(List<STOService> services, String catalogFilterId) {
+    final matchIds = <String>{
+      ...stoServiceRowIdsForCatalogFilter(services, catalogFilterId),
+      ...stoServiceRowIdsForCatalogFilter(widget.sto.services, catalogFilterId),
+    };
+    for (final s in services) {
+      if (matchIds.contains(s.id)) return s.id;
+    }
+    return matchIds.isEmpty ? null : matchIds.first;
+  }
+
+  bool _sameInitialServiceIds(List<String>? a, List<String>? b) {
+    if (identical(a, b)) return true;
+    final sa = {...?a};
+    final sb = {...?b};
+    return sa.length == sb.length && sa.containsAll(sb);
+  }
+
+  void _onServiceSearchChanged() {
+    if (mounted) setState(() {});
+  }
 
   @override
   void initState() {
     super.initState();
-    if (widget.initialServiceIds != null &&
-        widget.initialServiceIds!.isNotEmpty) {
-      _selectedServices.addAll(widget.initialServiceIds!);
+    _serviceSearchController.addListener(_onServiceSearchChanged);
+    _pendingCatalogIds = _normalizedInitialCatalogIds();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _tryApplyInitialCatalogSelection();
+    });
+  }
+
+  @override
+  void dispose() {
+    _serviceSearchController.removeListener(_onServiceSearchChanged);
+    _serviceSearchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant STODetailScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.sto.id != widget.sto.id) {
+      _selectedServices.clear();
+      _serviceSearchController.clear();
+      _didApplyInitialCatalog = false;
+      _serviceRowKeys.clear();
+      _pendingCatalogIds = _normalizedInitialCatalogIds();
+    } else if (!_sameInitialServiceIds(oldWidget.initialServiceIds, widget.initialServiceIds) ||
+        oldWidget.mergeOilEngineWithFilter != widget.mergeOilEngineWithFilter) {
+      _didApplyInitialCatalog = false;
+      _pendingCatalogIds = _normalizedInitialCatalogIds();
+    } else {
+      return;
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _tryApplyInitialCatalogSelection();
+    });
+  }
+
+  void _tryApplyInitialCatalogSelection() {
+    if (_didApplyInitialCatalog) return;
+    final pending = _pendingCatalogIds;
+    if (pending.isEmpty) {
+      _didApplyInitialCatalog = true;
+      return;
+    }
+    final asyncState = ref.read(stoServicesProvider(widget.sto.id));
+    if (asyncState.isLoading) return;
+    if (asyncState.hasError) {
+      _didApplyInitialCatalog = true;
+      return;
+    }
+    final services = asyncState.valueOrNull ?? [];
+    final toAdd = <String>{};
+    for (final fid in pending) {
+      toAdd.addAll(stoServiceRowIdsForCatalogFilter(services, fid));
+      // Ответ GET /catalog/search уже содержит services; GET organizations/:id/services — тот же прайс.
+      // Объединяем id строк, чтобы предвыбор совпадал с фильтром, даже если один из списков без catalog_item_id.
+      if (widget.sto.services.isNotEmpty) {
+        toAdd.addAll(stoServiceRowIdsForCatalogFilter(widget.sto.services, fid));
+      }
+    }
+    if (toAdd.isNotEmpty) {
+      String? scrollToId = _firstRowIdForCatalogFilter(services, pending.first);
+      if (scrollToId == null) {
+        for (final s in services) {
+          if (toAdd.contains(s.id)) {
+            scrollToId = s.id;
+            break;
+          }
+        }
+      }
+      setState(() {
+        _selectedServices.addAll(toAdd);
+        _showPackages = false;
+      });
+      if (scrollToId != null) {
+        final id = scrollToId;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            scrollWidgetToViewportCenter(_keyForServiceRow(id).currentContext);
+          });
+        });
+      }
+    }
+    _didApplyInitialCatalog = true;
+  }
+
+  List<STOService> _filterServicesForSearch(List<STOService> all) {
+    final q = _serviceSearchController.text.trim().toLowerCase();
+    if (q.isEmpty) return all;
+    return all
+        .where((s) => s.name.toLowerCase().contains(q) || s.category.toLowerCase().contains(q))
+        .toList();
+  }
+
+  List<STOPackage> _filterPackagesForSearch(List<STOPackage> all, List<STOService> services) {
+    final q = _serviceSearchController.text.trim().toLowerCase();
+    if (q.isEmpty) return all;
+    final byId = {for (final s in services) s.id: s};
+    return all.where((p) {
+      if (p.name.toLowerCase().contains(q)) return true;
+      for (final id in p.includedServiceIds) {
+        final s = byId[id];
+        if (s != null &&
+            (s.name.toLowerCase().contains(q) || s.category.toLowerCase().contains(q))) {
+          return true;
+        }
+      }
+      return false;
+    }).toList();
   }
 
   STO get _sto => widget.sto;
@@ -56,9 +323,9 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
     if (phones.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Нет номера для звонка'),
-            backgroundColor: AppColors.error,
+          SnackBar(
+            content: const Text('Нет номера для звонка'),
+            backgroundColor: context.palette.error,
           ),
         );
       }
@@ -71,10 +338,10 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
       selected = await showDialog<String>(
         context: context,
         builder: (ctx) => AlertDialog(
-          backgroundColor: AppColors.cardBg,
-          title: const Text(
+          backgroundColor: context.palette.cardBg,
+          title: Text(
             'Выберите номер',
-            style: TextStyle(color: AppColors.textPrimary),
+            style: TextStyle(color: context.palette.textPrimary),
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -83,7 +350,7 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
                   (n) => ListTile(
                     title: Text(
                       Formatters.phone(n),
-                      style: const TextStyle(color: AppColors.textPrimary),
+                      style: TextStyle(color: context.palette.textPrimary),
                     ),
                     onTap: () => Navigator.pop(ctx, n),
                   ),
@@ -103,14 +370,46 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
       } catch (_) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Не удалось открыть набор номера'),
-              backgroundColor: AppColors.error,
+            SnackBar(
+              content: const Text('Не удалось открыть набор номера'),
+              backgroundColor: context.palette.error,
             ),
           );
         }
       }
     }
+  }
+
+  Future<void> _openChatWithOrganization() async {
+    final phoneNorm =
+        (ref.read(authProvider).user?.phone ?? '').replaceAll(RegExp(r'\D'), '');
+    if (phoneNorm.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Укажите телефон в профиле, чтобы написать сервису'),
+          ),
+        );
+      }
+      return;
+    }
+    final result =
+        await ref.read(chatRepositoryProvider).openOrganizationChat(widget.sto.id);
+    if (!mounted) return;
+    result.when(
+      success: (chat) {
+        ref.read(chatsProvider.notifier).loadChats();
+        pushCupertino(context, ChatDetailScreen(chat: chat));
+      },
+      failure: (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.message),
+            backgroundColor: context.palette.error,
+          ),
+        );
+      },
+    );
   }
 
   void _showOrdersSheet(BuildContext context) {
@@ -121,8 +420,8 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
           ..sort((a, b) => b.timelineSortAt.compareTo(a.timelineSortAt));
     showModalBottomSheet(
       context: context,
-      backgroundColor: AppColors.cardBg,
-      shape: const RoundedRectangleBorder(
+      backgroundColor: context.palette.cardBg,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (ctx) => SafeArea(
@@ -134,10 +433,10 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
               child: Text(
                 'Заказы в ${widget.sto.name}',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w700,
-                  color: AppColors.textPrimary,
+                  color: context.palette.textPrimary,
                 ),
               ),
             ),
@@ -151,16 +450,16 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
                   return ListTile(
                     title: Text(
                       '#${order.orderNumber}',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
+                        color: context.palette.textPrimary,
                       ),
                     ),
                     subtitle: Text(
                       '${order.displayStatus.label} · ${Formatters.dateShortRu(order.dateTime)} ${Formatters.time(order.dateTime)}',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 13,
-                        color: AppColors.textSecondary,
+                        color: context.palette.textSecondary,
                       ),
                     ),
                     trailing: Container(
@@ -194,81 +493,28 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
     );
   }
 
-  static String _appendRouteCacheBust(String url) {
-    final stamp = DateTime.now().millisecondsSinceEpoch;
-    final sep = url.contains('?') ? '&' : '?';
-    final idx = url.indexOf('#');
-    if (idx >= 0) {
-      return url.substring(0, idx) + sep + '_t=$stamp' + url.substring(idx);
-    }
-    return url + sep + '_t=$stamp';
-  }
-
   Future<void> _openRoute() async {
     if (_sto.latitude == null || _sto.longitude == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Нет координат для маршрута'),
-            backgroundColor: AppColors.error,
+          SnackBar(
+            content: const Text('Нет координат для маршрута'),
+            backgroundColor: context.palette.error,
           ),
         );
       }
       return;
     }
-    Position? position;
-    try {
-      final perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied)
-        await Geolocator.requestPermission();
-      if (await Geolocator.isLocationServiceEnabled()) {
-        position = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.medium,
-          ),
-        );
-      }
-    } catch (_) {}
-    final mapProvider = ref.read(mapProviderSettingProvider);
-    String url;
-    if (mapProvider == MapProvider.google) {
-      if (position != null) {
-        url =
-            'https://www.google.com/maps/dir/?api=1&origin=${position.latitude},${position.longitude}&destination=${_sto.latitude},${_sto.longitude}&travelmode=driving';
-      } else {
-        url =
-            'https://www.google.com/maps/dir/?api=1&origin=current+location&destination=${_sto.latitude},${_sto.longitude}&travelmode=driving';
-      }
-    } else if (mapProvider == MapProvider.yandex) {
-      if (position != null) {
-        url =
-            'https://yandex.ru/maps/?rtext=${position.latitude},${position.longitude}~${_sto.latitude},${_sto.longitude}&rtt=auto';
-      } else {
-        url =
-            'https://yandex.ru/maps/?pt=${_sto.longitude},${_sto.latitude}&z=16';
-      }
-    } else {
-      if (position != null) {
-        url =
-            'https://www.openstreetmap.org/directions?from=${position.latitude},${position.longitude}&to=${_sto.latitude},${_sto.longitude}';
-      } else {
-        url =
-            'https://www.openstreetmap.org/?mlat=${_sto.latitude}&mlon=${_sto.longitude}#map=16/${_sto.latitude}/${_sto.longitude}';
-      }
-    }
-    url = _appendRouteCacheBust(url);
-    try {
-      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Не удалось открыть карты'),
-            backgroundColor: AppColors.error,
-          ),
-        );
-      }
-    }
+    final position = await tryCurrentUserPositionForRoute();
+    if (!mounted) return;
+    await launchDrivingRoute(
+      context,
+      ref,
+      destLat: _sto.latitude!,
+      destLng: _sto.longitude!,
+      destinationTitle: _sto.name,
+      userPosition: position,
+    );
   }
 
   String? _selectedCarBodyType() {
@@ -297,10 +543,16 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<AsyncValue<List<STOService>>>(stoServicesProvider(_sto.id), (prev, next) {
+      if (next.isLoading || _didApplyInitialCatalog) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _tryApplyInitialCatalogSelection();
+      });
+    });
     final services = ref.watch(stoServicesProvider(_sto.id)).valueOrNull ?? [];
     final packages = ref.watch(stoPackagesProvider(_sto.id)).valueOrNull ?? [];
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       body: Stack(
         children: [
           CustomScrollView(
@@ -332,9 +584,9 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            AppColors.cardElevated,
-            AppColors.nestedBg,
-            AppColors.cardBg,
+            context.palette.cardElevated,
+            context.palette.nestedBg,
+            context.palette.cardBg,
           ],
         ),
       ),
@@ -347,7 +599,7 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
             Icons.handyman_rounded,
           ][index % 4],
           size: 72,
-          color: AppColors.primary.withValues(alpha: 0.35),
+          color: context.palette.primary.withValues(alpha: 0.35),
         ),
       ),
     );
@@ -360,10 +612,10 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
     return SliverAppBar(
       expandedHeight: 220,
       pinned: true,
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       flexibleSpace: FlexibleSpaceBar(
         background: Container(
-          color: AppColors.cardBg,
+          color: context.palette.cardBg,
           child: Stack(
             fit: StackFit.expand,
             children: [
@@ -392,7 +644,7 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
-                      colors: [Colors.transparent, AppColors.background],
+                      colors: [Colors.transparent, context.palette.background],
                     ),
                   ),
                 ),
@@ -413,8 +665,8 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         color: i == 0
-                            ? AppColors.primary
-                            : AppColors.textTertiary,
+                            ? context.palette.primary
+                            : context.palette.textTertiary,
                       ),
                     ),
                   ),
@@ -427,7 +679,7 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
       actions: [
         IconButton(
           onPressed: () => _showOrdersSheet(context),
-          icon: const Icon(Icons.list_rounded),
+          icon: Icon(Icons.list_rounded),
           tooltip: OrganizationUiCopy.ordersTooltip(
             widget.sto.businessKindLabel,
           ),
@@ -451,17 +703,23 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
                 ref
                     .watch(effectiveFavoriteStoIdsProvider)
                     .contains(widget.sto.id)
-                ? AppColors.error
-                : AppColors.textPrimary,
+                ? context.palette.error
+                : context.palette.textPrimary,
           ),
         ),
-        IconButton(onPressed: () {}, icon: const Icon(Icons.share_rounded)),
+        IconButton(
+          onPressed: _openChatWithOrganization,
+          icon: Icon(Icons.chat_bubble_outline_rounded),
+          tooltip: 'Написать',
+        ),
       ],
     );
   }
 
   Widget _buildContent(List<STOService> services, List<STOPackage> packages) {
     final sto = widget.sto;
+    final filteredServices = _filterServicesForSearch(services);
+    final filteredPackages = _filterPackagesForSearch(packages, services);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(
@@ -470,13 +728,13 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
           // Название + рейтинг (с учётом отзывов пользователей)
           Text(
             sto.name,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 24,
               fontWeight: FontWeight.w700,
-              color: AppColors.textPrimary,
+              color: context.palette.textPrimary,
             ),
           ),
-          const SizedBox(height: 8),
+          SizedBox(height: 8),
           Consumer(
             builder: (context, ref, _) {
               final userReviews = ref
@@ -493,25 +751,25 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
               );
               return Row(
                 children: [
-                  const Icon(
+                  Icon(
                     Icons.star_rounded,
                     size: 18,
-                    color: AppColors.primary,
+                    color: context.palette.primary,
                   ),
-                  const SizedBox(width: 4),
+                  SizedBox(width: 4),
                   Text(
                     Formatters.rating(rating),
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
+                      color: context.palette.textPrimary,
                     ),
                   ),
                   Text(
                     ' (${Formatters.reviewCount(count)})',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 16,
-                      color: AppColors.textSecondary,
+                      color: context.palette.textSecondary,
                     ),
                   ),
                   const Spacer(),
@@ -521,7 +779,7 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
                       vertical: 4,
                     ),
                     decoration: BoxDecoration(
-                      color: (sto.isOpen ? AppColors.success : AppColors.error)
+                      color: (sto.isOpen ? context.palette.success : context.palette.error)
                           .withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(20),
                     ),
@@ -533,20 +791,20 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
                           height: 6,
                           decoration: BoxDecoration(
                             color: sto.isOpen
-                                ? AppColors.success
-                                : AppColors.error,
+                                ? context.palette.success
+                                : context.palette.error,
                             shape: BoxShape.circle,
                           ),
                         ),
-                        const SizedBox(width: 6),
+                        SizedBox(width: 6),
                         Text(
                           sto.isOpen ? 'Открыто' : 'Закрыто',
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w500,
                             color: sto.isOpen
-                                ? AppColors.success
-                                : AppColors.error,
+                                ? context.palette.success
+                                : context.palette.error,
                           ),
                         ),
                       ],
@@ -564,23 +822,23 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
                 sto.schedulingMode == 'bay_based'
                     ? OrganizationUiCopy.schedulingBaySubtitle()
                     : OrganizationUiCopy.schedulingStaffSubtitle(),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 12,
                   height: 1.35,
-                  color: AppColors.textTertiary,
+                  color: context.palette.textTertiary,
                 ),
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          SizedBox(height: 16),
 
           // Info rows
-          _InfoRow(
-            icon: Icons.location_on_rounded,
-            text: sto.address,
-            trailing: sto.distanceKm != null
-                ? Formatters.distance(sto.distanceKm!)
-                : null,
+          LocationPreviewCard(
+            latitude: sto.latitude,
+            longitude: sto.longitude,
+            staticAddress: sto.address,
+            distanceTrailing:
+                sto.distanceKm != null ? Formatters.distance(sto.distanceKm!) : null,
           ),
           if (sto.workingHours != null)
             _InfoRow(icon: Icons.access_time_rounded, text: sto.workingHours!),
@@ -589,7 +847,7 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
               icon: Icons.phone_rounded,
               text: Formatters.phone(sto.phone!),
             ),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
 
           // Specializations
           Wrap(
@@ -603,22 +861,22 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: AppColors.nestedBg,
+                      color: context.palette.nestedBg,
                       borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: AppColors.border),
+                      border: Border.all(color: context.palette.border),
                     ),
                     child: Text(
                       s,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 13,
-                        color: AppColors.textPrimary,
+                        color: context.palette.textPrimary,
                       ),
                     ),
                   ),
                 )
                 .toList(),
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
 
           // Action buttons
           Row(
@@ -628,59 +886,89 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
                 label: 'Позвонить',
                 onTap: _openCall,
               ),
-              const SizedBox(width: 8),
+              SizedBox(width: 8),
               _ActionChip(
                 icon: Icons.directions_rounded,
                 label: 'Маршрут',
                 onTap: _openRoute,
               ),
-              const SizedBox(width: 8),
+              SizedBox(width: 8),
               _ActionChip(
-                icon: Icons.share_rounded,
-                label: 'Поделиться',
-                onTap: () {},
+                icon: Icons.chat_bubble_outline_rounded,
+                label: 'Написать',
+                onTap: _openChatWithOrganization,
               ),
             ],
           ),
 
-          const SizedBox(height: 24),
+          SizedBox(height: 24),
 
           // Услуги
-          const Text(
+          Text(
             'Услуги',
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w600,
-              color: AppColors.textPrimary,
+              color: context.palette.textPrimary,
             ),
           ),
-          const SizedBox(height: 4),
+          SizedBox(height: 4),
           Text(
             'Выберите список услуг или готовый комплекс',
-            style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
+            style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
           ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              ChoiceChip(
-                label: const Text('Список'),
-                selected: !_showPackages,
-                onSelected: (_) => setState(() => _showPackages = false),
-              ),
-              const SizedBox(width: 8),
-              ChoiceChip(
-                label: const Text('Комплексы'),
-                selected: _showPackages,
-                onSelected: (_) => setState(() => _showPackages = true),
-              ),
-            ],
+          SizedBox(height: 10),
+          ServicesPackagesToggle(
+            showPackages: _showPackages,
+            onToggle: () => setState(() {
+              _showPackages = !_showPackages;
+              if (_showPackages) {
+                _selectedServices.clear();
+              }
+            }),
           ),
-          const SizedBox(height: 12),
+          if (services.isNotEmpty) ...[
+            SizedBox(height: 10),
+            TextField(
+              controller: _serviceSearchController,
+              textInputAction: TextInputAction.search,
+              style: TextStyle(fontSize: 15, color: context.palette.textPrimary),
+              decoration: InputDecoration(
+                hintText: 'Поиск услуги',
+                hintStyle: TextStyle(color: context.palette.textTertiary),
+                prefixIcon: Icon(Icons.search_rounded, size: 22, color: context.palette.textTertiary),
+                suffixIcon: _serviceSearchController.text.isNotEmpty
+                    ? IconButton(
+                        tooltip: 'Очистить',
+                        onPressed: () {
+                          _serviceSearchController.clear();
+                          setState(() {});
+                        },
+                        icon: Icon(Icons.clear_rounded, size: 20, color: context.palette.textTertiary),
+                      )
+                    : null,
+                filled: true,
+                fillColor: context.palette.nestedBg,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: context.palette.border),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: context.palette.primary, width: 1.2),
+                ),
+                isDense: true,
+              ),
+            ),
+          ],
+          SizedBox(height: 12),
           _showPackages
-              ? _buildPackagesList(services, packages)
-              : _buildServicesList(services),
+              ? _buildPackagesList(services, filteredPackages)
+              : _buildServicesList(filteredServices),
 
-          const SizedBox(height: 24),
+          SizedBox(height: 24),
 
           // Отзывы
           _buildReviewsSection(),
@@ -694,16 +982,17 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
     List<STOPackage> packages,
   ) {
     if (packages.isEmpty) {
+      final hasQuery = _serviceSearchController.text.trim().isNotEmpty;
       return Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: AppColors.cardBg,
+          color: context.palette.cardBg,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppColors.border),
+          border: Border.all(color: context.palette.border),
         ),
-        child: const Text(
-          'У сервиса пока нет комплексов',
-          style: TextStyle(color: AppColors.textSecondary),
+        child: Text(
+          hasQuery ? 'Ничего не найдено' : 'У сервиса пока нет комплексов',
+          style: TextStyle(color: context.palette.textSecondary),
         ),
       );
     }
@@ -720,74 +1009,125 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
           (sum, s) => sum + s.effectivePriceKopecks(bodyType),
         );
         final saving = regular - p.packagePriceKopecks;
-        return Card(
-          margin: const EdgeInsets.only(bottom: 10),
-          child: ExpansionTile(
-            title: Text(p.name),
-            subtitle: Text(
-              '${Formatters.money(p.packagePriceKopecks)} • Экономия: ${saving > 0 ? Formatters.money(saving) : '—'}',
-            ),
-            trailing: TextButton(
-              onPressed: () {
-                setState(() {
-                  for (final s in included) {
-                    _selectedServices.add(s.id);
-                  }
+        final dur = _packageDurationMinutes(p, services, bodyType);
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Material(
+            color: context.palette.cardBg,
+            borderRadius: BorderRadius.circular(12),
+            child: InkWell(
+              onTap: () {
+                HapticFeedback.selectionClick();
+                final ids = _packageBookingServiceIds(p, const []);
+                pushCupertino<String?>(
+                  context,
+                  _BookingScreen(
+                    sto: widget.sto,
+                    selectedServiceIds: ids,
+                    cars: ref.read(carsProvider).valueOrNull ?? [],
+                    packageContext: p,
+                    initialAddonServiceIds: const [],
+                  ),
+                ).then((msg) {
+                  if (msg == null || msg.isEmpty) return;
+                  _showBookingCreatedSnackBar(msg);
                 });
               },
-              child: const Text('Выбрать'),
-            ),
-            children: [
-              ...included.map(
-                (s) => ListTile(
-                  dense: true,
-                  title: Text(s.name),
-                  subtitle: Text(
-                    '⏱ ${Formatters.durationMinutes(s.effectiveDurationMinutes(bodyType))}',
-                  ),
-                  trailing: Text(
-                    Formatters.money(s.effectivePriceKopecks(bodyType)),
-                  ),
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: context.palette.border),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            p.name,
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              color: context.palette.textPrimary,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          Formatters.money(p.packagePriceKopecks),
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: context.palette.primary,
+                          ),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      '≈ ${Formatters.durationMinutes(dur)}'
+                      '${saving > 0 ? ' · −${Formatters.money(saving)} к раздельной цене' : ''}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: context.palette.textSecondary,
+                        height: 1.2,
+                      ),
+                    ),
+                    if (included.isNotEmpty) ...[
+                      SizedBox(height: 8),
+                      ...included.map(
+                        (s) => Padding(
+                          padding: const EdgeInsets.only(bottom: 3),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  s.name,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    height: 1.2,
+                                    color: context.palette.textPrimary,
+                                  ),
+                                ),
+                              ),
+                              SizedBox(width: 8),
+                              Text(
+                                Formatters.money(
+                                  s.effectivePriceKopecks(bodyType),
+                                ),
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  height: 1.2,
+                                  color: context.palette.textSecondary,
+                                ),
+                              ),
+                              SizedBox(width: 6),
+                              Text(
+                                Formatters.durationMinutes(
+                                  s.effectiveDurationMinutes(bodyType),
+                                ),
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  height: 1.2,
+                                  color: context.palette.textTertiary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
-              if (p.addons.isNotEmpty)
-                const Padding(
-                  padding: EdgeInsets.only(
-                    left: 16,
-                    right: 16,
-                    top: 8,
-                    bottom: 4,
-                  ),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'Доп. услуги',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                ),
-              ...p.addons.map((a) {
-                final s = byId[a.serviceId];
-                if (s == null) return const SizedBox.shrink();
-                final selected = _selectedServices.contains(s.id);
-                return CheckboxListTile(
-                  dense: true,
-                  value: selected,
-                  title: Text(s.name),
-                  subtitle: Text('+${Formatters.money(a.extraPriceKopecks)}'),
-                  onChanged: (v) {
-                    setState(() {
-                      if (v == true) {
-                        _selectedServices.add(s.id);
-                      } else {
-                        _selectedServices.remove(s.id);
-                      }
-                    });
-                  },
-                );
-              }),
-              const SizedBox(height: 6),
-            ],
+            ),
           ),
         );
       }).toList(),
@@ -795,6 +1135,22 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
   }
 
   Widget _buildServicesList(List<STOService> services) {
+    if (services.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+        decoration: BoxDecoration(
+          color: context.palette.cardBg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: context.palette.border),
+        ),
+        child: Text(
+          'Ничего не найдено',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
+        ),
+      );
+    }
     final grouped = <String, List<STOService>>{};
     for (final s in services) {
       grouped.putIfAbsent(s.category, () => []).add(s);
@@ -809,30 +1165,33 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
               padding: const EdgeInsets.only(top: 8, bottom: 8),
               child: Text(
                 entry.key,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
-                  color: AppColors.textSecondary,
+                  color: context.palette.textSecondary,
                 ),
               ),
             ),
             Container(
               decoration: BoxDecoration(
-                color: AppColors.cardBg,
+                color: context.palette.cardBg,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.border),
+                border: Border.all(color: context.palette.border),
               ),
               child: Column(
                 children: entry.value.map((service) {
                   final isSelected = _selectedServices.contains(service.id);
-                  return GestureDetector(
+                  return KeyedSubtree(
+                    key: _keyForServiceRow(service.id),
+                    child: GestureDetector(
                     onTap: () {
                       HapticFeedback.selectionClick();
                       setState(() {
-                        if (isSelected)
+                        if (isSelected) {
                           _selectedServices.remove(service.id);
-                        else
+                        } else {
                           _selectedServices.add(service.id);
+                        }
                       });
                     },
                     behavior: HitTestBehavior.opaque,
@@ -844,7 +1203,7 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
                       decoration: BoxDecoration(
                         border: Border(
                           bottom: BorderSide(
-                            color: AppColors.border,
+                            color: context.palette.border,
                             width: 0.5,
                           ),
                         ),
@@ -857,25 +1216,25 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
                             height: 22,
                             decoration: BoxDecoration(
                               color: isSelected
-                                  ? AppColors.primary
+                                  ? context.palette.primary
                                   : Colors.transparent,
                               borderRadius: BorderRadius.circular(6),
                               border: Border.all(
                                 color: isSelected
-                                    ? AppColors.primary
-                                    : AppColors.textTertiary,
+                                    ? context.palette.primary
+                                    : context.palette.textTertiary,
                                 width: isSelected ? 0 : 1.5,
                               ),
                             ),
                             child: isSelected
-                                ? const Icon(
+                                ? Icon(
                                     Icons.check,
                                     size: 14,
-                                    color: Color(0xFF0D0D0D),
+                                    color: context.palette.onAccent,
                                   )
                                 : null,
                           ),
-                          const SizedBox(width: 12),
+                          SizedBox(width: 12),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -885,21 +1244,21 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
                                   style: TextStyle(
                                     fontSize: 14,
                                     color: isSelected
-                                        ? AppColors.textPrimary
-                                        : AppColors.textSecondary,
+                                        ? context.palette.textPrimary
+                                        : context.palette.textSecondary,
                                     fontWeight: isSelected
                                         ? FontWeight.w500
                                         : FontWeight.w400,
                                   ),
                                 ),
-                                const SizedBox(height: 2),
+                                SizedBox(height: 2),
                                 Text(
                                   '⏱ ${Formatters.durationMinutes(service.effectiveDurationMinutes(_selectedCarBodyType()))}',
                                   style: TextStyle(
                                     fontSize: 12,
                                     color: isSelected
-                                        ? AppColors.textSecondary
-                                        : AppColors.textTertiary,
+                                        ? context.palette.textSecondary
+                                        : context.palette.textTertiary,
                                   ),
                                 ),
                               ],
@@ -915,13 +1274,14 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
                               fontSize: 14,
                               fontWeight: FontWeight.w600,
                               color: isSelected
-                                  ? AppColors.primary
-                                  : AppColors.textSecondary,
+                                  ? context.palette.primary
+                                  : context.palette.textSecondary,
                             ),
                           ),
                         ],
                       ),
                     ),
+                  ),
                   );
                 }).toList(),
               ),
@@ -946,33 +1306,33 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
               children: [
                 Text(
                   'Отзывы${userReviews.isEmpty ? '' : ' (${userReviews.length})'}',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
+                    color: context.palette.textPrimary,
                   ),
                 ),
                 TextButton.icon(
                   onPressed: () => _showAddReviewDialog(context, ref, sto),
-                  icon: const Icon(
+                  icon: Icon(
                     Icons.add_rounded,
                     size: 18,
-                    color: AppColors.primary,
+                    color: context.palette.primary,
                   ),
-                  label: const Text(
+                  label: Text(
                     'Написать отзыв',
-                    style: TextStyle(fontSize: 14, color: AppColors.primary),
+                    style: TextStyle(fontSize: 14, color: context.palette.primary),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            SizedBox(height: 8),
             if (userReviews.isEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 child: Text(
                   'Пока нет отзывов. Будьте первым!',
-                  style: TextStyle(fontSize: 14, color: AppColors.textTertiary),
+                  style: TextStyle(fontSize: 14, color: context.palette.textTertiary),
                 ),
               )
             else
@@ -1012,39 +1372,39 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
               24,
               MediaQuery.of(context).padding.bottom + 24,
             ),
-            decoration: const BoxDecoration(
-              color: AppColors.cardBg,
+            decoration: BoxDecoration(
+              color: context.palette.cardBg,
               borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                Text(
                   'Написать отзыв',
                   style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
+                    color: context.palette.textPrimary,
                   ),
                 ),
-                const SizedBox(height: 8),
+                SizedBox(height: 8),
                 Text(
                   sto.name,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
-                    color: AppColors.textSecondary,
+                    color: context.palette.textSecondary,
                   ),
                 ),
-                const SizedBox(height: 16),
-                const Text(
+                SizedBox(height: 16),
+                Text(
                   'Оценка',
                   style: TextStyle(
                     fontSize: 13,
-                    color: AppColors.textSecondary,
+                    color: context.palette.textSecondary,
                   ),
                 ),
-                const SizedBox(height: 6),
+                SizedBox(height: 6),
                 Row(
                   children: List.generate(5, (i) {
                     final star = i + 1;
@@ -1057,59 +1417,59 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
                               ? Icons.star_rounded
                               : Icons.star_outline_rounded,
                           size: 36,
-                          color: AppColors.primary,
+                          color: context.palette.primary,
                         ),
                       ),
                     );
                   }),
                 ),
-                const SizedBox(height: 16),
-                const Text(
+                SizedBox(height: 16),
+                Text(
                   'Текст отзыва',
                   style: TextStyle(
                     fontSize: 13,
-                    color: AppColors.textSecondary,
+                    color: context.palette.textSecondary,
                   ),
                 ),
-                const SizedBox(height: 6),
+                SizedBox(height: 6),
                 TextField(
                   controller: textController,
                   maxLines: 4,
                   decoration: InputDecoration(
                     hintText: 'Опишите ваш опыт...',
                     filled: true,
-                    fillColor: AppColors.background,
+                    fillColor: context.palette.background,
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: AppColors.border),
+                      borderSide: BorderSide(color: context.palette.border),
                     ),
                     contentPadding: const EdgeInsets.symmetric(
                       horizontal: 16,
                       vertical: 14,
                     ),
                   ),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
-                    color: AppColors.textPrimary,
+                    color: context.palette.textPrimary,
                   ),
                 ),
-                const SizedBox(height: 24),
+                SizedBox(height: 24),
                 Row(
                   children: [
                     Expanded(
                       child: OutlinedButton(
                         onPressed: () => Navigator.pop(ctx),
-                        child: const Text('Отмена'),
+                        child: Text('Отмена'),
                       ),
                     ),
-                    const SizedBox(width: 12),
+                    SizedBox(width: 12),
                     Expanded(
                       flex: 2,
                       child: SizedBox(
                         height: 48,
                         child: DecoratedBox(
                           decoration: BoxDecoration(
-                            gradient: AppColors.primaryGradient,
+                            gradient: context.palette.primaryGradient,
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: ElevatedButton(
@@ -1117,9 +1477,9 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
                               final text = textController.text.trim();
                               if (text.isEmpty) {
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Введите текст отзыва'),
-                                    backgroundColor: AppColors.error,
+                                  SnackBar(
+                                    content: const Text('Введите текст отзыва'),
+                                    backgroundColor: context.palette.error,
                                   ),
                                 );
                                 return;
@@ -1139,9 +1499,9 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
                               ref.read(stoReviewsProvider.notifier).add(review);
                               Navigator.pop(ctx);
                               ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Отзыв добавлен'),
-                                  backgroundColor: AppColors.success,
+                                SnackBar(
+                                  content: const Text('Отзыв добавлен'),
+                                  backgroundColor: context.palette.success,
                                 ),
                               );
                             },
@@ -1152,11 +1512,11 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
                                 borderRadius: BorderRadius.circular(12),
                               ),
                             ),
-                            child: const Text(
+                            child: Text(
                               'Отправить',
                               style: TextStyle(
                                 fontWeight: FontWeight.w600,
-                                color: Color(0xFF0D0D0D),
+                                color: context.palette.onAccent,
                               ),
                             ),
                           ),
@@ -1182,8 +1542,8 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
         MediaQuery.of(context).padding.bottom + 12,
       ),
       decoration: BoxDecoration(
-        color: AppColors.cardBg,
-        border: const Border(top: BorderSide(color: AppColors.border)),
+        color: context.palette.cardBg,
+        border: Border(top: BorderSide(color: context.palette.border)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.3),
@@ -1201,17 +1561,17 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
               children: [
                 Text(
                   '${_selectedServices.length} услуг · ≈ ${Formatters.durationMinutes(_selectedDuration(services))}',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
-                    color: AppColors.textSecondary,
+                    color: context.palette.textSecondary,
                   ),
                 ),
                 Text(
                   Formatters.money(_selectedTotal(services)),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w700,
-                    color: AppColors.primary,
+                    color: context.palette.primary,
                     fontFamily: 'monospace',
                   ),
                 ),
@@ -1223,11 +1583,11 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
             width: 160,
             child: DecoratedBox(
               decoration: BoxDecoration(
-                gradient: AppColors.primaryGradient,
+                gradient: context.palette.primaryGradient,
                 borderRadius: BorderRadius.circular(12),
                 boxShadow: [
                   BoxShadow(
-                    color: AppColors.primary.withValues(alpha: 0.3),
+                    color: context.palette.primary.withValues(alpha: 0.3),
                     blurRadius: 12,
                     offset: const Offset(0, 4),
                   ),
@@ -1235,14 +1595,17 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
               ),
               child: ElevatedButton(
                 onPressed: () {
-                  pushCupertino(
+                  pushCupertino<String?>(
                     context,
                     _BookingScreen(
                       sto: widget.sto,
-                      selectedServiceIds: _selectedServices,
+                      selectedServiceIds: _selectedServices.toList(),
                       cars: ref.watch(carsProvider).valueOrNull ?? [],
                     ),
-                  );
+                  ).then((msg) {
+                    if (msg == null || msg.isEmpty) return;
+                    _showBookingCreatedSnackBar(msg);
+                  });
                 },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.transparent,
@@ -1251,12 +1614,12 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                 ),
-                child: const Text(
+                child: Text(
                   'Записаться',
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
-                    color: Color(0xFF0D0D0D),
+                    color: context.palette.onAccent,
                   ),
                 ),
               ),
@@ -1282,23 +1645,23 @@ class _InfoRow extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(
         children: [
-          Icon(icon, size: 18, color: AppColors.textTertiary),
-          const SizedBox(width: 10),
+          Icon(icon, size: 18, color: context.palette.textTertiary),
+          SizedBox(width: 10),
           Expanded(
             child: Text(
               text,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 14,
-                color: AppColors.textPrimary,
+                color: context.palette.textPrimary,
               ),
             ),
           ),
           if (trailing != null)
             Text(
               trailing!,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 14,
-                color: AppColors.textSecondary,
+                color: context.palette.textSecondary,
               ),
             ),
         ],
@@ -1325,20 +1688,20 @@ class _ActionChip extends StatelessWidget {
         child: Container(
           height: 44,
           decoration: BoxDecoration(
-            color: AppColors.cardBg,
+            color: context.palette.cardBg,
             borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: AppColors.border),
+            border: Border.all(color: context.palette.border),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 16, color: AppColors.primary),
-              const SizedBox(width: 6),
+              Icon(icon, size: 16, color: context.palette.primary),
+              SizedBox(width: 6),
               Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 13,
-                  color: AppColors.textPrimary,
+                  color: context.palette.textPrimary,
                 ),
               ),
             ],
@@ -1364,9 +1727,9 @@ class _ReviewCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.cardBg,
+        color: context.palette.cardBg,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: context.palette.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1377,37 +1740,37 @@ class _ReviewCard extends StatelessWidget {
                 width: 36,
                 height: 36,
                 decoration: BoxDecoration(
-                  color: AppColors.nestedBg,
+                  color: context.palette.nestedBg,
                   shape: BoxShape.circle,
                 ),
                 child: Center(
                   child: Text(
                     name[0],
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
+                      color: context.palette.textPrimary,
                     ),
                   ),
                 ),
               ),
-              const SizedBox(width: 10),
+              SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       name,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
+                        color: context.palette.textPrimary,
                       ),
                     ),
                     Text(
                       date,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
-                        color: AppColors.textTertiary,
+                        color: context.palette.textTertiary,
                       ),
                     ),
                   ],
@@ -1422,18 +1785,18 @@ class _ReviewCard extends StatelessWidget {
                         ? Icons.star_rounded
                         : Icons.star_outline_rounded,
                     size: 16,
-                    color: AppColors.primary,
+                    color: context.palette.primary,
                   ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          SizedBox(height: 10),
           Text(
             text,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 14,
-              color: AppColors.textSecondary,
+              color: context.palette.textSecondary,
             ),
           ),
         ],
@@ -1446,12 +1809,17 @@ class _ReviewCard extends StatelessWidget {
 
 class _BookingScreen extends ConsumerStatefulWidget {
   final STO sto;
-  final Set<String> selectedServiceIds;
+  final List<String> selectedServiceIds;
   final List<Car> cars;
+  final STOPackage? packageContext;
+  final List<String> initialAddonServiceIds;
+
   const _BookingScreen({
     required this.sto,
     required this.selectedServiceIds,
     required this.cars,
+    this.packageContext,
+    this.initialAddonServiceIds = const [],
   });
 
   @override
@@ -1472,6 +1840,7 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
   bool _isSubmitting = false;
   bool _provideVehicleData = false;
   bool _vehicleDetailsExpanded = false;
+  late Set<String> _packageAddonIds;
 
   List<String> get _timeSlots {
     final r = _slotsResult;
@@ -1483,17 +1852,51 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
     );
   }
 
-  List<STOService> get _selectedServices {
-    final services =
-        ref.watch(stoServicesProvider(widget.sto.id)).valueOrNull ?? [];
-    return services
-        .where((s) => widget.selectedServiceIds.contains(s.id))
-        .toList();
+  String? _bodyTypeForCar() {
+    final cars = widget.cars;
+    if (_selectedCarIndex < 0 || _selectedCarIndex >= cars.length) return null;
+    return cars[_selectedCarIndex].bodyType;
   }
 
-  int get _total => _selectedServices.fold(0, (sum, s) => sum + s.priceKopecks);
-  int get _totalDuration =>
-      _selectedServices.fold(0, (sum, s) => sum + s.durationMinutes);
+  List<String> get _allServiceIdsForSlots {
+    final pkg = widget.packageContext;
+    if (pkg != null) return _packageBookingServiceIds(pkg, _packageAddonIds);
+    return widget.selectedServiceIds;
+  }
+
+  List<STOService> get _selectedServicesList {
+    final services =
+        ref.watch(stoServicesProvider(widget.sto.id)).valueOrNull ?? [];
+    final ids = _allServiceIdsForSlots.toSet();
+    return services.where((s) => ids.contains(s.id)).toList();
+  }
+
+  int get _total {
+    final pkg = widget.packageContext;
+    final body = _bodyTypeForCar();
+    if (pkg != null) {
+      return _packageBookingTotalKopecks(pkg, _packageAddonIds);
+    }
+    return _selectedServicesList.fold(
+      0,
+      (sum, s) => sum + s.effectivePriceKopecks(body),
+    );
+  }
+
+  int get _totalDuration {
+    final pkg = widget.packageContext;
+    final services =
+        ref.watch(stoServicesProvider(widget.sto.id)).valueOrNull ?? [];
+    final body = _bodyTypeForCar();
+    if (pkg != null) {
+      return _packageDurationMinutes(pkg, services, body) +
+          _packageAddonsExtraDuration(pkg, _packageAddonIds, services, body);
+    }
+    return _selectedServicesList.fold(
+      0,
+      (sum, s) => sum + s.effectiveDurationMinutes(body),
+    );
+  }
 
   bool get _canConfirmBooking {
     final starts = _slotsResult?.startTimes ?? [];
@@ -1564,8 +1967,8 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
     final firstStart = opts.first.startIsoUtc;
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: AppColors.cardBg,
-      shape: const RoundedRectangleBorder(
+      backgroundColor: context.palette.cardBg,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (ctx) => SafeArea(
@@ -1573,7 +1976,7 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Padding(
+            Padding(
               padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
               child: Text(
                 'Кто выполнит заказ?',
@@ -1588,9 +1991,9 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
                 shrinkWrap: true,
                 children: [
                   ListTile(
-                    leading: const Icon(Icons.person_search_rounded),
-                    title: const Text('Кто угодно из свободных'),
-                    subtitle: const Text('Мастера назначит сервис'),
+                    leading: Icon(Icons.person_search_rounded),
+                    title: Text('Кто угодно из свободных'),
+                    subtitle: Text('Мастера назначит сервис'),
                     onTap: () {
                       Navigator.pop(ctx);
                       apply(
@@ -1607,13 +2010,13 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
                   const Divider(height: 1),
                   ...opts.map(
                     (c) => ListTile(
-                      leading: const Icon(Icons.person_rounded),
+                      leading: Icon(Icons.person_rounded),
                       title: Text(
                         c.masterName.trim().isNotEmpty
                             ? c.masterName
                             : 'Специалист',
                       ),
-                      trailing: const Icon(Icons.chevron_right_rounded),
+                      trailing: Icon(Icons.chevron_right_rounded),
                       onTap: () {
                         Navigator.pop(ctx);
                         apply(c);
@@ -1623,7 +2026,7 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
                 ],
               ),
             ),
-            const SizedBox(height: 8),
+            SizedBox(height: 8),
           ],
         ),
       ),
@@ -1682,7 +2085,7 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
     final res = _slotsResult;
     if (res == null || res.startTimes.isNotEmpty) return null;
     if (res.requiredSkills.isEmpty) return null;
-    final servicesNeedingSkill = _selectedServices
+    final servicesNeedingSkill = _selectedServicesList
         .where(
           (s) =>
               s.requiredSkill != null &&
@@ -1698,6 +2101,9 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
   @override
   void initState() {
     super.initState();
+    _packageAddonIds = widget.packageContext != null
+        ? Set<String>.from(widget.initialAddonServiceIds)
+        : <String>{};
     WidgetsBinding.instance.addObserver(this);
     final selectedId = ref.read(selectedCarIdProvider);
     if (selectedId != null && widget.cars.isNotEmpty) {
@@ -1732,7 +2138,7 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
     final result = await repo.getAvailableSlots(
       widget.sto.id,
       _selectedDate,
-      widget.selectedServiceIds.toList(),
+      _allServiceIdsForSlots,
     );
     if (!mounted) return;
     result.when(
@@ -1762,11 +2168,22 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
 
   @override
   Widget build(BuildContext context) {
+    // Прайс мог прийти после первого кадра — перезапрашиваем слоты с верной длительностью и раскраской «окон».
+    ref.listen<AsyncValue<List<STOService>>>(stoServicesProvider(widget.sto.id), (prev, next) {
+      final nextList = next.valueOrNull;
+      if (nextList == null || nextList.isEmpty) return;
+      final prevList = prev?.valueOrNull;
+      if (prevList != null && prevList.isNotEmpty) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _loadSlots();
+      });
+    });
+
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       appBar: AppBar(
-        backgroundColor: AppColors.background,
-        title: const Text(
+        backgroundColor: context.palette.background,
+        title: Text(
           'Запись на сервис',
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
         ),
@@ -1781,64 +2198,34 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
                 // Сервис
                 _buildSectionLabel('Сервис'),
                 _buildSTOInfo(),
-                const SizedBox(height: 20),
+                SizedBox(height: 20),
 
-                // Выбранные услуги
-                _buildSectionLabel('Выбранные услуги'),
+                _buildSectionLabel(
+                  widget.packageContext != null ? 'Комплекс' : 'Выбранные услуги',
+                ),
                 _buildSelectedServices(),
-                const SizedBox(height: 20),
+                if (widget.packageContext != null &&
+                    widget.packageContext!.addons.isNotEmpty) ...[
+                  SizedBox(height: 14),
+                  _buildPackageAddonSection(),
+                ],
+                SizedBox(height: 20),
 
                 // Автомобиль
                 _buildSectionLabel('Автомобиль'),
                 _buildCarSelector(),
-                const SizedBox(height: 12),
-                // Предоставить данные автомобиля сервису
-                Material(
-                  color: AppColors.cardBg,
-                  borderRadius: BorderRadius.circular(12),
-                  child: InkWell(
-                    onTap: () => setState(
-                      () => _provideVehicleData = !_provideVehicleData,
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              'Предоставить данные автомобиля сервису',
-                              style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                                color: AppColors.textPrimary,
-                              ),
-                            ),
-                          ),
-                          Switch(
-                            value: _provideVehicleData,
-                            onChanged: (v) =>
-                                setState(() => _provideVehicleData = v),
-                            activeColor: AppColors.primary,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
+                SizedBox(height: 12),
+                _buildVehicleDataConsentTile(),
                 if (_provideVehicleData) ...[
-                  const SizedBox(height: 8),
+                  SizedBox(height: 8),
                   _buildVehicleDataCard(),
                 ],
-                const SizedBox(height: 20),
+                SizedBox(height: 20),
 
                 // Дата
                 _buildSectionLabel('Дата'),
                 _buildDateSelector(),
-                const SizedBox(height: 20),
+                SizedBox(height: 20),
 
                 // Время (только начала, где помещается весь блок _totalDuration)
                 _buildSectionLabel('Время'),
@@ -1848,10 +2235,10 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
                     child: Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: AppColors.error.withValues(alpha: 0.12),
+                        color: context.palette.error.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(10),
                         border: Border.all(
-                          color: AppColors.error.withValues(alpha: 0.5),
+                          color: context.palette.error.withValues(alpha: 0.5),
                         ),
                       ),
                       child: Row(
@@ -1860,15 +2247,15 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
                           Icon(
                             Icons.info_outline_rounded,
                             size: 20,
-                            color: AppColors.error,
+                            color: context.palette.error,
                           ),
-                          const SizedBox(width: 8),
+                          SizedBox(width: 8),
                           Expanded(
                             child: Text(
                               _noMasterWarning!,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 13,
-                                color: AppColors.textPrimary,
+                                color: context.palette.textPrimary,
                               ),
                             ),
                           ),
@@ -1881,43 +2268,34 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
                     padding: const EdgeInsets.only(bottom: 6),
                     child: Text(
                       'Нужно окно ${Formatters.durationMinutes(_totalDuration)} подряд. Занятые слоты недоступны.',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
-                        color: AppColors.textSecondary,
+                        color: context.palette.textSecondary,
                       ),
                     ),
                   ),
                 _buildTimeSelector(),
-                const SizedBox(height: 8),
-                const Text(
-                  'Позже: можно будет разбить приём на несколько визитов в течение дня.',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: AppColors.textTertiary,
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-                const SizedBox(height: 20),
+                SizedBox(height: 20),
 
                 // Комментарий
                 _buildSectionLabel('Комментарий (необязательно)'),
                 Container(
                   decoration: BoxDecoration(
-                    color: AppColors.cardBg,
+                    color: context.palette.cardBg,
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: AppColors.border),
+                    border: Border.all(color: context.palette.border),
                   ),
                   child: TextField(
                     controller: _commentController,
                     maxLines: 3,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 14,
-                      color: AppColors.textPrimary,
+                      color: context.palette.textPrimary,
                     ),
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       hintText: 'Опишите проблему или пожелания...',
                       hintStyle: TextStyle(
-                        color: AppColors.textPlaceholder,
+                        color: context.palette.textPlaceholder,
                         fontSize: 14,
                       ),
                       border: InputBorder.none,
@@ -1940,10 +2318,65 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
       padding: const EdgeInsets.only(bottom: 8),
       child: Text(
         text,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 14,
           fontWeight: FontWeight.w600,
-          color: AppColors.textSecondary,
+          color: context.palette.textSecondary,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVehicleDataConsentTile() {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: context.palette.nestedBg.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: context.palette.border.withValues(alpha: 0.75)),
+      ),
+      child: SwitchTheme(
+        data: SwitchThemeData(
+          trackOutlineColor: WidgetStateProperty.all(Colors.transparent),
+          trackColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.selected)) {
+              return context.palette.primary.withValues(alpha: 0.35);
+            }
+            return context.palette.textMuted.withValues(alpha: 0.25);
+          }),
+          thumbColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.selected)) {
+              return context.palette.primary;
+            }
+            return context.palette.textMuted;
+          }),
+        ),
+        child: SwitchListTile(
+          contentPadding: const EdgeInsetsDirectional.only(start: 14, end: 10),
+          visualDensity: VisualDensity.compact,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          title: Text(
+            'Передать данные авто сервису',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: context.palette.textPrimary,
+            ),
+          ),
+          subtitle: Text(
+            'VIN, пробег и параметры выбранной машины',
+            style: TextStyle(
+              fontSize: 12,
+              height: 1.3,
+              color: context.palette.textSecondary.withValues(alpha: 0.92),
+            ),
+          ),
+          secondary: Icon(
+            Icons.directions_car_filled_outlined,
+            size: 22,
+            color: context.palette.primary.withValues(alpha: 0.75),
+          ),
+          value: _provideVehicleData,
+          onChanged: (v) => setState(() => _provideVehicleData = v),
         ),
       ),
     );
@@ -1953,9 +2386,9 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.cardBg,
+        color: context.palette.cardBg,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: context.palette.border),
       ),
       child: Row(
         children: [
@@ -1963,38 +2396,40 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
             width: 48,
             height: 48,
             decoration: BoxDecoration(
-              color: AppColors.nestedBg,
+              color: context.palette.nestedBg,
               borderRadius: BorderRadius.circular(10),
             ),
             child: Center(
               child: Text(
                 widget.sto.name[0],
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.w700,
-                  color: AppColors.primary,
+                  color: context.palette.primary,
                 ),
               ),
             ),
           ),
-          const SizedBox(width: 12),
+          SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   widget.sto.name,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
+                    color: context.palette.textPrimary,
                   ),
                 ),
-                Text(
-                  widget.sto.address,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    color: AppColors.textSecondary,
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: LocationPreviewCard(
+                    compact: true,
+                    latitude: widget.sto.latitude,
+                    longitude: widget.sto.longitude,
+                    staticAddress: widget.sto.address,
                   ),
                 ),
               ],
@@ -2006,14 +2441,128 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
   }
 
   Widget _buildSelectedServices() {
+    final pkg = widget.packageContext;
+    final services =
+        ref.watch(stoServicesProvider(widget.sto.id)).valueOrNull ?? [];
+    final body = _bodyTypeForCar();
+
+    if (pkg != null) {
+      final dur = _packageDurationMinutes(pkg, services, body);
+      final byId = {for (final s in services) s.id: s};
+      final includedRows = <Widget>[];
+      for (final id in pkg.includedServiceIds) {
+        final s = byId[id];
+        if (s == null) continue;
+        includedRows.add(
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.check_circle_outline_rounded,
+                  size: 18,
+                  color: context.palette.success.withValues(alpha: 0.85),
+                ),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        s.name,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: context.palette.textPrimary,
+                        ),
+                      ),
+                      Text(
+                        Formatters.durationMinutes(s.effectiveDurationMinutes(body)),
+                        style: TextStyle(fontSize: 12, color: context.palette.textSecondary),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+      return Container(
+        decoration: BoxDecoration(
+          color: context.palette.cardBg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: context.palette.border),
+        ),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.inventory_2_outlined, size: 20, color: context.palette.primary),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        pkg.name,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: context.palette.textPrimary,
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        '≈ ${Formatters.durationMinutes(dur)} · состав ниже',
+                        style: TextStyle(fontSize: 12, color: context.palette.textSecondary),
+                      ),
+                    ],
+                  ),
+                ),
+                Text(
+                  Formatters.money(pkg.packagePriceKopecks),
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: context.palette.primary,
+                  ),
+                ),
+              ],
+            ),
+            if (includedRows.isNotEmpty) ...[
+              Padding(
+                padding: const EdgeInsets.only(top: 4, bottom: 4),
+                child: Divider(height: 1, color: context.palette.border.withValues(alpha: 0.75)),
+              ),
+              Text(
+                'Входит в комплекс',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.4,
+                  color: context.palette.textTertiary,
+                ),
+              ),
+              ...includedRows,
+            ],
+          ],
+        ),
+      );
+    }
+
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.cardBg,
+        color: context.palette.cardBg,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: context.palette.border),
       ),
       child: Column(
-        children: _selectedServices
+        children: _selectedServicesList
             .map(
               (s) => Padding(
                 padding: const EdgeInsets.symmetric(
@@ -2022,39 +2571,39 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
                 ),
                 child: Row(
                   children: [
-                    const Icon(
+                    Icon(
                       Icons.check_circle_rounded,
                       size: 18,
-                      color: AppColors.primary,
+                      color: context.palette.primary,
                     ),
-                    const SizedBox(width: 10),
+                    SizedBox(width: 10),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
                             s.name,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 14,
-                              color: AppColors.textPrimary,
+                              color: context.palette.textPrimary,
                             ),
                           ),
                           Text(
-                            '⏱ ${s.durationLabel}',
-                            style: const TextStyle(
+                            '⏱ ${Formatters.durationMinutes(s.effectiveDurationMinutes(body))}',
+                            style: TextStyle(
                               fontSize: 12,
-                              color: AppColors.textSecondary,
+                              color: context.palette.textSecondary,
                             ),
                           ),
                         ],
                       ),
                     ),
                     Text(
-                      Formatters.money(s.priceKopecks),
-                      style: const TextStyle(
+                      Formatters.money(s.effectivePriceKopecks(body)),
+                      style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
+                        color: context.palette.textPrimary,
                       ),
                     ),
                   ],
@@ -2062,6 +2611,189 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
               ),
             )
             .toList(),
+      ),
+    );
+  }
+
+  Widget _buildPackageAddonSection() {
+    final pkg = widget.packageContext!;
+    final services =
+        ref.watch(stoServicesProvider(widget.sto.id)).valueOrNull ?? [];
+    final byId = {for (final s in services) s.id: s};
+    final body = _bodyTypeForCar();
+
+    final selected = <STOPackageAddon>[];
+    final rest = <STOPackageAddon>[];
+    for (final a in pkg.addons) {
+      if (_packageAddonIds.contains(a.serviceId)) {
+        selected.add(a);
+      } else {
+        rest.add(a);
+      }
+    }
+
+    void toggleAddon(String serviceId, bool wasOn) {
+      setState(() {
+        if (wasOn) {
+          _packageAddonIds.remove(serviceId);
+        } else {
+          _packageAddonIds.add(serviceId);
+        }
+      });
+      _loadSlots();
+    }
+
+    Widget addonTile(STOPackageAddon a, {required bool isOn}) {
+      final s = byId[a.serviceId];
+      if (s == null) return const SizedBox.shrink();
+      final dm = a.extraDurationMinutes > 0
+          ? a.extraDurationMinutes
+          : s.effectiveDurationMinutes(body);
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => toggleAddon(a.serviceId, isOn),
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        s.name,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: context.palette.textPrimary,
+                        ),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        '+${Formatters.money(a.extraPriceKopecks)} · +${Formatters.durationMinutes(dm)}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: context.palette.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Switch(
+                  value: isOn,
+                  onChanged: (_) => toggleAddon(a.serviceId, isOn),
+                  activeTrackColor: context.palette.primary.withValues(alpha: 0.35),
+                  thumbColor: WidgetStateProperty.resolveWith((states) {
+                    if (states.contains(WidgetState.selected)) {
+                      return context.palette.onAccent;
+                    }
+                    return context.palette.textMuted;
+                  }),
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    Widget block(String title, List<STOPackageAddon> items, {required bool asSelected, String? empty}) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+            child: Text(
+              title,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: context.palette.textTertiary,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ),
+          if (items.isEmpty && empty != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+              child: Text(
+                empty,
+                style: TextStyle(fontSize: 13, color: context.palette.textSecondary),
+              ),
+            )
+          else
+            Column(
+              children: [
+                for (var i = 0; i < items.length; i++) ...[
+                  if (i > 0) Divider(height: 1, color: context.palette.border.withValues(alpha: 0.65)),
+                  addonTile(items[i], isOn: asSelected),
+                ],
+              ],
+            ),
+        ],
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: context.palette.cardBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: context.palette.border.withValues(alpha: 0.9)),
+      ),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Дополнения',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: context.palette.textPrimary,
+                  ),
+                ),
+              ),
+              Text(
+                '${selected.length}/${pkg.addons.length}',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: context.palette.textSecondary,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 4),
+          Text(
+            'Включаются в запись; время и слоты пересчитаются',
+            style: TextStyle(
+              fontSize: 11,
+              height: 1.25,
+              color: context.palette.textTertiary.withValues(alpha: 0.95),
+            ),
+          ),
+          SizedBox(height: 12),
+          block(
+            'Выбрано',
+            selected,
+            asSelected: true,
+            empty: 'Нет — ниже можно добавить',
+          ),
+          SizedBox(height: 14),
+          block(
+            'По желанию',
+            rest,
+            asSelected: false,
+            empty: 'Все опции уже в записи',
+          ),
+        ],
       ),
     );
   }
@@ -2074,9 +2806,9 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
         : '—';
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.cardBg,
+        color: context.palette.cardBg,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: context.palette.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2085,21 +2817,21 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
             child: Row(
               children: [
-                const Text(
+                Text(
                   'VIN:',
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.textSecondary,
+                    color: context.palette.textSecondary,
                   ),
                 ),
-                const SizedBox(width: 8),
+                SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     vinDisplay,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 14,
-                      color: AppColors.textPrimary,
+                      color: context.palette.textPrimary,
                     ),
                   ),
                 ),
@@ -2114,21 +2846,29 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
               child: Row(
                 children: [
-                  Text(
-                    _vehicleDetailsExpanded ? 'Свернуть' : 'Подробнее',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: AppColors.primary,
-                      fontWeight: FontWeight.w500,
+                  Flexible(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        _vehicleDetailsExpanded ? 'Свернуть' : 'Подробнее',
+                        maxLines: 1,
+                        softWrap: false,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: context.palette.primary,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 4),
+                  SizedBox(width: 4),
                   Icon(
                     _vehicleDetailsExpanded
                         ? Icons.expand_less
                         : Icons.expand_more,
                     size: 20,
-                    color: AppColors.primary,
+                    color: context.palette.primary,
                   ),
                 ],
               ),
@@ -2162,7 +2902,7 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
                         car.drivetrain!,
                     ].join(', '),
             ),
-            const SizedBox(height: 8),
+            SizedBox(height: 8),
           ],
         ],
       ),
@@ -2179,18 +2919,18 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
             width: 100,
             child: Text(
               '$label:',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
-                color: AppColors.textSecondary,
+                color: context.palette.textSecondary,
               ),
             ),
           ),
           Expanded(
             child: Text(
               value,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 13,
-                color: AppColors.textPrimary,
+                color: context.palette.textPrimary,
               ),
             ),
           ),
@@ -2206,7 +2946,7 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: cars.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 10),
+        separatorBuilder: (_, __) => SizedBox(width: 10),
         itemBuilder: (_, i) {
           final car = cars[i];
           final isSelected = i == _selectedCarIndex;
@@ -2215,16 +2955,17 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
             onTap: () {
               setState(() => _selectedCarIndex = i);
               _scrollSelectedCarIntoView();
+              _loadSlots();
             },
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
               width: 160,
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: AppColors.cardBg,
+                color: context.palette.cardBg,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: isSelected ? AppColors.primary : AppColors.border,
+                  color: isSelected ? context.palette.primary : context.palette.border,
                   width: isSelected ? 2 : 1,
                 ),
               ),
@@ -2238,16 +2979,16 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
                       color: isSelected
-                          ? AppColors.primary
-                          : AppColors.textPrimary,
+                          ? context.palette.primary
+                          : context.palette.textPrimary,
                     ),
                   ),
-                  const SizedBox(height: 2),
+                  SizedBox(height: 2),
                   Text(
                     car.plateNumber ?? '${car.year}',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 12,
-                      color: AppColors.textSecondary,
+                      color: context.palette.textSecondary,
                     ),
                   ),
                 ],
@@ -2269,7 +3010,7 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: dates.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        separatorBuilder: (_, __) => SizedBox(width: 8),
         itemBuilder: (_, i) {
           final date = dates[i];
           final isSelected = Formatters.isSameCalendarDay(date, _selectedDate);
@@ -2285,10 +3026,10 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
               duration: const Duration(milliseconds: 200),
               width: 56,
               decoration: BoxDecoration(
-                color: isSelected ? AppColors.primary : AppColors.cardBg,
+                color: isSelected ? context.palette.primary : context.palette.cardBg,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: isSelected ? AppColors.primary : AppColors.border,
+                  color: isSelected ? context.palette.primary : context.palette.border,
                 ),
               ),
               child: Column(
@@ -2299,19 +3040,19 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
                     style: TextStyle(
                       fontSize: 12,
                       color: isSelected
-                          ? const Color(0xFF0D0D0D)
-                          : AppColors.textSecondary,
+                          ? context.palette.onAccent
+                          : context.palette.textSecondary,
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  SizedBox(height: 4),
                   Text(
                     '${date.day}',
                     style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.w700,
                       color: isSelected
-                          ? const Color(0xFF0D0D0D)
-                          : AppColors.textPrimary,
+                          ? context.palette.onAccent
+                          : context.palette.textPrimary,
                     ),
                   ),
                 ],
@@ -2333,19 +3074,18 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
     DateTime? jobStart;
     if (labels.isNotEmpty &&
         _selectedTimeSlotIndex >= 0 &&
-        _selectedTimeSlotIndex < labels.length &&
-        available.contains(labels[_selectedTimeSlotIndex])) {
-      jobStart = Formatters.dateAtTimeSlot(
-        _selectedDate,
-        labels[_selectedTimeSlotIndex],
-      );
+        _selectedTimeSlotIndex < labels.length) {
+      final sel = labels[_selectedTimeSlotIndex];
+      if (!Formatters.isBookingSlotStartInPastOrNow(_selectedDate, sel)) {
+        jobStart = Formatters.dateAtTimeSlot(_selectedDate, sel);
+      }
     }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (loading)
-          const Padding(
+          Padding(
             padding: EdgeInsets.only(bottom: 8),
             child: Row(
               children: [
@@ -2354,7 +3094,7 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
                   height: 16,
                   child: CircularProgressIndicator(
                     strokeWidth: 2,
-                    color: AppColors.primary,
+                    color: context.palette.primary,
                   ),
                 ),
                 SizedBox(width: 8),
@@ -2362,7 +3102,7 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
                   'Загрузка слотов...',
                   style: TextStyle(
                     fontSize: 13,
-                    color: AppColors.textSecondary,
+                    color: context.palette.textSecondary,
                   ),
                 ),
               ],
@@ -2386,61 +3126,98 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
             );
             final isDisabled = loading || !isAvailable || isPastToday;
             final isStart = isSelected && isAvailable && !isPastToday;
-            final isContinuation =
-                !isPastToday &&
-                !isStart &&
+            final isContinuation = !isPastToday &&
                 jobStart != null &&
-                slotIsJobContinuation(slot, jobStart, _selectedDate, jobDur) &&
-                isAvailable;
-            final Color slotBg = isPastToday
-                ? AppColors.textMuted.withValues(alpha: 0.2)
-                : isAvailable
-                ? (isStart
-                      ? AppColors.primary
-                      : AppColors.success.withValues(alpha: 0.2))
-                : isOccupied
-                ? AppColors.error.withValues(alpha: 0.25)
-                : AppColors.nestedBg;
-            final Color slotBorder = isPastToday
-                ? AppColors.border.withValues(alpha: 0.45)
-                : isAvailable
-                ? (isStart
-                      ? AppColors.primary
-                      : isContinuation
-                      ? const Color(0xFFE65100)
-                      : AppColors.success)
-                : isOccupied
-                ? AppColors.error
-                : AppColors.border;
-            final Color slotText = isPastToday
-                ? AppColors.textMuted
-                : isAvailable
-                ? (isStart ? const Color(0xFF0D0D0D) : AppColors.success)
-                : isOccupied
-                ? AppColors.error
-                : AppColors.textTertiary;
+                slotIsJobContinuation(slot, jobStart, _selectedDate, jobDur);
+            final visitStripColor = context.palette.gold2;
+
+            late final Color slotBg;
+            late final Color slotBorder;
+            late final Color slotText;
+
+            if (isPastToday) {
+              slotBg = context.palette.textMuted.withValues(alpha: 0.2);
+              slotBorder = context.palette.border.withValues(alpha: 0.45);
+              slotText = context.palette.textMuted;
+            } else if (isStart) {
+              slotBg = context.palette.primary;
+              slotBorder = context.palette.primary;
+              slotText = context.palette.onAccent;
+            } else if (isContinuation) {
+              if (isAvailable) {
+                slotBg = context.palette.success.withValues(alpha: 0.2);
+                slotBorder = context.palette.success;
+                slotText = context.palette.success;
+              } else if (isOccupied) {
+                slotBg = context.palette.error.withValues(alpha: 0.25);
+                slotBorder = context.palette.error;
+                slotText = context.palette.error;
+              } else {
+                slotBg = context.palette.nestedBg;
+                slotBorder = context.palette.border;
+                slotText = context.palette.textTertiary;
+              }
+            } else if (isAvailable) {
+              slotBg = context.palette.success.withValues(alpha: 0.22);
+              slotBorder = context.palette.success.withValues(alpha: 0.85);
+              slotText = context.palette.success;
+            } else if (isOccupied) {
+              slotBg = context.palette.error.withValues(alpha: 0.25);
+              slotBorder = context.palette.error;
+              slotText = context.palette.error;
+            } else if (!isPastToday) {
+              // Нет свободного окна на это время (не в ответе API) — явно отличимо от «свободно».
+              slotBg = context.palette.warning.withValues(alpha: 0.14);
+              slotBorder = context.palette.warning.withValues(alpha: 0.45);
+              slotText = context.palette.warning;
+            } else {
+              slotBg = context.palette.nestedBg;
+              slotBorder = context.palette.border;
+              slotText = context.palette.textTertiary;
+            }
+
+            final showVisitStrip = isContinuation;
 
             return GestureDetector(
               onTap: isDisabled ? null : () => _pickSlot(i, slot),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 width: 72,
-                height: 40,
-                alignment: Alignment.center,
+                height: 42,
                 decoration: BoxDecoration(
                   color: slotBg,
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: slotBorder,
-                    width: isContinuation ? 2 : 1,
-                  ),
+                  border: Border.all(color: slotBorder, width: 1),
                 ),
-                child: Text(
-                  slot,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: slotText,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(9),
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      if (showVisitStrip)
+                        Positioned(
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          child: Container(
+                            height: 3,
+                            decoration: BoxDecoration(
+                              color: visitStripColor,
+                            ),
+                          ),
+                        ),
+                      Padding(
+                        padding: EdgeInsets.only(top: showVisitStrip ? 2 : 0),
+                        child: Text(
+                          slot,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: slotText,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -2460,8 +3237,8 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
         MediaQuery.of(context).padding.bottom + 12,
       ),
       decoration: BoxDecoration(
-        color: AppColors.cardBg,
-        border: const Border(top: BorderSide(color: AppColors.border)),
+        color: context.palette.cardBg,
+        border: Border(top: BorderSide(color: context.palette.border)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -2469,16 +3246,16 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
+              Text(
                 'Итого:',
-                style: TextStyle(fontSize: 16, color: AppColors.textSecondary),
+                style: TextStyle(fontSize: 16, color: context.palette.textSecondary),
               ),
               Text(
                 Formatters.money(_total),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 22,
                   fontWeight: FontWeight.w700,
-                  color: AppColors.primary,
+                  color: context.palette.primary,
                   fontFamily: 'monospace',
                 ),
               ),
@@ -2492,10 +3269,10 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
                 if (labels.isEmpty) {
                   return Text(
                     Formatters.dateShortRu(_selectedDate),
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
+                      color: context.palette.textPrimary,
                     ),
                   );
                 }
@@ -2527,22 +3304,22 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
                       maxLines: 4,
                       softWrap: true,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
+                        color: context.palette.textPrimary,
                         height: 1.35,
                       ),
                     ),
                     if (resourceLine != null) ...[
-                      const SizedBox(height: 4),
+                      SizedBox(height: 4),
                       Text(
                         resourceLine,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 12,
-                          color: AppColors.textSecondary,
+                          color: context.palette.textSecondary,
                           height: 1.3,
                         ),
                       ),
@@ -2552,7 +3329,7 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
               },
             ),
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
           GoldButton(
             text: _isSubmitting ? 'Создание записи...' : 'Подтвердить запись',
             onPressed: (_canConfirmBooking && !_isSubmitting)
@@ -2582,10 +3359,17 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
       return;
     }
     final startUtc = DateTime.tryParse(choice.startIsoUtc)?.toUtc();
+    final services =
+        ref.read(stoServicesProvider(widget.sto.id)).valueOrNull ?? [];
+    final pkg = widget.packageContext;
+    final body = _bodyTypeForCar();
+    final orderLines = pkg != null
+        ? _packageOrderLines(pkg, _packageAddonIds, services, body)
+        : null;
     final result = await orderRepo.createOrder(
       carId: car.id,
       organizationId: widget.sto.id,
-      serviceIds: widget.selectedServiceIds.toList(),
+      serviceIds: _allServiceIdsForSlots,
       scheduledDate: _selectedDate,
       scheduledTime: labels[slotIdx],
       scheduledStartUtc: startUtc,
@@ -2596,93 +3380,37 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
       carInfo: carInfo,
       vin: _provideVehicleData ? car.vin : null,
       licensePlate: _provideVehicleData ? car.plateNumber : null,
-      bodyType: _provideVehicleData ? car.bodyType : null,
+      bodyType: _provideVehicleData ? car.bodyType : body,
       color: _provideVehicleData ? car.color : null,
       mileage: _provideVehicleData && car.mileage > 0 ? car.mileage : null,
       engineType: _provideVehicleData ? car.engineType : null,
+      carPhotoUrl: _carPhotoUrlForApi(car.photoUrl),
+      orderLineItems: orderLines,
     );
     if (!mounted) return;
-    setState(() => _isSubmitting = false);
     result.when(
       success: (_) {
         ref.read(ordersProvider.notifier).loadOrders();
         ref.read(chatsProvider.notifier).loadChats();
-        _showSuccessDialog(context);
+        if (!mounted) return;
+        HapticFeedback.mediumImpact();
+        final slot = _timeSlots[_selectedTimeSlotIndex];
+        final start = Formatters.dateAtTimeSlot(_selectedDate, slot);
+        final end = start?.add(Duration(minutes: _totalDuration));
+        final range = (start != null && end != null)
+            ? Formatters.bookingRangeLabel(start, end)
+            : '${Formatters.dateFullRu(_selectedDate)}, $slot';
+        final detail = '${widget.sto.name} · $range · ≈ ${Formatters.durationMinutes(_totalDuration)}';
+        // Не вызывать setState перед pop — лишний rebuild + снятие маршрута даёт сбои Overlay (`_elements.contains`).
+        Navigator.of(context).pop<String?>('Запись создана!\n$detail');
       },
       failure: (e) {
+        if (mounted) setState(() => _isSubmitting = false);
+        if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.message), backgroundColor: AppColors.error),
+          SnackBar(content: Text(e.message), backgroundColor: context.palette.error),
         );
       },
-    );
-  }
-
-  void _showSuccessDialog(BuildContext context) {
-    HapticFeedback.heavyImpact();
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => Dialog(
-        backgroundColor: AppColors.cardBg,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 72,
-                height: 72,
-                decoration: BoxDecoration(
-                  color: AppColors.success.withValues(alpha: 0.15),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.check_rounded,
-                  size: 40,
-                  color: AppColors.success,
-                ),
-              ),
-              const SizedBox(height: 20),
-              const Text(
-                'Запись создана!',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                () {
-                  final slot = _timeSlots[_selectedTimeSlotIndex];
-                  final start = Formatters.dateAtTimeSlot(_selectedDate, slot);
-                  final end = start?.add(Duration(minutes: _totalDuration));
-                  final range = (start != null && end != null)
-                      ? Formatters.bookingRangeLabel(start, end)
-                      : '${Formatters.dateFullRu(_selectedDate)}, $slot';
-                  return '${widget.sto.name}\n$range · ≈ ${Formatters.durationMinutes(_totalDuration)}';
-                }(),
-                style: const TextStyle(
-                  fontSize: 14,
-                  color: AppColors.textSecondary,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 24),
-              GoldButton(
-                text: 'Отлично',
-                onPressed: () {
-                  Navigator.pop(context); // диалог
-                  Navigator.pop(
-                    context,
-                  ); // экран бронирования — остаёмся на карточке точки
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }

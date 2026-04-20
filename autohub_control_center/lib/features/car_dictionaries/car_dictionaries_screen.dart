@@ -17,6 +17,7 @@ class _CarDictionariesScreenState extends ConsumerState<CarDictionariesScreen> {
   final _brandNameController = TextEditingController();
   final _modelNameController = TextEditingController();
   final _generationNameController = TextEditingController();
+  final _brandSearchController = TextEditingController();
   int? _addingModelBrandId;
   int? _addingGenerationModelId;
 
@@ -25,7 +26,20 @@ class _CarDictionariesScreenState extends ConsumerState<CarDictionariesScreen> {
     _brandNameController.dispose();
     _modelNameController.dispose();
     _generationNameController.dispose();
+    _brandSearchController.dispose();
     super.dispose();
+  }
+
+  List<Map<String, dynamic>> _sortedFilteredBrands(List<Map<String, dynamic>> brands) {
+    final list = List<Map<String, dynamic>>.from(brands);
+    list.sort((a, b) {
+      final na = (a['name'] as String? ?? '').toLowerCase();
+      final nb = (b['name'] as String? ?? '').toLowerCase();
+      return na.compareTo(nb);
+    });
+    final q = _brandSearchController.text.trim().toLowerCase();
+    if (q.isEmpty) return list;
+    return list.where((b) => ((b['name'] as String? ?? '').toLowerCase().contains(q))).toList();
   }
 
   @override
@@ -65,7 +79,15 @@ class _CarDictionariesScreenState extends ConsumerState<CarDictionariesScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Нет марок', style: TextStyle(color: AppColors.textSecondary)),
+                        const Text('Нет марок в справочнике', style: TextStyle(fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Это не ошибка прав: и публичный API, и Control Center читают одну таблицу car_brands. '
+                          'Если список пустой — в базе на этом сервере просто ещё нет ни одной марки '
+                          '(или приложение смотрит не на тот API, что клиент с тестовыми данными). '
+                          'Добавьте первую марку ниже или заполните справочник через миграции/скрипт.',
+                          style: TextStyle(fontSize: 13, color: AppColors.textSecondary, height: 1.35),
+                        ),
                         const SizedBox(height: 12),
                         _addBrandField(),
                       ],
@@ -76,7 +98,18 @@ class _CarDictionariesScreenState extends ConsumerState<CarDictionariesScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      ...brands.map((b) => _brandTile(b)),
+                      TextField(
+                        controller: _brandSearchController,
+                        onChanged: (_) => setState(() {}),
+                        decoration: const InputDecoration(
+                          labelText: 'Поиск марки',
+                          prefixIcon: Icon(Icons.search, size: 20),
+                          isDense: true,
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      ..._sortedFilteredBrands(brands).map((b) => _brandTile(b)),
                       const SizedBox(height: 12),
                       _addBrandField(),
                     ],
@@ -118,15 +151,30 @@ class _CarDictionariesScreenState extends ConsumerState<CarDictionariesScreen> {
 
   Widget _pendingTile(Map<String, dynamic> e) {
     final id = e['id'] as String? ?? '';
-    // Бэкенд отдаёт camelCase: pendingBrand, pendingModel, pendingGeneration, createdAt
+    // Бэкенд: pending* + carSnapshot* / carBrandId / carModelId (куда в справочнике крепится новое поколение).
     final brand = (e['pendingBrand'] ?? e['pending_brand']) as String?;
     final model = (e['pendingModel'] ?? e['pending_model']) as String?;
     final gen = (e['pendingGeneration'] ?? e['pending_generation']) as String?;
+    final snapB = (e['carSnapshotBrand'] ?? e['car_snapshot_brand']) as String?;
+    final snapM = (e['carSnapshotModel'] ?? e['car_snapshot_model']) as String?;
+    final carBid = e['carBrandId'] ?? e['car_brand_id'];
+    final carMid = e['carModelId'] ?? e['car_model_id'];
     final createdAt = e['createdAt'] ?? e['created_at'];
     final dateStr = createdAt != null ? _formatDate(createdAt) : '';
-    final brandStr = brand?.trim().isNotEmpty == true ? brand! : '—';
-    final modelStr = model?.trim().isNotEmpty == true ? model! : '(не указана)';
-    final genStr = gen?.trim().isNotEmpty == true ? gen! : '—';
+    String pick(String? a, String? b) {
+      final x = (a?.trim().isNotEmpty == true) ? a!.trim() : '';
+      if (x.isNotEmpty) return x;
+      final y = (b?.trim().isNotEmpty == true) ? b!.trim() : '';
+      return y;
+    }
+
+    final brandStr = pick(brand, snapB).isEmpty ? '—' : pick(brand, snapB);
+    final modelRaw = pick(model, snapM);
+    final modelStr = modelRaw.isEmpty ? '(не указана)' : modelRaw;
+    final genStr = gen?.trim().isNotEmpty == true ? gen!.trim() : '—';
+    final idLine = (carBid != null && carMid != null)
+        ? 'Поколение «$genStr» добавить к модели справочника id=$carMid (марка id=$carBid). В гараже: $brandStr $modelStr.'
+        : 'Поколение «$genStr» — привязка к справочнику в гараже не найдена (проверьте car_id).';
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
@@ -136,8 +184,15 @@ class _CarDictionariesScreenState extends ConsumerState<CarDictionariesScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Марка: $brandStr · Модель: $modelStr · Поколение: $genStr',
+                  'Марка: $brandStr · Модель: $modelStr · Новое поколение: $genStr',
                   style: const TextStyle(fontSize: 14),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    idLine,
+                    style: const TextStyle(fontSize: 12, color: AppColors.textSecondary, height: 1.3),
+                  ),
                 ),
                 if (dateStr.isNotEmpty) Text(dateStr, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
               ],
@@ -236,11 +291,18 @@ class _CarDictionariesScreenState extends ConsumerState<CarDictionariesScreen> {
           builder: (context, ref, _) {
             final modelsAsync = ref.watch(carModelsProvider(id));
             return modelsAsync.when(
-              data: (models) => Column(
+              data: (models) {
+                final sorted = List<Map<String, dynamic>>.from(models);
+                sorted.sort((a, b) {
+                  final na = (a['name'] as String? ?? '').toLowerCase();
+                  final nb = (b['name'] as String? ?? '').toLowerCase();
+                  return na.compareTo(nb);
+                });
+                return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (models.isNotEmpty)
-                    ...models.map((m) => _modelTile(id, m)),
+                  if (sorted.isNotEmpty)
+                    ...sorted.map((m) => _modelTile(id, m)),
                   Padding(
                     padding: const EdgeInsets.only(left: 16, top: 8),
                     child: _addingModelBrandId == id
@@ -268,7 +330,8 @@ class _CarDictionariesScreenState extends ConsumerState<CarDictionariesScreen> {
                           ),
                   ),
                 ],
-              ),
+              );
+              },
               loading: () => const Padding(padding: EdgeInsets.all(16), child: SizedBox(height: 24, width: 24, child: CircularProgressIndicator(strokeWidth: 2))),
               error: (e, _) => Padding(padding: const EdgeInsets.all(16), child: Text('Ошибка: $e', style: const TextStyle(color: AppColors.danger, fontSize: 12))),
             );

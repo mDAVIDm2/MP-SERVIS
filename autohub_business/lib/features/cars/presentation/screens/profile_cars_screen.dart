@@ -2,14 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/auth/auth_provider.dart';
-import '../../../../shared/models/car_aggregate.dart';
 import '../../../../core/utils/formatters.dart';
+import '../../../../shared/widgets/authenticated_api_image.dart';
 import '../providers/cars_providers.dart';
 import 'car_detail_screen.dart';
 
 /// Экран «Автомобили» из раздела Профиль (мобильная тёмная версия).
 class ProfileCarsScreen extends ConsumerWidget {
-  const ProfileCarsScreen({super.key});
+  const ProfileCarsScreen({super.key, this.embeddedInOrganizationCard = false});
+
+  final bool embeddedInOrganizationCard;
 
   static String _orderWord(int n) {
     if (n % 10 == 1 && n % 100 != 11) return 'заказ';
@@ -22,15 +24,7 @@ class ProfileCarsScreen extends ConsumerWidget {
     final cars = ref.watch(carsFromOrdersProvider);
     final canSeePrices = ref.watch(authProvider).user?.role.canSeePrices ?? true;
 
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      appBar: AppBar(
-        title: const Text('Автомобили'),
-        backgroundColor: AppColors.background,
-        foregroundColor: AppColors.textPrimary,
-        elevation: 0,
-      ),
-      body: cars.isEmpty
+    final body = cars.isEmpty
           ? Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -84,18 +78,28 @@ class ProfileCarsScreen extends ConsumerWidget {
                         padding: const EdgeInsets.all(16),
                         child: Row(
                           children: [
-                            Container(
+                            SizedBox(
                               width: 48,
                               height: 48,
-                              decoration: BoxDecoration(
-                                color: AppColors.primary.withValues(alpha: 0.2),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Icon(
-                                Icons.directions_car_rounded,
-                                color: AppColors.primary,
-                                size: 28,
-                              ),
+                              child: car.carPhotoUrl != null && car.carPhotoUrl!.trim().isNotEmpty
+                                  ? AuthenticatedApiImage(
+                                      imageUrl: car.carPhotoUrl,
+                                      width: 48,
+                                      height: 48,
+                                      borderRadius: 12,
+                                    )
+                                  : Container(
+                                      decoration: BoxDecoration(
+                                        color: AppColors.primary.withValues(alpha: 0.2),
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      alignment: Alignment.center,
+                                      child: Icon(
+                                        Icons.directions_car_rounded,
+                                        color: AppColors.primary,
+                                        size: 28,
+                                      ),
+                                    ),
                             ),
                             const SizedBox(width: 14),
                             Expanded(
@@ -162,7 +166,21 @@ class ProfileCarsScreen extends ConsumerWidget {
                   ),
                 );
               },
-            ),
+            );
+
+    if (embeddedInOrganizationCard) {
+      return ColoredBox(color: AppColors.background, child: body);
+    }
+
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: const Text('Автомобили'),
+        backgroundColor: AppColors.background,
+        foregroundColor: AppColors.textPrimary,
+        elevation: 0,
+      ),
+      body: body,
     );
   }
 }

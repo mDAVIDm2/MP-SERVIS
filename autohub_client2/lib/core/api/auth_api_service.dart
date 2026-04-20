@@ -3,16 +3,33 @@ import 'api_client.dart';
 import 'api_endpoints.dart';
 import 'api_exceptions.dart';
 
+bool _parseAccountExistsFlag(dynamic v) {
+  if (v == true || v == 1) return true;
+  if (v is String) {
+    final s = v.toLowerCase().trim();
+    return s == 'true' || s == '1' || s == 'yes';
+  }
+  return false;
+}
+
 /// Ответ send-code
 class SendCodeResult {
   final String challengeId;
   final int expiresIn;
   final int resendAfter;
 
+  /// С сервера: аккаунт с этим email уже есть — достаточно кода (без имени/телефона на этом шаге).
+  final bool accountExists;
+
+  /// Только при OTP_DEBUG_RETURN_CODE на сервере (локальная отладка).
+  final String? debugOtp;
+
   const SendCodeResult({
     required this.challengeId,
     required this.expiresIn,
     required this.resendAfter,
+    this.accountExists = false,
+    this.debugOtp,
   });
 }
 
@@ -65,10 +82,16 @@ class AuthApiService {
           message: 'Нет challenge_id в ответе',
         ));
       }
+      final accountExists =
+          _parseAccountExistsFlag(data['account_exists'] ?? data['accountExists']);
+      final debugRaw = data['debug_otp'];
+      final debugOtp = debugRaw is String && debugRaw.trim().isNotEmpty ? debugRaw.trim() : null;
       return Result.success(SendCodeResult(
         challengeId: cid,
         expiresIn: (data['expires_in'] as num?)?.toInt() ?? 300,
         resendAfter: (data['resend_after'] as num?)?.toInt() ?? 60,
+        accountExists: accountExists,
+        debugOtp: debugOtp,
       ));
     } on DioException catch (e) {
       return Result.failure(ApiException.fromDioError(e));

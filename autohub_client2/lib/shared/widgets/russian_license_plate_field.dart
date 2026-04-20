@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../core/theme/app_colors.dart';
+import '../../core/theme/client_palette.dart';
 
 /// Допустимые буквы госномера РФ (кириллица, как в ГОСТ).
 const String kRussianPlateLetters = 'АВЕКМНОРСТУХ';
@@ -61,11 +61,14 @@ class RussianLicensePlateField extends StatefulWidget {
     required this.controller,
     this.label = 'Гос. номер',
     this.hint = 'А123АА777',
+    /// Не null — рамка валидации (зелёный/красный); иначе рамка по фокусу.
+    this.validationBorderColor,
   });
 
   final TextEditingController controller;
   final String label;
   final String hint;
+  final Color? validationBorderColor;
 
   @override
   State<RussianLicensePlateField> createState() => _RussianLicensePlateFieldState();
@@ -129,18 +132,22 @@ class _RussianLicensePlateFieldState extends State<RussianLicensePlateField> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(widget.label, style: const TextStyle(fontSize: 14, color: AppColors.textSecondary)),
-        const SizedBox(height: 4),
+        Text(widget.label, style: TextStyle(fontSize: 14, color: context.palette.textSecondary)),
+        SizedBox(height: 4),
         Text(
           'Формат: буква · 3 цифры · 2 буквы · 3 цифры (буквы: $kRussianPlateLetters)',
-          style: const TextStyle(fontSize: 11, color: AppColors.textTertiary),
+          style: TextStyle(fontSize: 11, color: context.palette.textTertiary),
         ),
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         Container(
           decoration: BoxDecoration(
-            color: AppColors.cardBg,
+            color: context.palette.cardBg,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: _focus.hasFocus ? AppColors.primary : AppColors.border),
+            border: Border.all(
+              color: widget.validationBorderColor ??
+                  (_focus.hasFocus ? context.palette.primary : context.palette.border),
+              width: widget.validationBorderColor != null ? 1.5 : 1,
+            ),
           ),
           child: TextField(
             controller: widget.controller,
@@ -149,29 +156,65 @@ class _RussianLicensePlateFieldState extends State<RussianLicensePlateField> {
             showCursor: true,
             enableInteractiveSelection: false,
             keyboardType: TextInputType.none,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 20,
               fontWeight: FontWeight.w700,
-              color: AppColors.textPrimary,
+              color: context.palette.textPrimary,
               letterSpacing: 2,
             ),
             onTap: () => _focus.requestFocus(),
             decoration: InputDecoration(
               hintText: widget.hint,
-              hintStyle: const TextStyle(color: AppColors.textPlaceholder, letterSpacing: 2),
+              hintStyle: TextStyle(color: context.palette.textPlaceholder, letterSpacing: 2),
               border: InputBorder.none,
               contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             ),
           ),
         ),
-        const SizedBox(height: 12),
+        SizedBox(height: 12),
         Text(
           needLetter
               ? 'Выберите букву'
               : (needDigit ? 'Выберите цифру' : (t.length == 9 ? 'Номер введён полностью' : '')),
-          style: TextStyle(fontSize: 12, color: needLetter || needDigit ? AppColors.primary : AppColors.textTertiary),
+          style: TextStyle(fontSize: 12, color: needLetter || needDigit ? context.palette.primary : context.palette.textTertiary),
         ),
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
+        // Отдельная строка «Стереть» — доступна при любом непустом номере (и после букв, и после цифр).
+        if (t.isNotEmpty) ...[
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: _onBackspace,
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                width: double.infinity,
+                height: 44,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: context.palette.nestedBg,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: context.palette.border),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.backspace_outlined, size: 18, color: context.palette.textPrimary.withValues(alpha: 0.9)),
+                    SizedBox(width: 8),
+                    Text(
+                      'Стереть символ',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: context.palette.textPrimary.withValues(alpha: 0.95),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          SizedBox(height: 8),
+        ],
         Wrap(
           spacing: 6,
           runSpacing: 6,
@@ -184,7 +227,7 @@ class _RussianLicensePlateFieldState extends State<RussianLicensePlateField> {
               ),
           ],
         ),
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         Wrap(
           spacing: 6,
           runSpacing: 6,
@@ -195,12 +238,6 @@ class _RussianLicensePlateFieldState extends State<RussianLicensePlateField> {
                 enabled: needDigit,
                 onTap: () => _onKeyDigit(d),
               ),
-            _KeyChip(
-              label: '⌫',
-              enabled: t.isNotEmpty,
-              onTap: _onBackspace,
-              wide: true,
-            ),
           ],
         ),
       ],
@@ -213,13 +250,11 @@ class _KeyChip extends StatelessWidget {
     required this.label,
     required this.enabled,
     required this.onTap,
-    this.wide = false,
   });
 
   final String label;
   final bool enabled;
   final VoidCallback onTap;
-  final bool wide;
 
   @override
   Widget build(BuildContext context) {
@@ -229,20 +264,20 @@ class _KeyChip extends StatelessWidget {
         onTap: enabled ? onTap : null,
         borderRadius: BorderRadius.circular(10),
         child: Container(
-          width: wide ? 72 : 40,
+          width: 40,
           height: 44,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: enabled ? AppColors.nestedBg : AppColors.nestedBg.withValues(alpha: 0.4),
+            color: enabled ? context.palette.nestedBg : context.palette.nestedBg.withValues(alpha: 0.4),
             borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: enabled ? AppColors.border : AppColors.border.withValues(alpha: 0.3)),
+            border: Border.all(color: enabled ? context.palette.border : context.palette.border.withValues(alpha: 0.3)),
           ),
           child: Text(
             label,
             style: TextStyle(
               fontSize: label == '⌫' ? 18 : 16,
               fontWeight: FontWeight.w600,
-              color: enabled ? AppColors.textPrimary : AppColors.textTertiary,
+              color: enabled ? context.palette.textPrimary : context.palette.textTertiary,
             ),
           ),
         ),

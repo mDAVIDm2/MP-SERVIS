@@ -1,5 +1,5 @@
 name: autohub_client
-description: "AutoHub - платформа автосервисных услуг"
+description: "MP-Servis — платформа автосервисных услуг"
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -40,6 +40,8 @@ dependencies:
   # Карта: OpenStreetMap (бесплатно)
   flutter_map: ^7.0.2
   latlong2: ^0.9.1
+
+  share_plus: ^10.1.4
 
   # Открытие ссылок и навигация
   url_launcher: ^6.2.5

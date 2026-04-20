@@ -8,6 +8,7 @@ import { Organization } from '../organizations/organization.entity';
 import { OrdersService } from '../orders/orders.service';
 import { MediaService } from '../media/media.service';
 import { SubscriptionQuotaService } from '../subscriptions/subscription-quota.service';
+import { UsersService } from '../users/users.service';
 export declare class ChatsService {
     private chatRepo;
     private msgRepo;
@@ -18,10 +19,14 @@ export declare class ChatsService {
     private notifications;
     private readonly mediaService;
     private readonly subscriptionQuota;
-    constructor(chatRepo: Repository<Chat>, msgRepo: Repository<ChatMessage>, orderRepo: Repository<Order>, itemRepo: Repository<OrderItem>, orgRepo: Repository<Organization>, orders: OrdersService, notifications: NotificationsService, mediaService: MediaService, subscriptionQuota: SubscriptionQuotaService);
+    private readonly usersService;
+    constructor(chatRepo: Repository<Chat>, msgRepo: Repository<ChatMessage>, orderRepo: Repository<Order>, itemRepo: Repository<OrderItem>, orgRepo: Repository<Organization>, orders: OrdersService, notifications: NotificationsService, mediaService: MediaService, subscriptionQuota: SubscriptionQuotaService, usersService: UsersService);
     private apiBaseUrl;
     validateChatAccess(chat: Chat, userOrgId: string | null, userPhoneNorm: string | null, asClient: boolean): void;
     getOrCreateSupportChat(clientPhoneRaw: string): Promise<Chat>;
+    openOrganizationChatForClient(organizationId: string, clientPhoneRaw: string): Promise<{
+        items: any[];
+    }>;
     getOrCreateForClient(organizationId: string, clientPhoneRaw: string): Promise<Chat>;
     getOrCreateForOrderChat(_orderId: string, organizationId: string, clientPhoneRaw: string): Promise<Chat>;
     findChatByOrgAndPhone(organizationId: string, clientPhoneRaw: string): Promise<Chat | null>;
@@ -48,6 +53,9 @@ export declare class ChatsService {
             order_status: any;
             organization_id: string;
             organization_name: any;
+            organization_photo_url: string | null;
+            organization_phone: string | null;
+            client_avatar_url: string | null;
             organization_kind: "sto" | "car_wash" | "detailing" | "car_audio" | "tire_service" | "body_shop" | "glass" | "tuning" | "ev_service" | "other" | null;
             business_kind: "sto" | "car_wash" | "detailing" | "car_audio" | "tire_service" | "body_shop" | "glass" | "tuning" | "ev_service" | "other" | null;
             car_info: any;
@@ -71,6 +79,9 @@ export declare class ChatsService {
             order_status: any;
             organization_id: string;
             organization_name: any;
+            organization_photo_url: string | null;
+            organization_phone: string | null;
+            client_avatar_url: string | null;
             organization_kind: "sto" | "car_wash" | "detailing" | "car_audio" | "tire_service" | "body_shop" | "glass" | "tuning" | "ev_service" | "other" | null;
             business_kind: "sto" | "car_wash" | "detailing" | "car_audio" | "tire_service" | "body_shop" | "glass" | "tuning" | "ev_service" | "other" | null;
             car_info: any;
@@ -94,6 +105,9 @@ export declare class ChatsService {
             order_status: any;
             organization_id: string;
             organization_name: any;
+            organization_photo_url: string | null;
+            organization_phone: string | null;
+            client_avatar_url: string | null;
             organization_kind: "sto" | "car_wash" | "detailing" | "car_audio" | "tire_service" | "body_shop" | "glass" | "tuning" | "ev_service" | "other" | null;
             business_kind: "sto" | "car_wash" | "detailing" | "car_audio" | "tire_service" | "body_shop" | "glass" | "tuning" | "ev_service" | "other" | null;
             car_info: any;
@@ -137,6 +151,9 @@ export declare class ChatsService {
             order_status: any;
             organization_id: string;
             organization_name: any;
+            organization_photo_url: string | null;
+            organization_phone: string | null;
+            client_avatar_url: string | null;
             organization_kind: "sto" | "car_wash" | "detailing" | "car_audio" | "tire_service" | "body_shop" | "glass" | "tuning" | "ev_service" | "other" | null;
             business_kind: "sto" | "car_wash" | "detailing" | "car_audio" | "tire_service" | "body_shop" | "glass" | "tuning" | "ev_service" | "other" | null;
             car_info: any;
@@ -155,6 +172,7 @@ export declare class ChatsService {
     private dedupChatsByClient;
     private getLastOrderForChat;
     private getOrderForChat;
+    markApprovalRequestsResolvedForOrder(orderId: string, status: 'accepted' | 'rejected' | 'superseded'): Promise<void>;
     private isPendingApproval;
     private computeUnreadForClient;
     private computeUnreadForSupportParticipant;

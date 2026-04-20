@@ -14,6 +14,7 @@ import '../../../../core/repositories/staff_repository.dart';
 import '../../../../shared/models/order_model.dart';
 import '../../../../shared/models/staff_model.dart';
 import '../../../orders/presentation/screens/order_detail_screen.dart';
+import '../../../../shared/widgets/mobile_order_card.dart';
 
 String _dashboardFormatOccupiedMinutes(int m) {
   if (m <= 0) return '0 мин';
@@ -142,6 +143,24 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         .toList();
     list.sort((a, b) => a.effectiveDateTime.compareTo(b.effectiveDateTime));
     return list;
+  }
+
+  /// Закрытая выручка по календарным дням (7 дней до сегодня включительно), для мини-графика на главной.
+  static List<int> _mobileWeekCompletedRevenueKopecks(List<Order> allOrders) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final out = List<int>.filled(7, 0);
+    for (var i = 0; i < 7; i++) {
+      final dayStart = today.subtract(Duration(days: 6 - i));
+      final dayEnd = dayStart.add(const Duration(days: 1));
+      out[i] = allOrders
+          .where((o) =>
+              (o.status == OrderStatus.done || o.status == OrderStatus.completed) &&
+              !o.effectiveDateTime.isBefore(dayStart) &&
+              o.effectiveDateTime.isBefore(dayEnd))
+          .fold<int>(0, (s, o) => s + o.totalKopecks);
+    }
+    return out;
   }
 
   static List<Order> _attentionOrdersFromList(List<Order> orders) {
@@ -780,14 +799,35 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         break;
     }
 
+    final canSeePrices = ref.watch(authProvider).user?.role.canSeePrices ?? true;
+    final pipelineKopecks = rangeOrders
+        .where((o) =>
+            o.status != OrderStatus.done &&
+            o.status != OrderStatus.cancelled &&
+            o.status != OrderStatus.completed)
+        .fold<int>(0, (s, o) => s + o.totalKopecks);
+    final pipelineCount = rangeOrders
+        .where((o) =>
+            o.status != OrderStatus.done &&
+            o.status != OrderStatus.cancelled &&
+            o.status != OrderStatus.completed)
+        .length;
+    final weekRevenue = _DashboardScreenState._mobileWeekCompletedRevenueKopecks(orders);
+    final orderSections = groupOrdersByCalendarDay(rangeOrders, historyMode: false);
+
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
         title: const Text('Главная'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh_rounded),
+            tooltip: 'Обновить',
+            onPressed: () => ref.read(orderRepositoryProvider.notifier).loadFromApi(),
+          ),
           if (ref.watch(authProvider).user != null)
             Padding(
-              padding: const EdgeInsets.only(right: 16),
+              padding: const EdgeInsets.only(right: 8),
               child: Center(
                 child: Text(
                   ref.watch(authProvider).user!.role.label,
@@ -797,142 +837,195 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Text(
-            'Период: ${_periodLabel(_period)}',
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-              color: AppColors.textSecondary,
-            ),
-          ),
-          const SizedBox(height: 10),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                for (final option in periodOptions)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: ChoiceChip(
-                      label: Text(option.$2),
-                      selected: _period == option.$1,
-                      onSelected: (selected) {
-                        if (selected) {
-                          setState(() => _period = option.$1);
-                        }
-                      },
+      body: RefreshIndicator(
+        onRefresh: () => ref.read(orderRepositoryProvider.notifier).loadFromApi(),
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          children: [
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (final option in periodOptions)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: FilterChip(
+                        label: Text(option.$2, style: const TextStyle(fontSize: 13)),
+                        selected: _period == option.$1,
+                        onSelected: (selected) {
+                          if (selected) setState(() => _period = option.$1);
+                        },
+                        visualDensity: VisualDensity.compact,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
                     ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: _MobileKpiTile(
+                    icon: Icons.event_note_rounded,
+                    value: '$periodCount',
+                    label: 'Заказы',
+                    color: AppColors.primary,
+                    onTap: () {
+                      if (context.mounted) context.go('/app?tab=2');
+                    },
                   ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _MobileKpiTile(
+                    icon: Icons.payments_outlined,
+                    value: formatMoney(periodTotal),
+                    label: 'Выручка',
+                    color: const Color(0xFF0D9488),
+                    onTap: () {
+                      if (context.mounted) context.go('/app?tab=2');
+                    },
+                  ),
+                ),
               ],
             ),
-          ),
-          const SizedBox(height: 16),
-          _KpiCard(
-            title: 'Заказов ${_periodLabel(_period)}',
-            value: '$periodCount',
-            subtitle: periodCount > 0 ? 'по расписанию' : 'нет записей',
-          ),
-          const SizedBox(height: 12),
-          _KpiCard(
-            title: 'Выручка ${_periodLabel(_period)}',
-            value: formatMoney(periodTotal),
-            subtitle: periodTotal > 0 ? 'закрытые заказы' : 'пока нет',
-          ),
-          const SizedBox(height: 12),
-          _KpiCard(
-            title: 'Требуют внимания',
-            value: '$attentionCount',
-            subtitle: attentionCount > 0 ? 'новые заявки, согласование' : 'всё в порядке',
-            accent: attentionCount > 0,
-          ),
-          const SizedBox(height: 24),
-          Text(
-            'Загруженность сотрудников (${_periodLabel(_period)})',
-            style: const TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Сравните количество заказов, занятое время и выручку по каждому мастеру.',
-            style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              FilterChip(
-                label: const Text('Все мастера'),
-                selected: !_mobileMastersOnlyWithLoad,
-                onSelected: (v) {
-                  if (v) setState(() => _mobileMastersOnlyWithLoad = false);
-                },
-              ),
-              FilterChip(
-                label: const Text('С загрузкой в периоде'),
-                selected: _mobileMastersOnlyWithLoad,
-                onSelected: (v) {
-                  if (v) setState(() => _mobileMastersOnlyWithLoad = true);
-                },
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'В списке только активные сотрудники организации. Фильтр оставляет мастеров с заказами или занятым временем.',
-            style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
-          ),
-          const SizedBox(height: 12),
-          if (mobileChartRows.isNotEmpty)
-            _MobileMasterLoadBarChart(
-              masters: mobileChartRows,
-              periodLabel: _periodLabel(_period),
-            ),
-          if (mobileChartRows.isNotEmpty) const SizedBox(height: 12),
-          if (mobileListRows.isEmpty)
-            Padding(
-              padding: EdgeInsets.only(bottom: 24),
-              child: Text(
-                _mobileMastersOnlyWithLoad
-                    ? 'Нет мастеров с загрузкой ${_periodLabel(_period)}'
-                    : 'Нет данных по мастерам ${_periodLabel(_period)}',
-                style: const TextStyle(color: AppColors.textSecondary),
-              ),
-            )
-          else
-            ...mobileListRows.map((s) => _MasterStatCard(stats: s)),
-          const SizedBox(height: 24),
-          Text(
-            listTitle,
-            style: const TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 12),
-          if (rangeOrders.isEmpty)
-            Padding(
-              padding: EdgeInsets.all(24),
-              child: Center(
-                child: Text(
-                  'Нет заказов ${_periodLabel(_period)}',
-                  style: const TextStyle(color: AppColors.textSecondary),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: _MobileKpiTile(
+                    icon: Icons.notifications_active_outlined,
+                    value: '$attentionCount',
+                    label: 'Внимание',
+                    color: attentionCount > 0 ? AppColors.warning : AppColors.textTertiary,
+                    emphasized: attentionCount > 0,
+                    onTap: () {
+                      if (context.mounted) context.go('/app?tab=2');
+                    },
+                  ),
                 ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _MobileKpiTile(
+                    icon: Icons.hourglass_top_rounded,
+                    value: canSeePrices ? formatMoney(pipelineKopecks) : '$pipelineCount',
+                    label: canSeePrices ? 'В работе ₽' : 'В работе',
+                    color: AppColors.textSecondary,
+                    onTap: () {
+                      if (context.mounted) context.go('/app?tab=2');
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            _MobileStatusStripCard(orders: rangeOrders),
+            const SizedBox(height: 14),
+            _MobileWeekRevenueCard(kopecksByDay: weekRevenue),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Icon(Icons.groups_rounded, size: 22, color: AppColors.primary),
+                const SizedBox(width: 8),
+                Text(
+                  'Мастера · ${_periodLabel(_period)}',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                FilterChip(
+                  label: const Text('Все', style: TextStyle(fontSize: 12)),
+                  selected: !_mobileMastersOnlyWithLoad,
+                  onSelected: (v) {
+                    if (v) setState(() => _mobileMastersOnlyWithLoad = false);
+                  },
+                  visualDensity: VisualDensity.compact,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                FilterChip(
+                  label: const Text('С загрузкой', style: TextStyle(fontSize: 12)),
+                  selected: _mobileMastersOnlyWithLoad,
+                  onSelected: (v) {
+                    if (v) setState(() => _mobileMastersOnlyWithLoad = true);
+                  },
+                  visualDensity: VisualDensity.compact,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            if (mobileChartRows.isNotEmpty)
+              _MobileMasterLoadBarChart(
+                masters: mobileChartRows,
+                periodLabel: _periodLabel(_period),
               ),
-            )
-          else
-            ...rangeOrders.map((o) => Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: _OrderTile(order: o),
-                )),
-        ],
+            if (mobileChartRows.isNotEmpty) const SizedBox(height: 10),
+            if (mobileListRows.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12, top: 4),
+                child: Text(
+                  _mobileMastersOnlyWithLoad
+                      ? 'Нет мастеров с загрузкой'
+                      : 'Нет данных по мастерам',
+                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 13),
+                ),
+              )
+            else
+              ...mobileListRows.map((s) => _MasterStatCard(stats: s)),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(Icons.list_alt_rounded, size: 22, color: AppColors.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    listTitle,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () {
+                    if (context.mounted) context.go('/app?tab=2');
+                  },
+                  child: const Text('Все'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (rangeOrders.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 28),
+                child: Center(
+                  child: Text(
+                    'Нет заказов',
+                    style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
+                  ),
+                ),
+              )
+            else
+              for (var si = 0; si < orderSections.length; si++) ...[
+                MobileDayHeader(day: orderSections[si].key, isFirst: si == 0),
+                ...orderSections[si].value.map(
+                  (o) => MobileOrderCard(order: o, canSeePrices: canSeePrices),
+                ),
+              ],
+          ],
+        ),
       ),
     );
   }
@@ -3157,7 +3250,283 @@ class _OrderListTile extends StatelessWidget {
   }
 }
 
-// --- Mobile (legacy) components ---
+// --- Mobile components ---
+
+class _MobileKpiTile extends StatelessWidget {
+  const _MobileKpiTile({
+    required this.icon,
+    required this.value,
+    required this.label,
+    required this.color,
+    this.emphasized = false,
+    this.onTap,
+  });
+
+  final IconData icon;
+  final String value;
+  final String label;
+  final Color color;
+  final bool emphasized;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppColors.cardBg,
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: emphasized ? AppColors.warning.withValues(alpha: 0.55) : AppColors.border.withValues(alpha: 0.85),
+              width: emphasized ? 1.5 : 1,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, size: 22, color: color),
+              const SizedBox(height: 8),
+              Text(
+                value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                  color: emphasized ? AppColors.warning : AppColors.textPrimary,
+                  letterSpacing: -0.3,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                label,
+                style: const TextStyle(fontSize: 11, color: AppColors.textSecondary, height: 1.2),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Полоса долей статусов + легенда с цифрами.
+class _MobileStatusStripCard extends StatelessWidget {
+  const _MobileStatusStripCard({required this.orders});
+
+  final List<Order> orders;
+
+  static const List<OrderStatus> _order = [
+    OrderStatus.pendingConfirmation,
+    OrderStatus.pendingApproval,
+    OrderStatus.confirmed,
+    OrderStatus.inProgress,
+    OrderStatus.completed,
+    OrderStatus.done,
+    OrderStatus.cancelled,
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final total = orders.length;
+    if (total == 0) {
+      return Card(
+        margin: EdgeInsets.zero,
+        color: AppColors.cardBg,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: BorderSide(color: AppColors.border.withValues(alpha: 0.85)),
+        ),
+        child: const Padding(
+          padding: EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+          child: Center(
+            child: Text('Нет заказов в выбранном периоде', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+          ),
+        ),
+      );
+    }
+
+    final counts = <OrderStatus, int>{for (final s in OrderStatus.values) s: 0};
+    for (final o in orders) {
+      counts[o.status] = (counts[o.status] ?? 0) + 1;
+    }
+    final segments = <({OrderStatus s, int c})>[];
+    for (final s in _order) {
+      final c = counts[s] ?? 0;
+      if (c > 0) segments.add((s: s, c: c));
+    }
+
+    return Card(
+      margin: EdgeInsets.zero,
+      color: AppColors.cardBg,
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: AppColors.border.withValues(alpha: 0.85)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.data_usage_rounded, size: 20, color: AppColors.primary),
+                const SizedBox(width: 8),
+                const Text(
+                  'Статусы в периоде',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: AppColors.textPrimary),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: SizedBox(
+                height: 10,
+                child: Row(
+                  children: segments.map((seg) {
+                    final flex = math.max(1, (seg.c / total * 1000).round());
+                    return Expanded(
+                      flex: flex,
+                      child: Container(color: seg.s.color),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 10,
+              runSpacing: 8,
+              children: segments.map((seg) {
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(color: seg.s.color, shape: BoxShape.circle),
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      '${seg.c}',
+                      style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppColors.textPrimary),
+                    ),
+                    const SizedBox(width: 3),
+                    Text(
+                      seg.s.label,
+                      style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                    ),
+                  ],
+                );
+              }).toList(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Гистограмма закрытой выручки за 7 дней (завершённые заказы).
+class _MobileWeekRevenueCard extends StatelessWidget {
+  const _MobileWeekRevenueCard({required this.kopecksByDay});
+
+  final List<int> kopecksByDay;
+
+  static String _weekdayShort(DateTime d) {
+    const w = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+    return w[d.weekday - 1];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final maxK = kopecksByDay.isEmpty ? 0 : kopecksByDay.reduce(math.max);
+    final hasData = maxK > 0;
+
+    return Card(
+      margin: EdgeInsets.zero,
+      color: AppColors.cardBg,
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: AppColors.border.withValues(alpha: 0.85)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.bar_chart_rounded, size: 20, color: AppColors.primary),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Выручка, 7 дней',
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: AppColors.textPrimary),
+                  ),
+                ),
+                Text(
+                  hasData ? formatMoney(kopecksByDay.last) : '—',
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Закрытые заказы по дням',
+              style: TextStyle(fontSize: 11, color: AppColors.textTertiary.withValues(alpha: 0.95)),
+            ),
+            const SizedBox(height: 14),
+            SizedBox(
+              height: 86,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: List.generate(7, (i) {
+                  final day = today.subtract(Duration(days: 6 - i));
+                  final v = kopecksByDay[i];
+                  final h = hasData ? (v / maxK * 58).clamp(6.0, 58.0) : 6.0;
+                  return Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 3),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          Container(
+                            height: h,
+                            decoration: BoxDecoration(
+                              color: AppColors.primary.withValues(alpha: i == 6 ? 0.95 : 0.72),
+                              borderRadius: const BorderRadius.vertical(top: Radius.circular(5)),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            _weekdayShort(day),
+                            style: const TextStyle(fontSize: 10, color: AppColors.textTertiary, fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 /// Горизонтальные бары: занятое время по позициям заказа (минуты) за период.
 class _MobileMasterLoadBarChart extends StatelessWidget {
@@ -3196,9 +3565,9 @@ class _MobileMasterLoadBarChart extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Загрузка по времени ($periodLabel)',
+                    'Занятость · $periodLabel',
                     style: const TextStyle(
-                      fontWeight: FontWeight.w600,
+                      fontWeight: FontWeight.w700,
                       fontSize: 15,
                       color: AppColors.textPrimary,
                     ),
@@ -3206,12 +3575,7 @@ class _MobileMasterLoadBarChart extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 4),
-            const Text(
-              'Сумма оценок по работам в заказах (мин.). Дольше полоса — больше занято слотов.',
-              style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
-            ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
             for (final m in top) ...[
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
@@ -3274,19 +3638,24 @@ class _MasterStatCard extends StatelessWidget {
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       color: AppColors.cardBg,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: AppColors.border)),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: AppColors.border.withValues(alpha: 0.85)),
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         child: Row(
           children: [
             CircleAvatar(
-              backgroundColor: AppColors.primary.withValues(alpha: 0.2),
+              radius: 18,
+              backgroundColor: AppColors.primary.withValues(alpha: 0.18),
               child: Text(
                 stats.masterName.isNotEmpty ? stats.masterName[0].toUpperCase() : '?',
-                style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.w600),
+                style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.w700, fontSize: 15),
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 10),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -3294,109 +3663,45 @@ class _MasterStatCard extends StatelessWidget {
                   Text(
                     stats.masterName,
                     style: const TextStyle(
-                      fontWeight: FontWeight.w600,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
                       color: AppColors.textPrimary,
                     ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${stats.orderCount} заказов • ${_dashboardFormatOccupiedMinutes(stats.occupiedMinutes)} занято • ${formatMoney(stats.revenueKopecks)}',
-                    style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Icon(Icons.receipt_long_rounded, size: 14, color: AppColors.textTertiary),
+                      const SizedBox(width: 4),
+                      Text('${stats.orderCount}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                      const SizedBox(width: 12),
+                      Icon(Icons.schedule_rounded, size: 14, color: AppColors.textTertiary),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          _dashboardFormatOccupiedMinutes(stats.occupiedMinutes),
+                          style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
             ),
+            const SizedBox(width: 6),
+            Text(
+              formatMoney(stats.revenueKopecks),
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: AppColors.primary,
+              ),
+            ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _KpiCard extends StatelessWidget {
-  final String title;
-  final String value;
-  final String subtitle;
-  final bool accent;
-
-  const _KpiCard({
-    required this.title,
-    required this.value,
-    required this.subtitle,
-    this.accent = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: accent ? AppColors.primary.withValues(alpha: 0.15) : AppColors.cardBg,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: accent ? AppColors.primary : AppColors.border,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.w700,
-              color: accent ? AppColors.primary : AppColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            subtitle,
-            style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _OrderTile extends StatelessWidget {
-  final Order order;
-
-  const _OrderTile({required this.order});
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      color: AppColors.cardBg,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: AppColors.border)),
-      child: ListTile(
-        title: Text(order.orderNumber),
-        subtitle: Text('${order.carInfo} • ${formatTimeOrNull(order.dateTime)}'),
-        trailing: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: order.status.color.withValues(alpha: 0.2),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Text(
-            order.status.label,
-            style: TextStyle(
-              fontSize: 12,
-              color: order.status.color,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ),
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => OrderDetailScreen(orderId: order.id),
-          ),
         ),
       ),
     );

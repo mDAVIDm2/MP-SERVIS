@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:local_auth/local_auth.dart';
-import '../theme/app_colors.dart';
+import '../theme/client_palette.dart';
 import 'app_lock_provider.dart';
 
 /// Полноэкранная блокировка поверх основного UI при уходе в фон (см. [AppLockNotifier]).
@@ -46,7 +46,7 @@ class _AppLockOverlayState extends ConsumerState<AppLockOverlay> {
     final la = ref.read(localAuthProvider);
     try {
       final ok = await la.authenticate(
-        localizedReason: 'Разблокируйте AutoHub',
+        localizedReason: 'Разблокируйте MP-Servis',
         options: const AuthenticationOptions(biometricOnly: true, stickyAuth: true),
       );
       if (!mounted) return;
@@ -70,40 +70,40 @@ class _AppLockOverlayState extends ConsumerState<AppLockOverlay> {
         IgnorePointer(ignoring: locked, child: widget.child),
         if (locked)
           Material(
-            color: AppColors.background,
+            color: context.palette.background,
             child: SafeArea(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 28),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const SizedBox(height: 48),
-                    const Text(
+                    SizedBox(height: 48),
+                    Text(
                       'Приложение заблокировано',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 22,
                         fontWeight: FontWeight.w700,
-                        color: AppColors.textPrimary,
+                        color: context.palette.textPrimary,
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    const Text(
+                    SizedBox(height: 12),
+                    Text(
                       'Введите PIN-код или используйте биометрию',
                       textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 14, color: AppColors.textSecondary, height: 1.35),
+                      style: TextStyle(fontSize: 14, color: context.palette.textSecondary, height: 1.35),
                     ),
-                    const SizedBox(height: 40),
+                    SizedBox(height: 40),
                     TextField(
                       controller: _pinController,
                       keyboardType: TextInputType.number,
                       obscureText: true,
                       maxLength: 8,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 24,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
+                        color: context.palette.textPrimary,
                         letterSpacing: 6,
                       ),
                       decoration: InputDecoration(
@@ -111,38 +111,38 @@ class _AppLockOverlayState extends ConsumerState<AppLockOverlay> {
                         hintText: 'PIN',
                         errorText: _error,
                         filled: true,
-                        fillColor: AppColors.cardBg,
+                        fillColor: context.palette.cardBg,
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
-                          borderSide: const BorderSide(color: AppColors.border),
+                          borderSide: BorderSide(color: context.palette.border),
                         ),
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
-                          borderSide: const BorderSide(color: AppColors.border),
+                          borderSide: BorderSide(color: context.palette.border),
                         ),
                       ),
                       inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                       onSubmitted: (_) => _tryPin(),
                     ),
-                    const SizedBox(height: 20),
+                    SizedBox(height: 20),
                     FilledButton(
                       onPressed: _tryPin,
                       style: FilledButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        foregroundColor: const Color(0xFF0D0D0D),
+                        backgroundColor: context.palette.primary,
+                        foregroundColor: context.palette.onAccent,
                         padding: const EdgeInsets.symmetric(vertical: 16),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                       ),
-                      child: const Text('Разблокировать', style: TextStyle(fontWeight: FontWeight.w600)),
+                      child: Text('Разблокировать', style: TextStyle(fontWeight: FontWeight.w600)),
                     ),
                     if (showBio) ...[
-                      const SizedBox(height: 16),
+                      SizedBox(height: 16),
                       OutlinedButton.icon(
                         onPressed: _tryBiometric,
-                        icon: const Icon(Icons.fingerprint_rounded, color: AppColors.primary),
-                        label: const Text('Биометрия', style: TextStyle(color: AppColors.primary)),
+                        icon: Icon(Icons.fingerprint_rounded, color: context.palette.primary),
+                        label: Text('Биометрия', style: TextStyle(color: context.palette.primary)),
                         style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: AppColors.primary),
+                          side: BorderSide(color: context.palette.primary),
                           padding: const EdgeInsets.symmetric(vertical: 14),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                         ),

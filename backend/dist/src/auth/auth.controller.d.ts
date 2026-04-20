@@ -6,43 +6,25 @@ export declare class AuthController {
     private auth;
     constructor(auth: AuthService);
     sendCode(dto: SendCodeDto, req: Request, ip: string): Promise<{
+        account_exists: boolean;
         challenge_id: string;
         expires_in: number;
         resend_after: number;
+        debug_otp?: string;
     }>;
     verifyCode(dto: VerifyCodeDto, req: Request): Promise<{
         access_token: string;
         refresh_token: string;
         expires_in: number;
         session_id: string;
-        user: {
-            id: string;
-            email: string | null;
-            email_verified_at: string | null;
-            phone: string | null;
-            phone_verified_at: string | null;
-            name: string;
-            role: import("../users/user.entity").BusinessRole;
-            organization_id: string | null;
-            organizations: unknown[];
-        };
+        user: Record<string, unknown>;
     }>;
     refresh(dto: RefreshDto, req: Request): Promise<{
         access_token: string;
         refresh_token: string;
         expires_in: number;
         session_id: string;
-        user: {
-            id: string;
-            email: string | null;
-            email_verified_at: string | null;
-            phone: string | null;
-            phone_verified_at: string | null;
-            name: string;
-            role: import("../users/user.entity").BusinessRole;
-            organization_id: string | null;
-            organizations: unknown[];
-        };
+        user: Record<string, unknown>;
     }>;
     logout(dto: LogoutDto): Promise<{
         ok: boolean;

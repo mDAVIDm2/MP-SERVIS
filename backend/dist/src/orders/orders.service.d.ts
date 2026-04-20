@@ -10,6 +10,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { SubscriptionQuotaService } from '../subscriptions/subscription-quota.service';
 import { MediaService } from '../media/media.service';
+import { UsersService } from '../users/users.service';
+import { UserClientHiddenCar } from '../users/user-client-hidden-car.entity';
 export declare class OrdersService {
     private orderRepo;
     private itemRepo;
@@ -22,7 +24,12 @@ export declare class OrdersService {
     private orgService;
     private subscriptionQuota;
     private readonly mediaService;
-    constructor(orderRepo: Repository<Order>, itemRepo: Repository<OrderItem>, photoRepo: Repository<OrderPhoto>, staffRepo: Repository<StaffMember>, chatRepo: Repository<Chat>, chatMsgRepo: Repository<ChatMessage>, chats: ChatsService, notifications: NotificationsService, orgService: OrganizationsService, subscriptionQuota: SubscriptionQuotaService, mediaService: MediaService);
+    private readonly usersService;
+    private readonly hiddenCarRepo;
+    constructor(orderRepo: Repository<Order>, itemRepo: Repository<OrderItem>, photoRepo: Repository<OrderPhoto>, staffRepo: Repository<StaffMember>, chatRepo: Repository<Chat>, chatMsgRepo: Repository<ChatMessage>, chats: ChatsService, notifications: NotificationsService, orgService: OrganizationsService, subscriptionQuota: SubscriptionQuotaService, mediaService: MediaService, usersService: UsersService, hiddenCarRepo: Repository<UserClientHiddenCar>);
+    private loadHiddenCarIdsForClientUser;
+    isCarHiddenForClient(userId: string, carId: string | null | undefined): Promise<boolean>;
+    private buildClientAvatarMapForOrders;
     private assertOrderMediaAttachmentLimit;
     private mergeFirstBillingConfirmation;
     findAll(organizationId: string): Promise<{
@@ -35,9 +42,10 @@ export declare class OrdersService {
     findForClient(clientPhoneNorm: string): Promise<{
         items: Record<string, unknown>[];
     }>;
-    findOne(id: string): Promise<Record<string, unknown> | null>;
+    findOne(id: string, filterHiddenForClientUserId?: string | null): Promise<Record<string, unknown> | null>;
     createFromChat(organizationId: string, clientPhone: string, approvalItems: any[], proposedDateTime?: Date): Promise<string>;
     private nextOrderNumber;
+    private sanitizeCarPhotoUrl;
     create(organizationId: string, dto: any): Promise<Record<string, unknown> | null>;
     updateStatus(id: string, status: string): Promise<Record<string, unknown> | null>;
     private notifyClientOrderIfNeeded;
@@ -46,6 +54,7 @@ export declare class OrdersService {
         planned_end_time?: string;
     }): Promise<Record<string, unknown> | null>;
     normalizePhoneForCompare(phone: string): string;
+    private notifyOrgStaffClientBookingSystemLine;
     private buildClientApprovalAppliedDisplayNames;
     private applyClientTimeConfirmAfterApproval;
     confirmByClient(orderId: string, clientPhoneNorm: string, newDateTime?: string, acceptProposed?: boolean, approvalMessageId?: string | null): Promise<Record<string, unknown> | null>;
@@ -98,6 +107,19 @@ export declare class OrdersService {
         deletedItems: number;
         deletedPhotos: number;
     }>;
+    purgeOrdersByCarIdForInternal(carId: string): Promise<{
+        deletedOrders: number;
+        deletedItems: number;
+        deletedPhotos: number;
+    }>;
+    moderateClearCarFieldsForInternal(clientPhone: string, carId: string, fields: {
+        vin?: boolean;
+        license_plate?: boolean;
+        car_info?: boolean;
+        car_photo_url?: boolean;
+    }): Promise<{
+        updated: number;
+    }>;
     listClientCarsAggregatedForInternal(): Promise<{
         items: {
             client_phone: string;
@@ -106,13 +128,14 @@ export declare class OrdersService {
             client_name: string | null;
             orders_count: number;
             last_order_at: string;
+            car_photo_url: string | null;
         }[];
     }>;
     findOrdersByCarForInternal(clientPhoneDigits: string, carId: string): Promise<Record<string, unknown>[]>;
-    toOrderJsonWithApprovalPreview(o: Order, orgBayCaches?: Map<string, Map<string, string>>): Promise<Record<string, unknown>>;
+    toOrderJsonWithApprovalPreview(o: Order, orgBayCaches?: Map<string, Map<string, string>>, clientAvatarByPhoneKey?: Map<string, string | null>): Promise<Record<string, unknown>>;
     private parseApprovalPayloadLocal;
     private buildApprovalPreviewFromPayload;
-    toOrderJson(o: Order, bayNames?: Map<string, string>): {
+    toOrderJson(o: Order, bayNames?: Map<string, string>, clientAvatarByPhoneKey?: Map<string, string | null>): {
         id: string;
         order_number: string;
         car_id: string;
@@ -125,6 +148,8 @@ export declare class OrdersService {
         engine_type: any;
         client_name: string | null;
         client_phone: string | null;
+        client_avatar_url: string | null;
+        car_photo_url: any;
         status: import("./order.entity").OrderStatus;
         previous_status: any;
         first_confirmed_at: any;

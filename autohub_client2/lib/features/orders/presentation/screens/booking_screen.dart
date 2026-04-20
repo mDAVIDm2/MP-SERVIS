@@ -6,7 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/availability/availability_helper.dart';
 import '../../../../core/providers/app_providers.dart';
 import '../../../../core/settings/filter_by_car_setting.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../core/utils/scroll_center.dart';
 import '../../../../shared/models/sto_model.dart';
@@ -126,10 +126,10 @@ class _BookingScreenState extends ConsumerState<BookingScreen> with WidgetsBindi
   Widget build(BuildContext context) {
     final services = ref.watch(stoServicesProvider(widget.sto.id)).valueOrNull ?? [];
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       appBar: AppBar(
-        backgroundColor: AppColors.background,
-        title: const Text('Запись на сервис', style: TextStyle(
+        backgroundColor: context.palette.background,
+        title: Text('Запись на сервис', style: TextStyle(
           fontSize: 18, fontWeight: FontWeight.w600,
         )),
       ),
@@ -140,43 +140,43 @@ class _BookingScreenState extends ConsumerState<BookingScreen> with WidgetsBindi
           // Карточка выбранного сервиса
           _SectionLabel('Автосервис'),
           _buildSTOCard(),
-          const SizedBox(height: 20),
+          SizedBox(height: 20),
 
           // Выбор авто
           _SectionLabel('Автомобиль'),
           _buildCarSelector(),
-          const SizedBox(height: 20),
+          SizedBox(height: 20),
 
           // Услуги
           _SectionLabel('Выбранные услуги'),
           _buildServicesSelector(services),
-          const SizedBox(height: 20),
+          SizedBox(height: 20),
 
           // Дата
           _SectionLabel('Дата'),
           _buildDateSelector(),
-          const SizedBox(height: 20),
+          SizedBox(height: 20),
 
           // Время
           _SectionLabel('Время'),
           _buildTimeSelector(),
-          const SizedBox(height: 20),
+          SizedBox(height: 20),
 
           // Комментарий
           _SectionLabel('Комментарий (необязательно)'),
           Container(
             decoration: BoxDecoration(
-              color: AppColors.cardBg,
+              color: context.palette.cardBg,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppColors.border),
+              border: Border.all(color: context.palette.border),
             ),
             child: TextField(
               controller: _commentController,
               maxLines: 3,
-              style: const TextStyle(fontSize: 14, color: AppColors.textPrimary),
-              decoration: const InputDecoration(
+              style: TextStyle(fontSize: 14, color: context.palette.textPrimary),
+              decoration: InputDecoration(
                 hintText: 'Опишите проблему или пожелания...',
-                hintStyle: TextStyle(color: AppColors.textPlaceholder, fontSize: 14),
+                hintStyle: TextStyle(color: context.palette.textPlaceholder, fontSize: 14),
                 border: InputBorder.none,
                 contentPadding: EdgeInsets.all(16),
               ),
@@ -192,33 +192,33 @@ class _BookingScreenState extends ConsumerState<BookingScreen> with WidgetsBindi
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.cardBg,
+        color: context.palette.cardBg,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: context.palette.border),
       ),
       child: Row(
         children: [
           Container(
             width: 48, height: 48,
             decoration: BoxDecoration(
-              color: AppColors.nestedBg, borderRadius: BorderRadius.circular(10),
+              color: context.palette.nestedBg, borderRadius: BorderRadius.circular(10),
             ),
             child: Center(
-              child: Text(widget.sto.name[0], style: const TextStyle(
-                fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.primary,
+              child: Text(widget.sto.name[0], style: TextStyle(
+                fontSize: 20, fontWeight: FontWeight.w700, color: context.palette.primary,
               )),
             ),
           ),
-          const SizedBox(width: 12),
+          SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(widget.sto.name, style: const TextStyle(
-                  fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textPrimary,
+                Text(widget.sto.name, style: TextStyle(
+                  fontSize: 16, fontWeight: FontWeight.w600, color: context.palette.textPrimary,
                 )),
-                Text(widget.sto.address, style: const TextStyle(
-                  fontSize: 14, color: AppColors.textSecondary,
+                Text(widget.sto.address, style: TextStyle(
+                  fontSize: 14, color: context.palette.textSecondary,
                 )),
               ],
             ),
@@ -226,10 +226,10 @@ class _BookingScreenState extends ConsumerState<BookingScreen> with WidgetsBindi
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.star_rounded, size: 14, color: AppColors.primary),
-              const SizedBox(width: 2),
-              Text(Formatters.rating(widget.sto.rating), style: const TextStyle(
-                fontSize: 14, color: AppColors.textPrimary,
+              Icon(Icons.star_rounded, size: 14, color: context.palette.primary),
+              SizedBox(width: 2),
+              Text(Formatters.rating(widget.sto.rating), style: TextStyle(
+                fontSize: 14, color: context.palette.textPrimary,
               )),
             ],
           ),
@@ -241,11 +241,11 @@ class _BookingScreenState extends ConsumerState<BookingScreen> with WidgetsBindi
   Widget _buildCarSelector() {
     final cars = ref.watch(carsProvider).valueOrNull ?? [];
     return SizedBox(
-      height: 100,
+      height: 118,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: cars.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 10),
+        separatorBuilder: (_, __) => SizedBox(width: 10),
         itemBuilder: (_, i) {
           final car = cars[i];
           final isSelected = _selectedCarId == car.id;
@@ -260,10 +260,10 @@ class _BookingScreenState extends ConsumerState<BookingScreen> with WidgetsBindi
               width: 150,
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: isSelected ? AppColors.primary.withValues(alpha: 0.1) : AppColors.cardBg,
+                color: isSelected ? context.palette.primary.withValues(alpha: 0.1) : context.palette.cardBg,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: isSelected ? AppColors.primary : AppColors.border,
+                  color: isSelected ? context.palette.primary : context.palette.border,
                   width: isSelected ? 1.5 : 1,
                 ),
               ),
@@ -274,19 +274,19 @@ class _BookingScreenState extends ConsumerState<BookingScreen> with WidgetsBindi
                   Row(
                     children: [
                       Icon(Icons.directions_car_rounded, size: 20,
-                        color: isSelected ? AppColors.primary : AppColors.textTertiary),
+                        color: isSelected ? context.palette.primary : context.palette.textTertiary),
                       const Spacer(),
                       if (isSelected)
-                        const Icon(Icons.check_circle_rounded, size: 18, color: AppColors.primary),
+                        Icon(Icons.check_circle_rounded, size: 18, color: context.palette.primary),
                     ],
                   ),
-                  const Spacer(),
+                  SizedBox(height: 8),
                   Text('${car.brand} ${car.model}', style: TextStyle(
                     fontSize: 14, fontWeight: FontWeight.w600,
-                    color: isSelected ? AppColors.primary : AppColors.textPrimary,
+                    color: isSelected ? context.palette.primary : context.palette.textPrimary,
                   ), maxLines: 1, overflow: TextOverflow.ellipsis),
-                  Text(car.plateNumber ?? '${car.year}', style: const TextStyle(
-                    fontSize: 12, color: AppColors.textSecondary,
+                  Text(car.plateNumber ?? '${car.year}', style: TextStyle(
+                    fontSize: 12, color: context.palette.textSecondary,
                   )),
                 ],
               ),
@@ -313,10 +313,10 @@ class _BookingScreenState extends ConsumerState<BookingScreen> with WidgetsBindi
             margin: const EdgeInsets.only(bottom: 6),
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
-              color: isSelected ? AppColors.primary.withValues(alpha: 0.08) : AppColors.cardBg,
+              color: isSelected ? context.palette.primary.withValues(alpha: 0.08) : context.palette.cardBg,
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
-                color: isSelected ? AppColors.primary.withValues(alpha: 0.5) : AppColors.border,
+                color: isSelected ? context.palette.primary.withValues(alpha: 0.5) : context.palette.border,
               ),
             ),
             child: Row(
@@ -325,31 +325,31 @@ class _BookingScreenState extends ConsumerState<BookingScreen> with WidgetsBindi
                   duration: const Duration(milliseconds: 200),
                   width: 20, height: 20,
                   decoration: BoxDecoration(
-                    color: isSelected ? AppColors.primary : Colors.transparent,
+                    color: isSelected ? context.palette.primary : Colors.transparent,
                     borderRadius: BorderRadius.circular(5),
                     border: Border.all(
-                      color: isSelected ? AppColors.primary : AppColors.textTertiary,
+                      color: isSelected ? context.palette.primary : context.palette.textTertiary,
                     ),
                   ),
                   child: isSelected
-                      ? const Icon(Icons.check, size: 13, color: Color(0xFF0D0D0D))
+                      ? Icon(Icons.check, size: 13, color: context.palette.onAccent)
                       : null,
                 ),
-                const SizedBox(width: 12),
+                SizedBox(width: 12),
                 Expanded(child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(service.name, style: const TextStyle(
-                      fontSize: 14, color: AppColors.textPrimary,
+                    Text(service.name, style: TextStyle(
+                      fontSize: 14, color: context.palette.textPrimary,
                     )),
-                    const SizedBox(height: 2),
-                    Text('⏱ ${service.durationLabel}', style: const TextStyle(
-                      fontSize: 12, color: AppColors.textSecondary,
+                    SizedBox(height: 2),
+                    Text('⏱ ${service.durationLabel}', style: TextStyle(
+                      fontSize: 12, color: context.palette.textSecondary,
                     )),
                   ],
                 )),
-                Text(Formatters.money(service.priceKopecks), style: const TextStyle(
-                  fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textPrimary,
+                Text(Formatters.money(service.priceKopecks), style: TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w600, color: context.palette.textPrimary,
                 )),
               ],
             ),
@@ -369,7 +369,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> with WidgetsBindi
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: days.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        separatorBuilder: (_, __) => SizedBox(width: 8),
         itemBuilder: (_, i) {
           final day = days[i];
           final isSelected = Formatters.isSameCalendarDay(_selectedDate, day);
@@ -387,10 +387,10 @@ class _BookingScreenState extends ConsumerState<BookingScreen> with WidgetsBindi
               duration: const Duration(milliseconds: 200),
               width: 56,
               decoration: BoxDecoration(
-                color: isSelected ? AppColors.primary : AppColors.cardBg,
+                color: isSelected ? context.palette.primary : context.palette.cardBg,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: isSelected ? AppColors.primary : AppColors.border,
+                  color: isSelected ? context.palette.primary : context.palette.border,
                 ),
               ),
               child: Column(
@@ -398,12 +398,12 @@ class _BookingScreenState extends ConsumerState<BookingScreen> with WidgetsBindi
                 children: [
                   Text(weekday, style: TextStyle(
                     fontSize: 12, fontWeight: FontWeight.w500,
-                    color: isSelected ? const Color(0xFF0D0D0D) : AppColors.textSecondary,
+                    color: isSelected ? context.palette.onAccent : context.palette.textSecondary,
                   )),
-                  const SizedBox(height: 4),
+                  SizedBox(height: 4),
                   Text('${day.day}', style: TextStyle(
                     fontSize: 20, fontWeight: FontWeight.w700,
-                    color: isSelected ? const Color(0xFF0D0D0D) : AppColors.textPrimary,
+                    color: isSelected ? context.palette.onAccent : context.palette.textPrimary,
                   )),
                 ],
               ),
@@ -429,27 +429,27 @@ class _BookingScreenState extends ConsumerState<BookingScreen> with WidgetsBindi
             padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
             decoration: BoxDecoration(
               color: isPastToday
-                  ? AppColors.textMuted.withValues(alpha: 0.15)
+                  ? context.palette.textMuted.withValues(alpha: 0.15)
                   : isSelected
-                      ? AppColors.primary
-                      : AppColors.cardBg,
+                      ? context.palette.primary
+                      : context.palette.cardBg,
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
                 color: isPastToday
-                    ? AppColors.border.withValues(alpha: 0.45)
+                    ? context.palette.border.withValues(alpha: 0.45)
                     : isSelected
-                        ? AppColors.primary
-                        : AppColors.border,
+                        ? context.palette.primary
+                        : context.palette.border,
               ),
             ),
             child: Text(slot, style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w600,
               color: isPastToday
-                  ? AppColors.textMuted
+                  ? context.palette.textMuted
                   : isSelected
-                      ? const Color(0xFF0D0D0D)
-                      : AppColors.textPrimary,
+                      ? context.palette.onAccent
+                      : context.palette.textPrimary,
             )),
           ),
         );
@@ -460,9 +460,9 @@ class _BookingScreenState extends ConsumerState<BookingScreen> with WidgetsBindi
   Widget _buildBottomBar(BuildContext context, List<STOService> services) {
     return Container(
       padding: EdgeInsets.fromLTRB(16, 12, 16, MediaQuery.of(context).padding.bottom + 12),
-      decoration: const BoxDecoration(
-        color: AppColors.cardBg,
-        border: Border(top: BorderSide(color: AppColors.border)),
+      decoration: BoxDecoration(
+        color: context.palette.cardBg,
+        border: Border(top: BorderSide(color: context.palette.border)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -470,12 +470,12 @@ class _BookingScreenState extends ConsumerState<BookingScreen> with WidgetsBindi
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Итого:', style: TextStyle(
-                fontSize: 14, color: AppColors.textSecondary,
+              Text('Итого:', style: TextStyle(
+                fontSize: 14, color: context.palette.textSecondary,
               )),
-              Text(Formatters.money(_totalPrice(services)), style: const TextStyle(
+              Text(Formatters.money(_totalPrice(services)), style: TextStyle(
                 fontSize: 20, fontWeight: FontWeight.w700,
-                color: AppColors.textPrimary, fontFamily: 'monospace',
+                color: context.palette.textPrimary, fontFamily: 'monospace',
               )),
             ],
           ),
@@ -497,17 +497,17 @@ class _BookingScreenState extends ConsumerState<BookingScreen> with WidgetsBindi
                     maxLines: 4,
                     softWrap: true,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
+                      color: context.palette.textPrimary,
                       height: 1.35,
                     ),
                   );
                 },
               ),
             ),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
           GoldButton(
             text: _isSubmitting ? '' : 'Подтвердить запись',
             isLoading: _isSubmitting,
@@ -528,25 +528,25 @@ class _BookingScreenState extends ConsumerState<BookingScreen> with WidgetsBindi
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        backgroundColor: AppColors.cardBg,
+        backgroundColor: context.palette.cardBg,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(height: 12),
+            SizedBox(height: 12),
             Container(
               width: 64, height: 64,
               decoration: BoxDecoration(
-                color: AppColors.success.withValues(alpha: 0.15),
+                color: context.palette.success.withValues(alpha: 0.15),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.check_rounded, size: 36, color: AppColors.success),
+              child: Icon(Icons.check_rounded, size: 36, color: context.palette.success),
             ),
-            const SizedBox(height: 20),
-            const Text('Запись создана!', style: TextStyle(
-              fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.textPrimary,
+            SizedBox(height: 20),
+            Text('Запись создана!', style: TextStyle(
+              fontSize: 20, fontWeight: FontWeight.w700, color: context.palette.textPrimary,
             )),
-            const SizedBox(height: 8),
+            SizedBox(height: 8),
             Text(
               () {
                 final services = ref.read(stoServicesProvider(widget.sto.id)).valueOrNull ?? [];
@@ -559,10 +559,10 @@ class _BookingScreenState extends ConsumerState<BookingScreen> with WidgetsBindi
                     : '${Formatters.dateFullRu(_selectedDate)}, $slot';
                 return '${widget.sto.name}\n$range\n≈ ${Formatters.durationMinutes(dur)}';
               }(),
-              style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+              style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 24),
+            SizedBox(height: 24),
             GoldButton(
               text: 'Отлично',
               onPressed: () {
@@ -586,8 +586,8 @@ class _SectionLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: Text(text, style: const TextStyle(
-        fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textSecondary,
+      child: Text(text, style: TextStyle(
+        fontSize: 14, fontWeight: FontWeight.w600, color: context.palette.textSecondary,
       )),
     );
   }

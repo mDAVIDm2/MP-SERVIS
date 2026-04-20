@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/api/api_endpoints.dart';
 import '../../../../core/auth/auth_provider.dart';
+import '../../../../core/utils/api_path_for_dio.dart';
 import '../../../../core/utils/chat_attachment_path.dart';
 import '../../../../shared/models/chat_model.dart';
 
@@ -46,7 +47,8 @@ class _AuthenticatedChatImageState extends ConsumerState<AuthenticatedChatImage>
   }
 
   Future<void> _load() async {
-    final path = chatAttachmentPathForDio(widget.attachment.url, ApiEndpoints.baseUrl);
+    final rawPath = chatAttachmentPathForDio(widget.attachment.url, ApiEndpoints.baseUrl);
+    final path = apiPathForDioBytes(rawPath);
     if (path.isEmpty) {
       if (mounted) setState(() => _failed = true);
       return;

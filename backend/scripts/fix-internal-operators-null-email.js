@@ -9,7 +9,7 @@ try {
 
 const { Client } = require('pg');
 
-const defaultUrl = 'postgresql://postgres:postgres@localhost:5432/autohub';
+const defaultUrl = 'postgresql://postgres:postgres@localhost:5432/mp_servis';
 const url = process.env.DATABASE_URL || defaultUrl;
 
 async function main() {

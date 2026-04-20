@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/auth/auth_provider.dart';
+import '../../../../core/repositories/organization_repository.dart';
 import '../../../../core/repositories/settings_repository.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_colors_desktop.dart';
@@ -10,6 +11,7 @@ import '../screens/message_templates_screen.dart';
 import '../screens/notifications_settings_screen.dart';
 import '../screens/services_settings_screen.dart';
 import '../screens/slots_settings_screen.dart';
+import '../../../profile/presentation/screens/subscription_tariff_screen.dart';
 
 /// Вкладка «Бизнес» на desktop: сетка карточек разделов вместо плоского списка.
 class SettingsBusinessDesktopBody extends ConsumerWidget {
@@ -19,11 +21,14 @@ class SettingsBusinessDesktopBody extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final canOrg = ref.watch(authProvider).user?.effectiveCanManageOrgSettings ?? false;
     return RefreshIndicator(
       color: AppColorsDesktop.primary,
       onRefresh: () async {
-        final orgId = ref.read(authProvider).user?.organizationId;
+        final user = ref.read(authProvider).user;
+        final orgId = user?.organizationId;
         await ref.read(settingsRepositoryProvider.notifier).load(orgId);
+        await ref.read(organizationRepositoryProvider.notifier).load(user?.effectiveOrganizationId);
       },
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -42,12 +47,12 @@ class SettingsBusinessDesktopBody extends ConsumerWidget {
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                      _IntroHero(),
-                      const SizedBox(height: 24),
                       Text('Разделы', style: DesktopDesignSystem.sectionTitle),
                       const SizedBox(height: 4),
                       Text(
-                        'Настройте услуги, марки, расписание и коммуникации с клиентами.',
+                        canOrg
+                            ? 'Настройте услуги, марки, расписание и коммуникации с клиентами.'
+                            : 'Изменение настроек сервиса недоступно для вашей учётной записи.',
                         style: DesktopDesignSystem.bodySecondary,
                       ),
                       const SizedBox(height: 20),
@@ -56,60 +61,80 @@ class SettingsBusinessDesktopBody extends ConsumerWidget {
                         contentWidth: w,
                         children: [
                           _SettingsHubCardData(
-                            icon: Icons.build_circle_outlined,
-                            title: 'Услуги и цены',
-                            subtitle: 'Единый справочник AutoHub, свои позиции, цены и длительность.',
-                            accent: AppColorsDesktop.primary,
-                            badge: 'Справочник',
+                            icon: Icons.workspace_premium_outlined,
+                            title: 'Тариф',
+                            subtitle: 'План, лимиты чата и заказов, расход по месяцу.',
+                            accent: const Color(0xFFB45309),
                             onTap: () => Navigator.push(
                               context,
-                              MaterialPageRoute(builder: (_) => const ServicesSettingsScreen()),
+                              MaterialPageRoute(builder: (_) => const SubscriptionTariffScreen()),
                             ),
+                          ),
+                          _SettingsHubCardData(
+                            icon: Icons.build_circle_outlined,
+                            title: 'Услуги и цены',
+                            subtitle: 'Единый справочник MP-Servis, свои позиции, цены и длительность.',
+                            accent: AppColorsDesktop.primary,
+                            badge: 'Справочник',
+                            onTap: canOrg
+                                ? () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(builder: (_) => const ServicesSettingsScreen()),
+                                    )
+                                : null,
                           ),
                           _SettingsHubCardData(
                             icon: Icons.directions_car_outlined,
                             title: 'Специализация по маркам',
                             subtitle: 'По каким брендам вы принимаете авто — для фильтров и заявок.',
                             accent: const Color(0xFF0D9488),
-                            onTap: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(builder: (_) => const BrandsSettingsScreen()),
-                            ),
+                            onTap: canOrg
+                                ? () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(builder: (_) => const BrandsSettingsScreen()),
+                                    )
+                                : null,
                           ),
                           _SettingsHubCardData(
                             icon: Icons.schedule_rounded,
                             title: 'Слоты и подтверждение',
                             subtitle: 'Рабочий день, шаг сетки и время на подтверждение записи.',
                             accent: const Color(0xFF7C3AED),
-                            onTap: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(builder: (_) => const SlotsSettingsScreen()),
-                            ),
+                            onTap: canOrg
+                                ? () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(builder: (_) => const SlotsSettingsScreen()),
+                                    )
+                                : null,
                           ),
                           _SettingsHubCardData(
                             icon: Icons.notifications_outlined,
                             title: 'Уведомления',
                             subtitle: 'Push по новым заявкам, чату, согласованиям и напоминаниям.',
                             accent: const Color(0xFFEA580C),
-                            onTap: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(builder: (_) => const NotificationsSettingsScreen()),
-                            ),
+                            onTap: canOrg
+                                ? () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(builder: (_) => const NotificationsSettingsScreen()),
+                                    )
+                                : null,
                           ),
                           _SettingsHubCardData(
                             icon: Icons.message_outlined,
                             title: 'Шаблоны сообщений',
                             subtitle: 'Готовые ответы для чата с клиентами.',
                             accent: const Color(0xFF2563EB),
-                            onTap: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(builder: (_) => const MessageTemplatesScreen()),
-                            ),
+                            onTap: canOrg
+                                ? () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(builder: (_) => const MessageTemplatesScreen()),
+                                    )
+                                : null,
                           ),
                         ],
                       ),
                       const SizedBox(height: 32),
-                      _DangerZone(onClearOrders: () => onDangerClearOrders(context, ref)),
+                      if (canOrg) _DangerZone(onClearOrders: () => onDangerClearOrders(context, ref)),
                         ],
                       );
                     },
@@ -124,70 +149,20 @@ class SettingsBusinessDesktopBody extends ConsumerWidget {
   }
 }
 
-class _IntroHero extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(DesktopDesignSystem.cardPaddingLarge + 4),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            AppColorsDesktop.primary.withValues(alpha: 0.08),
-            AppColorsDesktop.surface,
-            AppColorsDesktop.nestedBg.withValues(alpha: 0.5),
-          ],
-        ),
-        borderRadius: BorderRadius.circular(DesktopDesignSystem.radiusCardLarge),
-        border: Border.all(color: AppColorsDesktop.borderLight),
-        boxShadow: DesktopDesignSystem.shadowCard,
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: AppColorsDesktop.primary.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Icon(Icons.storefront_outlined, size: 32, color: AppColorsDesktop.primary),
-          ),
-          const SizedBox(width: 20),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Бизнес-профиль', style: DesktopDesignSystem.pageTitle),
-                const SizedBox(height: 8),
-                Text(
-                  'Все параметры ниже синхронизируются с сервером и используются в календаре, заявках и чатах.',
-                  style: DesktopDesignSystem.bodySecondary.copyWith(height: 1.45),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _SettingsHubCardData {
   const _SettingsHubCardData({
     required this.icon,
     required this.title,
     required this.subtitle,
     required this.accent,
-    required this.onTap,
+    this.onTap,
     this.badge,
   });
   final IconData icon;
   final String title;
   final String subtitle;
   final Color accent;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final String? badge;
 }
 
@@ -241,6 +216,7 @@ class _SettingsHubCardState extends State<_SettingsHubCard> {
   @override
   Widget build(BuildContext context) {
     final d = widget.data;
+    final enabled = d.onTap != null;
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -249,56 +225,60 @@ class _SettingsHubCardState extends State<_SettingsHubCard> {
         child: InkWell(
           onTap: d.onTap,
           borderRadius: BorderRadius.circular(DesktopDesignSystem.radiusCard),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            padding: const EdgeInsets.all(DesktopDesignSystem.cardPaddingLarge),
-            decoration: BoxDecoration(
-              color: AppColorsDesktop.surface,
-              borderRadius: BorderRadius.circular(DesktopDesignSystem.radiusCard),
-              border: Border.all(
-                color: _hover ? d.accent.withValues(alpha: 0.35) : AppColorsDesktop.border,
+          child: AnimatedOpacity(
+            duration: const Duration(milliseconds: 160),
+            opacity: enabled ? 1 : 0.5,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              padding: const EdgeInsets.all(DesktopDesignSystem.cardPaddingLarge),
+              decoration: BoxDecoration(
+                color: AppColorsDesktop.surface,
+                borderRadius: BorderRadius.circular(DesktopDesignSystem.radiusCard),
+                border: Border.all(
+                  color: enabled && _hover ? d.accent.withValues(alpha: 0.35) : AppColorsDesktop.border,
+                ),
+                boxShadow: enabled && _hover ? DesktopDesignSystem.shadowCardHover : DesktopDesignSystem.shadowCard,
               ),
-              boxShadow: _hover ? DesktopDesignSystem.shadowCardHover : DesktopDesignSystem.shadowCard,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: d.accent.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Icon(d.icon, color: d.accent, size: 22),
-                    ),
-                    const Spacer(),
-                    if (d.badge != null)
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: AppColorsDesktop.nestedBg,
-                          borderRadius: BorderRadius.circular(DesktopDesignSystem.radiusBadge),
-                          border: Border.all(color: AppColorsDesktop.borderLight),
+                          color: d.accent.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(12),
                         ),
-                        child: Text(
-                          d.badge!,
-                          style: DesktopDesignSystem.meta.copyWith(
-                            fontWeight: FontWeight.w600,
-                            color: AppColorsDesktop.textSecondary,
+                        child: Icon(d.icon, color: d.accent, size: 22),
+                      ),
+                      const Spacer(),
+                      if (d.badge != null)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: AppColorsDesktop.nestedBg,
+                            borderRadius: BorderRadius.circular(DesktopDesignSystem.radiusBadge),
+                            border: Border.all(color: AppColorsDesktop.borderLight),
+                          ),
+                          child: Text(
+                            d.badge!,
+                            style: DesktopDesignSystem.meta.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: AppColorsDesktop.textSecondary,
+                            ),
                           ),
                         ),
-                      ),
-                    Icon(Icons.chevron_right_rounded, color: AppColorsDesktop.textTertiary),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                Text(d.title, style: DesktopDesignSystem.sectionTitle),
-                const SizedBox(height: 6),
-                Text(d.subtitle, style: DesktopDesignSystem.bodySecondary.copyWith(height: 1.4)),
-              ],
+                      Icon(Icons.chevron_right_rounded, color: AppColorsDesktop.textTertiary),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Text(d.title, style: DesktopDesignSystem.sectionTitle),
+                  const SizedBox(height: 6),
+                  Text(d.subtitle, style: DesktopDesignSystem.bodySecondary.copyWith(height: 1.4)),
+                ],
+              ),
             ),
           ),
         ),

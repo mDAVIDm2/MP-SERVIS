@@ -54,22 +54,36 @@ abstract final class OrgBusinessKind {
     (other, 'Другое'),
   ];
 
+  static const List<(String code, String label)> _labelsEn = [
+    (sto, 'Auto service'),
+    (carWash, 'Car wash'),
+    (detailing, 'Detailing'),
+    (carAudio, 'Car audio'),
+    (tireService, 'Tire service'),
+    (bodyShop, 'Body shop'),
+    (glass, 'Auto glass'),
+    (tuning, 'Tuning'),
+    (evService, 'EV service'),
+    (other, 'Other'),
+  ];
+
   /// Подпись вида точки из заказа (без фолбэка «автосервис» для неизвестного кода).
-  static String labelForOrderSnapshot(String? code) {
+  static String labelForOrderSnapshot(String? code, {bool english = false}) {
     if (code == null || code.trim().isEmpty) return '';
     final c = code.trim().toLowerCase().replaceAll('-', '_');
-    for (final o in _labels) {
+    final list = english ? _labelsEn : _labels;
+    for (final o in list) {
       if (o.$1 == c) return o.$2;
     }
     return code.trim();
   }
 
-  static String schedulingModeShortLabel(String? mode) {
+  static String schedulingModeShortLabel(String? mode, {bool english = false}) {
     switch (mode?.trim().toLowerCase()) {
       case 'bay_based':
-        return 'Окно / пост';
+        return english ? 'Bay / slot' : 'Окно / пост';
       case 'staff_based':
-        return 'К специалисту';
+        return english ? 'By specialist' : 'К специалисту';
       default:
         return '';
     }

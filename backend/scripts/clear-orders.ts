@@ -10,7 +10,7 @@ import { DataSource } from 'typeorm';
 
 const dataSource = new DataSource({
   type: 'postgres',
-  url: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/autohub',
+  url: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/mp_servis',
   entities: [],
   synchronize: false,
 });

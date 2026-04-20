@@ -117,11 +117,14 @@ class SettingsApiService {
                 'category_id': p.categoryId,
                 'package_price_kopecks': p.packagePriceKopecks,
                 'included_service_ids': p.includedServiceIds,
+                'package_duration_minutes': p.packageDurationMinutes,
                 'addons': p.addons
                     .map(
                       (a) => {
                         'service_id': a.serviceId,
                         'extra_price_kopecks': a.extraPriceKopecks,
+                        if (a.extraDurationMinutes > 0)
+                          'extra_duration_minutes': a.extraDurationMinutes,
                       },
                     )
                     .toList(),

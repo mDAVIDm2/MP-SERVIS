@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../shared/models/order_model.dart';
+import '../../shared/models/staff_model.dart';
 import '../api/api_exceptions.dart';
 import '../api/services/api_services_providers.dart';
 import '../api/services/order_api_service.dart';
@@ -46,7 +47,11 @@ class OrderRepository extends StateNotifier<List<Order>> {
       if (order.items.isEmpty) {
         final prev = state.where((o) => o.id == order.id).firstOrNull;
         if (prev != null && prev.items.isNotEmpty) {
-          order = order.copyWith(items: prev.items);
+          order = order.copyWith(
+            items: prev.items,
+            clientAvatarUrl: order.clientAvatarUrl ?? prev.clientAvatarUrl,
+            carPhotoUrl: order.carPhotoUrl ?? prev.carPhotoUrl,
+          );
         }
       }
       state = [...state.where((o) => o.id != order.id), order];
@@ -91,7 +96,13 @@ class OrderRepository extends StateNotifier<List<Order>> {
         state = incoming.map((o) {
           if (o.items.isNotEmpty) return o;
           final prev = state.where((e) => e.id == o.id).firstOrNull;
-          return prev != null && prev.items.isNotEmpty ? o.copyWith(items: prev.items) : o;
+          return prev != null && prev.items.isNotEmpty
+              ? o.copyWith(
+                  items: prev.items,
+                  clientAvatarUrl: o.clientAvatarUrl ?? prev.clientAvatarUrl,
+                  carPhotoUrl: o.carPhotoUrl ?? prev.carPhotoUrl,
+                )
+              : o;
         }).toList();
         if (kDebugMode) {
           debugPrint('[ChatOrderDebug] OrderRepository.loadFromApi | state updated | newCount=${state.length} orderIds=${state.take(3).map((o) => o.id).join(';')}');
@@ -120,7 +131,13 @@ class OrderRepository extends StateNotifier<List<Order>> {
       Order merged = order;
       if (order.items.isEmpty) {
         final prev = state.where((o) => o.id == orderId).firstOrNull;
-        if (prev != null && prev.items.isNotEmpty) merged = order.copyWith(items: prev.items);
+        if (prev != null && prev.items.isNotEmpty) {
+          merged = order.copyWith(
+            items: prev.items,
+            clientAvatarUrl: order.clientAvatarUrl ?? prev.clientAvatarUrl,
+            carPhotoUrl: order.carPhotoUrl ?? prev.carPhotoUrl,
+          );
+        }
       }
       state = [...state.where((o) => o.id != orderId), merged];
     }
@@ -459,7 +476,17 @@ final ordersSyncReadyForChatFilterProvider = Provider<bool>((ref) {
 
 /// Список активных мастеров для назначения на заказ (из репозитория персонала).
 final staffListProvider = Provider<List<StaffMember>>((ref) {
-  final staff = ref.watch(staffRepositoryProvider).where((e) => e.isActive).toList();
+  final user = ref.watch(authProvider).user;
+  var staff = ref.watch(staffRepositoryProvider).where((e) => e.isActive).toList();
+  if (user != null && user.role == BusinessRole.solo && user.id.isNotEmpty) {
+    final matched = staff.where((e) => e.userId != null && e.userId == user.id).toList();
+    if (matched.isNotEmpty) {
+      staff = matched;
+    } else {
+      final mastersOnly = staff.where((e) => e.isActive && e.role == StaffRole.master).toList();
+      staff = mastersOnly.length == 1 ? mastersOnly : matched;
+    }
+  }
   return staff.map((e) => StaffMember(id: e.id, name: e.name, roleLabel: e.roleLabel)).toList();
 });
 
@@ -477,6 +504,9 @@ final currentMasterStaffIdProvider = Provider<String?>((ref) {
   final user = ref.watch(authProvider).user;
   if (user == null || user.role != BusinessRole.master) return null;
   final staffList = ref.watch(staffRepositoryProvider);
+  for (final e in staffList) {
+    if (e.isActive && e.userId != null && e.userId == user.id) return e.id;
+  }
   final normalizedUser = _normalizePhone(user.phone);
   if (normalizedUser.isEmpty) return null;
   for (final e in staffList) {

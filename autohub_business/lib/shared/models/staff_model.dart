@@ -3,6 +3,17 @@ const List<String> kSkillIds = [
   'MAINTENANCE', 'ENGINE', 'ELECTRICAL', 'DIAGNOSTICS', 'SUSPENSION', 'TIRES', 'BODY',
 ];
 
+/// Краткая строка графика для списка сотрудников (мобильные карточки).
+String formatStaffScheduleSummary(List<MasterScheduleSlot> schedule) {
+  final working = schedule.where((s) => s.isWorkingDay).toList();
+  if (working.isEmpty) return 'График не задан';
+  working.sort((a, b) => a.dayOfWeek.compareTo(b.dayOfWeek));
+  const d = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+  return working
+      .map((s) => '${d[s.dayOfWeek % 7]} ${s.startTime}–${s.endTime}')
+      .join(' · ');
+}
+
 String skillLabel(String id) {
   const labels = {
     'MAINTENANCE': 'ТО и обслуживание',
@@ -86,6 +97,10 @@ class StaffEntry {
   /// График работы по дням недели.
   final List<MasterScheduleSlot> schedule;
 
+  final bool canSeeChats;
+  final bool canWriteChats;
+  final bool canManageOrgSettings;
+
   const StaffEntry({
     required this.id,
     this.userId,
@@ -97,6 +112,9 @@ class StaffEntry {
     this.invitedAt,
     this.skills = const [],
     this.schedule = const [],
+    this.canSeeChats = false,
+    this.canWriteChats = false,
+    this.canManageOrgSettings = false,
   });
 
   /// Запись соответствует текущему пользователю (владелец/админ, добавленный как мастер).
@@ -113,6 +131,9 @@ class StaffEntry {
     DateTime? invitedAt,
     List<String>? skills,
     List<MasterScheduleSlot>? schedule,
+    bool? canSeeChats,
+    bool? canWriteChats,
+    bool? canManageOrgSettings,
   }) {
     return StaffEntry(
       id: id ?? this.id,
@@ -125,6 +146,9 @@ class StaffEntry {
       invitedAt: invitedAt ?? this.invitedAt,
       skills: skills ?? this.skills,
       schedule: schedule ?? this.schedule,
+      canSeeChats: canSeeChats ?? this.canSeeChats,
+      canWriteChats: canWriteChats ?? this.canWriteChats,
+      canManageOrgSettings: canManageOrgSettings ?? this.canManageOrgSettings,
     );
   }
 
@@ -141,6 +165,9 @@ class StaffEntry {
         'invitedAt': invitedAt?.toIso8601String(),
         'skills': skills,
         'schedule': schedule.map((s) => s.toJson()).toList(),
+        'can_see_chats': canSeeChats,
+        'can_write_chats': canWriteChats,
+        'can_manage_org_settings': canManageOrgSettings,
       };
 
   factory StaffEntry.fromJson(Map<String, dynamic> j) {
@@ -160,6 +187,10 @@ class StaffEntry {
       invitedAt: j['invitedAt'] != null ? DateTime.tryParse(j['invitedAt'] as String) : (j['invited_at'] != null ? DateTime.tryParse(j['invited_at'] as String) : null),
       skills: skills,
       schedule: schedule,
+      canSeeChats: j['can_see_chats'] as bool? ?? j['canSeeChats'] as bool? ?? false,
+      canWriteChats: j['can_write_chats'] as bool? ?? j['canWriteChats'] as bool? ?? false,
+      canManageOrgSettings:
+          j['can_manage_org_settings'] as bool? ?? j['canManageOrgSettings'] as bool? ?? false,
     );
   }
 }

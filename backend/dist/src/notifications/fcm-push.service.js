@@ -141,8 +141,8 @@ let FcmPushService = FcmPushService_1 = class FcmPushService {
             if (dataStr[k] == null)
                 delete dataStr[k];
         }
-        await this.sendMulticast(this.messagingClient, clientTokens, title, body, dataStr, collapse, 'autohub_messages');
-        await this.sendMulticast(this.messagingBusiness, businessTokens, title, body, dataStr, collapse, 'autohub_business');
+        await this.sendMulticast(this.messagingClient, clientTokens, title, body, dataStr, collapse, 'mp_servis_messages');
+        await this.sendMulticast(this.messagingBusiness, businessTokens, title, body, dataStr, collapse, 'mp_servis_business');
     }
     async sendMulticast(messaging, tokens, title, body, dataStr, collapse, androidChannelId) {
         if (!messaging || !tokens.length)

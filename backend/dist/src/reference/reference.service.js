@@ -21,12 +21,14 @@ const car_model_entity_1 = require("./car-model.entity");
 const car_generation_entity_1 = require("./car-generation.entity");
 const pending_car_reference_entity_1 = require("./pending-car-reference.entity");
 const notifications_service_1 = require("../notifications/notifications.service");
+const client_car_entity_1 = require("../users/client-car.entity");
 let ReferenceService = class ReferenceService {
-    constructor(brandRepo, modelRepo, generationRepo, pendingRepo, notifications) {
+    constructor(brandRepo, modelRepo, generationRepo, pendingRepo, clientCarRepo, notifications) {
         this.brandRepo = brandRepo;
         this.modelRepo = modelRepo;
         this.generationRepo = generationRepo;
         this.pendingRepo = pendingRepo;
+        this.clientCarRepo = clientCarRepo;
         this.notifications = notifications;
     }
     async getCarBrands() {
@@ -61,15 +63,40 @@ let ReferenceService = class ReferenceService {
         }));
     }
     async createPending(userId, carId, data) {
-        const hasAny = data.pendingBrand?.trim() || data.pendingModel?.trim() || data.pendingGeneration?.trim();
+        const cid = carId?.trim();
+        if (!cid)
+            throw new common_1.BadRequestException('Не указан car_id автомобиля из гаража');
+        let pendingBrand = data.pendingBrand?.trim() || undefined;
+        let pendingModel = data.pendingModel?.trim() || undefined;
+        const pendingGeneration = data.pendingGeneration?.trim() || undefined;
+        if (pendingModel === '—')
+            pendingModel = undefined;
+        const car = await this.clientCarRepo.findOne({ where: { id: cid, userId } });
+        const brandIdHint = data.referenceBrandId ?? car?.brandId ?? undefined;
+        const modelIdHint = data.referenceModelId ?? car?.modelId ?? undefined;
+        if (!pendingBrand && car?.brand?.trim())
+            pendingBrand = car.brand.trim();
+        if (!pendingModel && car?.model?.trim() && car.model.trim() !== '—')
+            pendingModel = car.model.trim();
+        if (!pendingBrand && brandIdHint != null) {
+            const b = await this.brandRepo.findOne({ where: { id: brandIdHint } });
+            if (b?.name?.trim())
+                pendingBrand = b.name.trim();
+        }
+        if (!pendingModel && modelIdHint != null) {
+            const m = await this.modelRepo.findOne({ where: { id: modelIdHint } });
+            if (m?.name?.trim())
+                pendingModel = m.name.trim();
+        }
+        const hasAny = pendingBrand || pendingModel || pendingGeneration;
         if (!hasAny)
             throw new common_1.BadRequestException('Нет данных для подтверждения');
         const pending = this.pendingRepo.create({
             userId,
-            carId,
-            pendingBrand: data.pendingBrand?.trim() || null,
-            pendingModel: data.pendingModel?.trim() || null,
-            pendingGeneration: data.pendingGeneration?.trim() || null,
+            carId: cid,
+            pendingBrand: pendingBrand ?? null,
+            pendingModel: pendingModel ?? null,
+            pendingGeneration: pendingGeneration ?? null,
             status: 'pending',
         });
         await this.pendingRepo.save(pending);
@@ -80,16 +107,50 @@ let ReferenceService = class ReferenceService {
             where: { status: 'pending' },
             order: { createdAt: 'DESC' },
         });
-        return list.map((p) => ({
-            id: p.id,
-            userId: p.userId,
-            carId: p.carId,
-            pendingBrand: p.pendingBrand,
-            pendingModel: p.pendingModel,
-            pendingGeneration: p.pendingGeneration,
-            status: p.status,
-            createdAt: p.createdAt,
-        }));
+        const ids = [...new Set(list.map((p) => p.carId?.trim()).filter((id) => !!id))];
+        const cars = ids.length ? await this.clientCarRepo.find({ where: { id: (0, typeorm_2.In)(ids) } }) : [];
+        const carById = new Map(cars.map((c) => [c.id, c]));
+        const brandIds = new Set();
+        const modelIds = new Set();
+        for (const c of cars) {
+            if (c.brandId != null)
+                brandIds.add(c.brandId);
+            if (c.modelId != null)
+                modelIds.add(c.modelId);
+        }
+        const brandRows = brandIds.size ? await this.brandRepo.find({ where: { id: (0, typeorm_2.In)([...brandIds]) } }) : [];
+        const modelRows = modelIds.size ? await this.modelRepo.find({ where: { id: (0, typeorm_2.In)([...modelIds]) } }) : [];
+        const brandById = new Map(brandRows.map((b) => [b.id, b]));
+        const modelById = new Map(modelRows.map((m) => [m.id, m]));
+        return list.map((p) => {
+            const car = carById.get(p.carId);
+            let snapB = car?.brand?.trim() || null;
+            let snapM = car?.model?.trim() || null;
+            if ((!snapB || snapB === '—') && car?.brandId != null) {
+                const b = brandById.get(car.brandId);
+                if (b?.name?.trim())
+                    snapB = b.name.trim();
+            }
+            if ((!snapM || snapM === '—') && car?.modelId != null) {
+                const m = modelById.get(car.modelId);
+                if (m?.name?.trim())
+                    snapM = m.name.trim();
+            }
+            return {
+                id: p.id,
+                userId: p.userId,
+                carId: p.carId,
+                pendingBrand: p.pendingBrand,
+                pendingModel: p.pendingModel,
+                pendingGeneration: p.pendingGeneration,
+                status: p.status,
+                createdAt: p.createdAt,
+                carSnapshotBrand: snapB && snapB !== '—' ? snapB : null,
+                carSnapshotModel: snapM && snapM !== '—' ? snapM : null,
+                carBrandId: car?.brandId ?? null,
+                carModelId: car?.modelId ?? null,
+            };
+        });
     }
     async createBrand(name) {
         const trimmed = name?.trim();
@@ -257,7 +318,9 @@ exports.ReferenceService = ReferenceService = __decorate([
     __param(1, (0, typeorm_1.InjectRepository)(car_model_entity_1.CarModel)),
     __param(2, (0, typeorm_1.InjectRepository)(car_generation_entity_1.CarGeneration)),
     __param(3, (0, typeorm_1.InjectRepository)(pending_car_reference_entity_1.PendingCarReference)),
+    __param(4, (0, typeorm_1.InjectRepository)(client_car_entity_1.ClientCar)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
+        typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,

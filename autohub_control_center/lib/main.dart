@@ -7,19 +7,19 @@ import 'core/theme/app_theme.dart';
 void main() {
   runApp(
     const ProviderScope(
-      child: AutoHubControlCenterApp(),
+      child: MpServisControlCenterApp(),
     ),
   );
 }
 
-class AutoHubControlCenterApp extends ConsumerStatefulWidget {
-  const AutoHubControlCenterApp({super.key});
+class MpServisControlCenterApp extends ConsumerStatefulWidget {
+  const MpServisControlCenterApp({super.key});
 
   @override
-  ConsumerState<AutoHubControlCenterApp> createState() => _AutoHubControlCenterAppState();
+  ConsumerState<MpServisControlCenterApp> createState() => _MpServisControlCenterAppState();
 }
 
-class _AutoHubControlCenterAppState extends ConsumerState<AutoHubControlCenterApp> {
+class _MpServisControlCenterAppState extends ConsumerState<MpServisControlCenterApp> {
   @override
   void initState() {
     super.initState();
@@ -31,7 +31,7 @@ class _AutoHubControlCenterAppState extends ConsumerState<AutoHubControlCenterAp
   @override
   Widget build(BuildContext context) {
     return MaterialApp.router(
-      title: 'AutoHub Control Center',
+      title: 'MP-Servis Control Center',
       theme: AppTheme.light,
       routerConfig: ref.watch(goRouterProvider),
     );

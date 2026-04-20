@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/formatters.dart';
 
 /// Статусы заказа — идентичны клиентскому приложению (один бэкенд).
 enum OrderStatus {
@@ -60,6 +61,11 @@ class OrderItem {
   final bool isCompleted;
   final bool isAdditional;
 
+  /// Строка прайса организации (как в API `service_id`). Цена/время в позиции могут отличаться от прайса.
+  final String? serviceId;
+  /// Общий каталог `svc_*` (`catalog_item_id` в API).
+  final String? catalogItemId;
+
   const OrderItem({
     required this.id,
     required this.name,
@@ -67,6 +73,8 @@ class OrderItem {
     this.estimatedMinutes = 60,
     this.isCompleted = false,
     this.isAdditional = false,
+    this.serviceId,
+    this.catalogItemId,
   });
 
   OrderItem copyWith({
@@ -76,6 +84,8 @@ class OrderItem {
     int? estimatedMinutes,
     bool? isCompleted,
     bool? isAdditional,
+    String? serviceId,
+    String? catalogItemId,
   }) {
     return OrderItem(
       id: id ?? this.id,
@@ -84,6 +94,8 @@ class OrderItem {
       estimatedMinutes: estimatedMinutes ?? this.estimatedMinutes,
       isCompleted: isCompleted ?? this.isCompleted,
       isAdditional: isAdditional ?? this.isAdditional,
+      serviceId: serviceId ?? this.serviceId,
+      catalogItemId: catalogItemId ?? this.catalogItemId,
     );
   }
 
@@ -101,6 +113,8 @@ class OrderItem {
     final minutesVal = j['estimated_minutes'] ?? j['estimatedMinutes'];
     final priceKopecks = priceVal == null ? null : (priceVal is num ? priceVal.toInt() : int.tryParse(priceVal.toString()));
     final estimatedMinutes = minutesVal == null ? 60 : (minutesVal is num ? minutesVal.toInt() : int.tryParse(minutesVal.toString()) ?? 60);
+    final sid = j['service_id']?.toString() ?? j['serviceId']?.toString();
+    final cid = j['catalog_item_id']?.toString() ?? j['catalogItemId']?.toString();
     return OrderItem(
       id: id == null ? '' : id.toString(),
       name: j['name'] as String? ?? '',
@@ -108,6 +122,8 @@ class OrderItem {
       estimatedMinutes: estimatedMinutes.clamp(0, 9999),
       isCompleted: j['is_completed'] as bool? ?? false,
       isAdditional: j['is_additional'] as bool? ?? false,
+      serviceId: (sid != null && sid.trim().isNotEmpty) ? sid.trim() : null,
+      catalogItemId: (cid != null && cid.trim().isNotEmpty) ? cid.trim() : null,
     );
   }
 }
@@ -118,6 +134,10 @@ class Order {
   final String carId;
   final String? clientName;   // для списка; у мастера может быть скрыт
   final String? clientPhone;  // только для Admin/Owner/Solo
+  /// Фото профиля клиента (`client_avatar_url` с API заказа).
+  final String? clientAvatarUrl;
+  /// URL фото автомобиля с клиентского приложения (`car_photo_url`), если передано при записи.
+  final String? carPhotoUrl;
   final String carInfo;       // "Toyota Camry, А123АА777"
   final String? vin;
   final String? licensePlate;
@@ -160,6 +180,8 @@ class Order {
     required this.carId,
     this.clientName,
     this.clientPhone,
+    this.clientAvatarUrl,
+    this.carPhotoUrl,
     required this.carInfo,
     this.vin,
     this.licensePlate,
@@ -212,6 +234,31 @@ class Order {
     return items.fold<int>(0, (s, i) => s + i.estimatedMinutes);
   }
 
+  /// Длительность записи: интервал планирования или сумма минут по услугам (как в сводке заказа).
+  int get effectiveDurationMinutes {
+    if (plannedStartTime != null && plannedEndTime != null) {
+      final diff = plannedEndTime!.difference(plannedStartTime!);
+      if (diff.inMinutes > 0) return diff.inMinutes;
+    }
+    final em = estimatedMinutesForDisplay;
+    return em > 0 ? em : 60;
+  }
+
+  /// Одна строка: «14.04.2026 10:00–12:20» (дата записи и интервал).
+  String get appointmentRangeLabel {
+    final start = plannedStartTime ?? dateTime;
+    if (start == null) return '—';
+    final s = start.toLocal();
+    DateTime end;
+    if (plannedEndTime != null) {
+      end = plannedEndTime!.toLocal();
+    } else {
+      final dm = effectiveDurationMinutes;
+      end = s.add(Duration(minutes: dm > 0 ? dm : 60));
+    }
+    return '${formatDate(s)} ${formatTime(s)}–${formatTime(end)}';
+  }
+
   /// Время для сортировки в ленте чата: при «требует согласования» — по обновлению, иначе по созданию.
   DateTime get timelineSortAt {
     if (status == OrderStatus.pendingApproval && updatedAt != null) return updatedAt!;
@@ -243,6 +290,8 @@ class Order {
     String? carId,
     String? clientName,
     String? clientPhone,
+    String? clientAvatarUrl,
+    String? carPhotoUrl,
     String? carInfo,
     String? vin,
     String? licensePlate,
@@ -281,6 +330,8 @@ class Order {
       carId: carId ?? this.carId,
       clientName: clientName ?? this.clientName,
       clientPhone: clientPhone ?? this.clientPhone,
+      clientAvatarUrl: clientAvatarUrl ?? this.clientAvatarUrl,
+      carPhotoUrl: carPhotoUrl ?? this.carPhotoUrl,
       carInfo: carInfo ?? this.carInfo,
       vin: vin ?? this.vin,
       licensePlate: licensePlate ?? this.licensePlate,
@@ -389,6 +440,14 @@ class Order {
       carId: j['car_id'] as String? ?? '',
       clientName: j['client_name'] as String?,
       clientPhone: j['client_phone'] as String?,
+      clientAvatarUrl: () {
+        final u = j['client_avatar_url']?.toString() ?? j['clientAvatarUrl']?.toString() ?? '';
+        return u.trim().isEmpty ? null : u.trim();
+      }(),
+      carPhotoUrl: () {
+        final u = j['car_photo_url']?.toString() ?? j['carPhotoUrl']?.toString() ?? '';
+        return u.trim().isEmpty ? null : u.trim();
+      }(),
       carInfo: j['car_info'] as String? ?? '',
       vin: j['vin'] as String?,
       licensePlate: j['license_plate'] as String?,

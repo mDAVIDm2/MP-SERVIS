@@ -4,8 +4,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../core/api/internal_data_providers.dart';
+import '../../core/auth/auth_provider.dart';
 import '../../core/constants/labels_ru.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/media_url_resolver.dart';
+import '../../shared/widgets/cc_auth_network_image.dart';
 
 /// Карточка авто + история заказов (по смыслу как экран авто в десктопе Business).
 class ClientCarDetailView extends ConsumerWidget {
@@ -18,6 +21,9 @@ class ClientCarDetailView extends ConsumerWidget {
     this.previewClientName,
     this.previewOrdersCount,
     this.previewLastAt,
+    /// Десктоп: после полного удаления сбросить выбор в [ClientCarsScreen], иначе панель деталей
+    /// остаётся с тем же car_id и [ref.invalidate] ломает дерево виджетов (`_dependents.isEmpty`).
+    this.onAfterHardDeleteSuccess,
   });
 
   final String clientPhone;
@@ -27,6 +33,7 @@ class ClientCarDetailView extends ConsumerWidget {
   final String? previewClientName;
   final String? previewOrdersCount;
   final String? previewLastAt;
+  final VoidCallback? onAfterHardDeleteSuccess;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -62,6 +69,14 @@ class ClientCarDetailView extends ConsumerWidget {
                     previewClientName: previewClientName,
                     previewOrdersCount: previewOrdersCount,
                     previewLastAt: previewLastAt,
+                  ),
+                  const SizedBox(height: 16),
+                  _ModerationCard(clientPhone: clientPhone, carId: carId),
+                  const SizedBox(height: 16),
+                  _CarLifecycleCard(
+                    clientPhone: clientPhone,
+                    carId: carId,
+                    onAfterHardDeleteSuccess: onAfterHardDeleteSuccess,
                   ),
                   const SizedBox(height: 20),
                   _OrdersSectionCard(orders: orders),
@@ -100,6 +115,303 @@ class ClientCarDetailView extends ConsumerWidget {
   }
 }
 
+class _CarLifecycleCard extends ConsumerWidget {
+  const _CarLifecycleCard({
+    required this.clientPhone,
+    required this.carId,
+    this.onAfterHardDeleteSuccess,
+  });
+
+  final String clientPhone;
+  final String carId;
+  final VoidCallback? onAfterHardDeleteSuccess;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Гараж и заказы (разработчики)', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+          const SizedBox(height: 4),
+          const Text(
+            'Скрытие: данные в БД сохраняются, клиент не видит авто и заказы с этим car_id. Полное удаление — безвозвратно.',
+            style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton(
+                onPressed: () async {
+                  final ok = await showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Скрыть у клиента?'),
+                      content: const Text(
+                        'Авто и все заказы с этим car_id перестанут отображаться в клиентском приложении. В БД всё останется.',
+                      ),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+                        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Скрыть')),
+                      ],
+                    ),
+                  );
+                  if (ok != true) return;
+                  final api = ref.read(internalApiProvider);
+                  final r = await api.hideClientCarFromUser(clientPhone, carId);
+                  ref.invalidate(clientCarsProvider);
+                  ref.invalidate(clientCarHistoryProvider((clientPhone: clientPhone, carId: carId)));
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          r.ok ? 'Скрыто у клиента' : (r.error ?? 'Ошибка запроса'),
+                        ),
+                      ),
+                    );
+                  }
+                },
+                child: const Text('Скрыть у клиента'),
+              ),
+              OutlinedButton(
+                onPressed: () async {
+                  final api = ref.read(internalApiProvider);
+                  final r = await api.restoreClientCarForUser(clientPhone, carId);
+                  ref.invalidate(clientCarsProvider);
+                  ref.invalidate(clientCarHistoryProvider((clientPhone: clientPhone, carId: carId)));
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          r.ok ? 'Снова видно клиенту' : (r.error ?? 'Ошибка запроса'),
+                        ),
+                      ),
+                    );
+                  }
+                },
+                child: const Text('Вернуть отображение'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+                onPressed: () async {
+                  final controller = TextEditingController();
+                  final typed = await showDialog<String>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Полное удаление'),
+                      content: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const Text(
+                            'Будут удалены все заказы с этим car_id и запись в гараже (если есть). Введите DELETE для подтверждения.',
+                          ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            controller: controller,
+                            decoration: const InputDecoration(
+                              labelText: 'Подтверждение',
+                              border: OutlineInputBorder(),
+                            ),
+                            autocorrect: false,
+                          ),
+                        ],
+                      ),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+                        FilledButton(
+                          style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+                          onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+                          child: const Text('Удалить навсегда'),
+                        ),
+                      ],
+                    ),
+                  ).whenComplete(controller.dispose);
+                  if (!context.mounted) return;
+                  if (typed != 'DELETE') {
+                    if (typed != null && typed.isNotEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Нужно ввести DELETE')),
+                      );
+                    }
+                    return;
+                  }
+                  if (!context.mounted) return;
+                  final container = ProviderScope.containerOf(context, listen: false);
+                  final messenger = ScaffoldMessenger.maybeOf(context);
+                  final router = GoRouter.maybeOf(context);
+                  final api = ref.read(internalApiProvider);
+                  final r = await api.hardDeleteClientCar(clientPhone, carId, confirm: 'DELETE');
+                  if (!r.ok) {
+                    container.invalidate(clientCarsProvider);
+                    container.invalidate(clientCarHistoryProvider((clientPhone: clientPhone, carId: carId)));
+                    messenger?.showSnackBar(
+                      SnackBar(content: Text(r.error ?? 'Ошибка запроса')),
+                    );
+                    return;
+                  }
+
+                  messenger?.showSnackBar(const SnackBar(content: Text('Удалено из БД')));
+
+                  onAfterHardDeleteSuccess?.call();
+
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    container.invalidate(clientCarsProvider);
+                    if (onAfterHardDeleteSuccess == null) {
+                      router?.go('/app/client-cars');
+                    }
+                  });
+                },
+                child: const Text('Удалить из БД'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ModerationCard extends ConsumerWidget {
+  const _ModerationCard({required this.clientPhone, required this.carId});
+
+  final String clientPhone;
+  final String carId;
+
+  Future<void> _run(
+    BuildContext context,
+    WidgetRef ref, {
+    required String title,
+    required String message,
+    required bool vin,
+    required bool licensePlate,
+    required bool carInfo,
+    required bool carPhotoUrl,
+  }) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Очистить'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final api = ref.read(internalApiProvider);
+    final success = await api.moderateClearClientCar(
+      clientPhone,
+      carId,
+      vin: vin,
+      licensePlate: licensePlate,
+      carInfo: carInfo,
+      carPhotoUrl: carPhotoUrl,
+    );
+    ref.invalidate(clientCarsProvider);
+    ref.invalidate(clientCarHistoryProvider((clientPhone: clientPhone, carId: carId)));
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(success ? 'Данные очищены в заказах' : 'Ошибка запроса')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Модерация (разработчики)', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+          const SizedBox(height: 4),
+          const Text(
+            'Очистка полей во всех заказах с этим телефоном и car_id.',
+            style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton(
+                onPressed: () => _run(context, ref,
+                    title: 'Очистить VIN?',
+                    message: 'VIN будет удалён из всех связанных заказов.',
+                    vin: true,
+                    licensePlate: false,
+                    carInfo: false,
+                    carPhotoUrl: false),
+                child: const Text('VIN'),
+              ),
+              OutlinedButton(
+                onPressed: () => _run(context, ref,
+                    title: 'Очистить госномер?',
+                    message: 'Номер будет удалён из всех связанных заказов.',
+                    vin: false,
+                    licensePlate: true,
+                    carInfo: false,
+                    carPhotoUrl: false),
+                child: const Text('Госномер'),
+              ),
+              OutlinedButton(
+                onPressed: () => _run(context, ref,
+                    title: 'Очистить описание авто?',
+                    message: 'Текст car_info будет очищен.',
+                    vin: false,
+                    licensePlate: false,
+                    carInfo: true,
+                    carPhotoUrl: false),
+                child: const Text('Описание'),
+              ),
+              OutlinedButton(
+                onPressed: () => _run(context, ref,
+                    title: 'Убрать фото авто?',
+                    message: 'Ссылки на фото в заказах будут удалены.',
+                    vin: false,
+                    licensePlate: false,
+                    carInfo: false,
+                    carPhotoUrl: true),
+                child: const Text('Фото авто'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+                onPressed: () => _run(context, ref,
+                    title: 'Очистить всё по авто?',
+                    message: 'VIN, госномер, описание и фото авто в заказах будут очищены.',
+                    vin: true,
+                    licensePlate: true,
+                    carInfo: true,
+                    carPhotoUrl: true),
+                child: const Text('Всё сразу'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _VehicleSummaryCard extends StatelessWidget {
   const _VehicleSummaryCard({
     required this.orders,
@@ -120,6 +432,14 @@ class _VehicleSummaryCard extends StatelessWidget {
   final String? previewOrdersCount;
   final String? previewLastAt;
   final bool loading;
+
+  static String? _firstCarPhotoUrl(List<Map<String, dynamic>> orders) {
+    for (final x in orders) {
+      final u = x['car_photo_url']?.toString().trim();
+      if (u != null && u.isNotEmpty) return u;
+    }
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -142,6 +462,16 @@ class _VehicleSummaryCard extends StatelessWidget {
     final cancelled = orders.where((x) => '${x['status']}'.toLowerCase() == 'cancelled').length;
     final inFlight = orders.length - completed - cancelled;
     final totalK = _sumOrderKopecks(orders);
+    final carPhotoUrl = internalClientCarPhotoImageUrl(_firstCarPhotoUrl(orders));
+    final carThumbPlaceholder = Container(
+      width: 56,
+      height: 56,
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: const Icon(Icons.directions_car_rounded, color: AppColors.primary, size: 32),
+    );
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -163,15 +493,17 @@ class _VehicleSummaryCard extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: 56,
-                height: 56,
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.1),
+              if (carPhotoUrl != null)
+                CcAuthNetworkImage(
+                  url: carPhotoUrl,
+                  width: 56,
+                  height: 56,
+                  fit: BoxFit.cover,
                   borderRadius: BorderRadius.circular(14),
-                ),
-                child: const Icon(Icons.directions_car_rounded, color: AppColors.primary, size: 32),
-              ),
+                  placeholder: carThumbPlaceholder,
+                )
+              else
+                carThumbPlaceholder,
               const SizedBox(width: 16),
               Expanded(
                 child: Column(

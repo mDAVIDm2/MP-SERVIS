@@ -56,7 +56,9 @@ export class AuthOtpService {
   normalizePhoneDigits(phone: string): string {
     const n = phone.replace(/\D/g, '');
     if (n.length < 10) throw new BadRequestException('Некорректный номер телефона');
-    return n.length === 10 ? `7${n}` : n;
+    if (n.length === 11 && n.startsWith('8')) return '7' + n.slice(1);
+    if (n.length === 10 && !n.startsWith('7')) return '7' + n;
+    return n;
   }
 
   private resolveRecipient(params: CreateOtpParams): { recipient: string; recipientKind: OtpRecipientKind } {
@@ -77,7 +79,9 @@ export class AuthOtpService {
     return String(randomInt(min, max + 1));
   }
 
-  async createChallenge(params: CreateOtpParams): Promise<{ challenge_id: string; expires_in: number; resend_after: number }> {
+  async createChallenge(
+    params: CreateOtpParams,
+  ): Promise<{ challenge_id: string; expires_in: number; resend_after: number; debug_otp?: string }> {
     const { recipient, recipientKind } = this.resolveRecipient(params);
     const requestedChannel = (params.requestedChannel || (recipientKind === 'email' ? 'email' : 'sms')).toLowerCase();
 
@@ -135,11 +139,16 @@ export class AuthOtpService {
       requestedChannel,
     });
 
-    return {
+    const base = {
       challenge_id: row.id,
       expires_in: Math.floor(ttlMs / 1000),
       resend_after: Math.floor(RESEND_COOLDOWN_MS / 1000),
     };
+    const debugFlag = (this.config.get<string>('OTP_DEBUG_RETURN_CODE') || '').trim().toLowerCase();
+    if (debugFlag === '1' || debugFlag === 'true' || debugFlag === 'yes') {
+      return { ...base, debug_otp: code };
+    }
+    return base;
   }
 
   async verifyChallenge(

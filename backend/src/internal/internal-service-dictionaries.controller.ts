@@ -2,7 +2,7 @@ import { Controller, Get, UseGuards } from '@nestjs/common';
 import { InternalJwtAuthGuard } from './internal-jwt.guard';
 import { ServiceCatalogService } from '../reference/service-catalog.service';
 
-/** Единый справочник услуг AutoHub (те же данные, что у СТО в GET /reference/service-catalog). */
+/** Единый справочник услуг MP-Servis (те же данные, что у СТО в GET /reference/service-catalog). */
 @Controller('internal/service-dictionaries')
 @UseGuards(InternalJwtAuthGuard)
 export class InternalServiceDictionariesController {

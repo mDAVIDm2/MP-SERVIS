@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  ForbiddenException,
   Get,
   HttpCode,
   NotFoundException,
@@ -32,6 +33,22 @@ export class ChatsController {
     if (!phone) throw new BadRequestException('В профиле не указан телефон');
     const chat = await this.chats.getOrCreateSupportChat(phone);
     return this.chats.getChatById(chat.id, null, phone, true);
+  }
+
+  /** Общий чат с выбранной точкой (карточка СТО → «Написать»). Только клиентское приложение. */
+  @Post('open-organization')
+  async openOrganizationChat(
+    @Req() req: Request & { user: { phone?: string } },
+    @Body() body: { organization_id?: string },
+  ) {
+    if (!isClientAppRequest(req)) {
+      throw new ForbiddenException('Доступно только из клиентского приложения');
+    }
+    const orgId = body?.organization_id?.trim();
+    if (!orgId) throw new BadRequestException('Укажите organization_id');
+    const user = (req as any).user;
+    const phone = user?.phone != null ? String(user.phone) : '';
+    return this.chats.openOrganizationChatForClient(orgId, phone);
   }
 
   @Get()

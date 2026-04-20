@@ -61,12 +61,13 @@ let OrdersController = class OrdersController {
         return res.sendFile(filePath);
     }
     async get(id, req) {
-        const o = await this.orders.findOne(id);
-        if (!o)
-            throw new common_1.NotFoundException('Order not found');
         const user = req.user;
         const clientMode = (0, request_app_util_1.isClientAppRequest)(req);
         const orgId = user?.organizationId;
+        const clientLike = clientMode || (!orgId && user?.phone);
+        const o = await this.orders.findOne(id, clientLike && user?.id ? user.id : undefined);
+        if (!o)
+            throw new common_1.NotFoundException('Order not found');
         const userPhone = user?.phone ? this.orders.normalizePhoneForCompare(user.phone) : '';
         if (clientMode || (!orgId && user?.phone)) {
             const orderPhone = this.orders.normalizePhoneForCompare(o.client_phone);

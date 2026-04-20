@@ -228,7 +228,7 @@ Future<Uint8List> _buildPdfBytes(
         ],
         pw.SizedBox(height: 24),
         pw.Text(
-          'Документ сформирован в AutoHub. Подписи сторон подтверждают согласие с перечнем работ и стоимостью (если указана).',
+          'Документ сформирован в MP-Servis. Подписи сторон подтверждают согласие с перечнем работ и стоимостью (если указана).',
           style: pw.TextStyle(font: font, fontSize: 7, color: PdfColors.grey700),
         ),
         pw.SizedBox(height: 20),

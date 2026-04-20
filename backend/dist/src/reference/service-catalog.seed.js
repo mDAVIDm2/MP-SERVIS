@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.SERVICE_CATALOG_SEED = void 0;
 const service_catalog_seed_extra_1 = require("./service-catalog.seed-extra");
 const SERVICE_CATALOG_SEED_BASE = [
-    { id: 'svc_maint_oil_engine', categoryKey: 'maintenance', categoryName: 'ТО и обслуживание', name: 'Замена моторного масла и масляного фильтра', defaultDurationMinutes: 45, sortOrder: 10 },
+    { id: 'svc_maint_oil_engine', categoryKey: 'maintenance', categoryName: 'ТО и обслуживание', name: 'Замена моторного масла', defaultDurationMinutes: 45, sortOrder: 10 },
     { id: 'svc_maint_oil_filter_only', categoryKey: 'maintenance', categoryName: 'ТО и обслуживание', name: 'Замена масляного фильтра', defaultDurationMinutes: 30, sortOrder: 20 },
     { id: 'svc_maint_air_filter', categoryKey: 'maintenance', categoryName: 'ТО и обслуживание', name: 'Замена воздушного фильтра', defaultDurationMinutes: 30, sortOrder: 30 },
     { id: 'svc_maint_cabin_filter', categoryKey: 'maintenance', categoryName: 'ТО и обслуживание', name: 'Замена салонного фильтра', defaultDurationMinutes: 30, sortOrder: 40 },

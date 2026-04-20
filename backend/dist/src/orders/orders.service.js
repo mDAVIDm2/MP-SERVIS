@@ -33,9 +33,12 @@ const media_service_1 = require("../media/media.service");
 const organization_business_kind_1 = require("../organizations/organization-business-kind");
 const organization_scheduling_1 = require("../organizations/organization-scheduling");
 const bay_settings_util_1 = require("../organizations/bay-settings.util");
+const users_service_1 = require("../users/users.service");
+const user_client_hidden_car_entity_1 = require("../users/user-client-hidden-car.entity");
+const vin_util_1 = require("../common/vin.util");
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads', 'order-photos');
 let OrdersService = class OrdersService {
-    constructor(orderRepo, itemRepo, photoRepo, staffRepo, chatRepo, chatMsgRepo, chats, notifications, orgService, subscriptionQuota, mediaService) {
+    constructor(orderRepo, itemRepo, photoRepo, staffRepo, chatRepo, chatMsgRepo, chats, notifications, orgService, subscriptionQuota, mediaService, usersService, hiddenCarRepo) {
         this.orderRepo = orderRepo;
         this.itemRepo = itemRepo;
         this.photoRepo = photoRepo;
@@ -47,6 +50,29 @@ let OrdersService = class OrdersService {
         this.orgService = orgService;
         this.subscriptionQuota = subscriptionQuota;
         this.mediaService = mediaService;
+        this.usersService = usersService;
+        this.hiddenCarRepo = hiddenCarRepo;
+    }
+    async loadHiddenCarIdsForClientUser(userId) {
+        const rows = await this.hiddenCarRepo.find({ where: { userId }, select: ['carId'] });
+        return new Set(rows.map((r) => r.carId));
+    }
+    async isCarHiddenForClient(userId, carId) {
+        if (!carId || String(carId).trim() === '')
+            return false;
+        const row = await this.hiddenCarRepo.findOne({
+            where: { userId, carId: String(carId).trim() },
+        });
+        return !!row;
+    }
+    async buildClientAvatarMapForOrders(orders) {
+        const keys = new Set();
+        for (const o of orders) {
+            const pk = this.usersService.clientPhoneMatchKey(String(o.clientPhone || ''));
+            if (pk)
+                keys.add(pk);
+        }
+        return this.usersService.mapClientAvatarUrlsByPhoneKeys(keys);
     }
     async assertOrderMediaAttachmentLimit(orderId, organizationId) {
         const limits = await this.subscriptionQuota.getLimitsForOrganization(organizationId);
@@ -81,7 +107,8 @@ let OrdersService = class OrdersService {
             order: { dateTime: 'DESC' },
         });
         const bayCache = new Map();
-        const items = await Promise.all(orders.map((o) => this.toOrderJsonWithApprovalPreview(o, bayCache)));
+        const avatarMap = await this.buildClientAvatarMapForOrders(orders);
+        const items = await Promise.all(orders.map((o) => this.toOrderJsonWithApprovalPreview(o, bayCache, avatarMap)));
         return { items };
     }
     async findAllForInternal(limit = 200, offset = 0) {
@@ -92,11 +119,14 @@ let OrdersService = class OrdersService {
             skip: offset,
         });
         const bayCache = new Map();
-        const items = await Promise.all(orders.map((o) => this.toOrderJsonWithApprovalPreview(o, bayCache)));
+        const avatarMap = await this.buildClientAvatarMapForOrders(orders);
+        const items = await Promise.all(orders.map((o) => this.toOrderJsonWithApprovalPreview(o, bayCache, avatarMap)));
         return { items, total };
     }
     async findForClient(clientPhoneNorm) {
         const norm = this.normalizePhoneForCompare(clientPhoneNorm);
+        const userId = await this.usersService.findIdByNormalizedPhone(norm, 'client');
+        const hidden = userId ? await this.loadHiddenCarIdsForClientUser(userId) : new Set();
         const digitsExpr = "REGEXP_REPLACE(COALESCE(order.client_phone, ''), '\\D', '', 'g')";
         const normalizedExpr = `CASE WHEN LENGTH(${digitsExpr}) = 11 AND LEFT(${digitsExpr}, 1) = '8' THEN '7' || SUBSTRING(${digitsExpr} FROM 2) ELSE ${digitsExpr} END`;
         const orders = await this.orderRepo
@@ -107,15 +137,29 @@ let OrdersService = class OrdersService {
             .where(`${normalizedExpr} = :phone`, { phone: norm })
             .orderBy('order.date_time', 'DESC')
             .getMany();
+        const visible = hidden.size === 0
+            ? orders
+            : orders.filter((o) => {
+                const cid = o.carId;
+                if (cid == null || String(cid).trim() === '')
+                    return true;
+                return !hidden.has(String(cid).trim());
+            });
         const bayCache = new Map();
-        const items = await Promise.all(orders.map((o) => this.toOrderJsonWithApprovalPreview(o, bayCache)));
+        const avatarMap = await this.buildClientAvatarMapForOrders(visible);
+        const items = await Promise.all(visible.map((o) => this.toOrderJsonWithApprovalPreview(o, bayCache, avatarMap)));
         return { items };
     }
-    async findOne(id) {
+    async findOne(id, filterHiddenForClientUserId) {
         const o = await this.orderRepo.findOne({ where: { id }, relations: ['items', 'master', 'organization'] });
         if (!o)
             return null;
-        return this.toOrderJsonWithApprovalPreview(o, new Map());
+        if (filterHiddenForClientUserId &&
+            (await this.isCarHiddenForClient(filterHiddenForClientUserId, o.carId))) {
+            return null;
+        }
+        const avatarMap = await this.buildClientAvatarMapForOrders([o]);
+        return this.toOrderJsonWithApprovalPreview(o, new Map(), avatarMap);
     }
     async createFromChat(organizationId, clientPhone, approvalItems, proposedDateTime) {
         const norm = this.normalizePhoneForCompare(clientPhone);
@@ -142,6 +186,7 @@ let OrdersService = class OrdersService {
             engineType: lastOrder?.engineType ?? null,
             clientName: lastOrder?.clientName ?? null,
             clientPhone,
+            carPhotoUrl: lastOrder?.carPhotoUrl ?? null,
             status: 'pending_confirmation',
             previousStatus: null,
             dateTime,
@@ -176,6 +221,17 @@ let OrdersService = class OrdersService {
                 return orderNumber;
         }
         return '#2024-' + String(Date.now()).slice(-6);
+    }
+    sanitizeCarPhotoUrl(raw) {
+        const s = raw == null ? '' : String(raw).trim();
+        if (!s || s.length > 1024)
+            return null;
+        const lower = s.toLowerCase();
+        if (lower.startsWith('http://') || lower.startsWith('https://'))
+            return s;
+        if (s.startsWith('/'))
+            return s;
+        return null;
     }
     async create(organizationId, dto) {
         const dateTime = new Date(dto.date_time);
@@ -254,12 +310,13 @@ let OrdersService = class OrdersService {
             }
         }
         const orderNumber = await this.nextOrderNumber(organizationId);
+        const vinNorm = (0, vin_util_1.normalizeOptionalVin)(dto.vin);
         const order = this.orderRepo.create({
             organizationId,
             orderNumber,
             carId: dto.car_id || 'unknown',
             carInfo: dto.car_info || '',
-            vin: dto.vin ?? null,
+            vin: vinNorm,
             licensePlate: dto.license_plate ?? null,
             bodyType: dto.body_type ?? null,
             color: dto.color ?? null,
@@ -267,6 +324,7 @@ let OrdersService = class OrdersService {
             engineType: dto.engine_type ?? null,
             clientName: dto.client_name,
             clientPhone: dto.client_phone,
+            carPhotoUrl: this.sanitizeCarPhotoUrl(dto.car_photo_url ?? dto.carPhotoUrl),
             status: 'pending_confirmation',
             dateTime,
             plannedStartTime: dateTime,
@@ -387,6 +445,23 @@ let OrdersService = class OrdersService {
             return '7' + digits.slice(1);
         return digits;
     }
+    async notifyOrgStaffClientBookingSystemLine(orderId, line) {
+        const order = await this.orderRepo.findOne({ where: { id: orderId } });
+        const orgId = order?.organizationId;
+        if (!orgId)
+            return;
+        const chat = await this.chats.getChatByOrderId(orderId);
+        await this.notifications.notifyOrganizationStaffOrderEvent(orgId, {
+            title: 'Клиент и запись',
+            body: line,
+            payload: {
+                order_id: orderId,
+                ...(chat?.id ? { chat_id: chat.id } : {}),
+                target_type: 'order',
+                target_id: orderId,
+            },
+        });
+    }
     buildClientApprovalAppliedDisplayNames(edited, newItems, approvedItemIds) {
         const acceptAllNew = approvedItemIds.length === 1 && String(approvedItemIds[0]) === '0';
         const approvedSet = new Set(approvedItemIds.map((x) => String(x)));
@@ -420,7 +495,7 @@ let OrdersService = class OrdersService {
         }
         return names;
     }
-    async applyClientTimeConfirmAfterApproval(orderId, newDateTime, acceptProposed) {
+    async applyClientTimeConfirmAfterApproval(orderId, newDateTime, acceptProposed, filterHiddenForClientUserId) {
         const updates = {};
         if (newDateTime) {
             const dt = new Date(newDateTime);
@@ -446,9 +521,10 @@ let OrdersService = class OrdersService {
                     ? `Клиент подтвердил запись на ${dateStr} в ${timeStr}.`
                     : `Клиент перенёс время на ${dateStr} в ${timeStr}.`;
                 await this.chats.sendMessage(chat.id, { text, is_system: true }, false);
+                await this.notifyOrgStaffClientBookingSystemLine(orderId, text);
             }
         }
-        return this.findOne(orderId);
+        return this.findOne(orderId, filterHiddenForClientUserId);
     }
     async confirmByClient(orderId, clientPhoneNorm, newDateTime, acceptProposed, approvalMessageId) {
         const order = await this.orderRepo.findOne({ where: { id: orderId }, relations: ['items'] });
@@ -458,9 +534,13 @@ let OrdersService = class OrdersService {
         const userPhone = this.normalizePhoneForCompare(clientPhoneNorm);
         if (orderPhone !== userPhone)
             return null;
+        const clientUserId = await this.usersService.findIdByNormalizedPhone(userPhone, 'client');
+        if (clientUserId && (await this.isCarHiddenForClient(clientUserId, order.carId))) {
+            return null;
+        }
         const status = order.status;
         if (status === 'confirmed' || status === 'in_progress') {
-            return this.applyClientTimeConfirmAfterApproval(orderId, newDateTime, acceptProposed);
+            return this.applyClientTimeConfirmAfterApproval(orderId, newDateTime, acceptProposed, clientUserId);
         }
         if (status !== 'pending_confirmation' && status !== 'pending_approval')
             return null;
@@ -504,12 +584,16 @@ let OrdersService = class OrdersService {
                     const dt = new Date(newDateTime);
                     const dateStr = dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
                     const timeStr = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-                    await this.chats.sendMessage(chat.id, { text: `Клиент подтвердил запись на ${dateStr} в ${timeStr}.`, is_system: true }, false);
+                    const line = `Клиент подтвердил запись на ${dateStr} в ${timeStr}.`;
+                    await this.chats.sendMessage(chat.id, { text: line, is_system: true }, false);
+                    await this.notifyOrgStaffClientBookingSystemLine(orderId, line);
                 }
                 else if (chat) {
-                    await this.chats.sendMessage(chat.id, { text: 'Клиент подтвердил запись.', is_system: true }, false);
+                    const line = 'Клиент подтвердил запись.';
+                    await this.chats.sendMessage(chat.id, { text: line, is_system: true }, false);
+                    await this.notifyOrgStaffClientBookingSystemLine(orderId, line);
                 }
-                return this.findOne(orderId);
+                return this.findOne(orderId, clientUserId);
             }
         }
         if (status === 'pending_approval') {
@@ -536,9 +620,12 @@ let OrdersService = class OrdersService {
                         const dt = new Date(newDateTime);
                         const dateStr = dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
                         const timeStr = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-                        await this.chats.sendMessage(chat.id, { text: `Клиент перенёс время на ${dateStr} в ${timeStr}.`, is_system: true }, false);
+                        const line = `Клиент перенёс время на ${dateStr} в ${timeStr}.`;
+                        await this.chats.sendMessage(chat.id, { text: line, is_system: true }, false);
+                        await this.notifyOrgStaffClientBookingSystemLine(orderId, line);
                     }
-                    return this.findOne(orderId);
+                    await this.chats.markApprovalRequestsResolvedForOrder(orderId, 'superseded');
+                    return this.findOne(orderId, clientUserId);
                 }
                 throw e;
             }
@@ -572,9 +659,10 @@ let OrdersService = class OrdersService {
                     ? `Клиент подтвердил запись на ${dateStr} в ${timeStr}.`
                     : `Клиент перенёс время на ${dateStr} в ${timeStr}.`;
                 await this.chats.sendMessage(chat.id, { text, is_system: true }, false);
+                await this.notifyOrgStaffClientBookingSystemLine(orderId, text);
             }
         }
-        return this.findOne(orderId);
+        return this.findOne(orderId, clientUserId);
     }
     async assignMaster(id, body) {
         const order = await this.orderRepo.findOne({ where: { id }, relations: ['items'] });
@@ -633,6 +721,7 @@ let OrdersService = class OrdersService {
         const order = await this.orderRepo.findOne({ where: { id } });
         if (!order)
             return null;
+        let filterHiddenForClientUserId;
         if (opts?.organizationId) {
             if (order.organizationId !== opts.organizationId)
                 return null;
@@ -642,9 +731,14 @@ let OrdersService = class OrdersService {
             const userPhone = this.normalizePhoneForCompare(opts.clientPhone);
             if (orderPhone !== userPhone)
                 return null;
+            const clientUserId = await this.usersService.findIdByNormalizedPhone(userPhone, 'client');
+            if (clientUserId && (await this.isCarHiddenForClient(clientUserId, order.carId))) {
+                return null;
+            }
+            filterHiddenForClientUserId = clientUserId ?? undefined;
         }
         await this.orderRepo.update(id, { status: 'cancelled' });
-        return this.findOne(id);
+        return this.findOne(id, filterHiddenForClientUserId);
     }
     async approveByClient(orderId, clientPhoneNorm, approvedItemIds, _rejectedItemIds, opts) {
         const order = await this.orderRepo.findOne({ where: { id: orderId }, relations: ['items'] });
@@ -654,9 +748,13 @@ let OrdersService = class OrdersService {
         const userPhone = this.normalizePhoneForCompare(clientPhoneNorm);
         if (orderPhone !== userPhone)
             return null;
+        const clientUserId = await this.usersService.findIdByNormalizedPhone(userPhone, 'client');
+        if (clientUserId && (await this.isCarHiddenForClient(clientUserId, order.carId))) {
+            return null;
+        }
         const status = order.status;
         if (status !== 'pending_approval')
-            return this.findOne(orderId);
+            return this.findOne(orderId, clientUserId);
         if (approvedItemIds.length === 0) {
             const previousStatus = order.previousStatus ?? 'in_progress';
             await this.orderRepo.update(orderId, { status: previousStatus, previousStatus: null });
@@ -664,7 +762,8 @@ let OrdersService = class OrdersService {
             if (chat) {
                 await this.chats.sendMessage(chat.id, { text: 'Клиент отказался от дополнительных работ.', is_system: true }, false);
             }
-            return this.findOne(orderId);
+            await this.chats.markApprovalRequestsResolvedForOrder(orderId, 'rejected');
+            return this.findOne(orderId, clientUserId);
         }
         const approvalMsg = await this.chats.resolveApprovalMessageForOrder(orderId, opts?.approvalMessageId);
         if (!approvalMsg) {
@@ -768,7 +867,8 @@ let OrdersService = class OrdersService {
                     : 'Изменения применены: клиент подтвердил доп.работы.';
                 await this.chats.sendMessage(chat.id, { text, is_system: true }, false);
             }
-            return this.findOne(orderId);
+            await this.chats.markApprovalRequestsResolvedForOrder(orderId, 'accepted');
+            return this.findOne(orderId, clientUserId);
         }
         const approvalItems = Array.isArray(payload) ? payload : [];
         const approvedSet = new Set(approvedItemIds);
@@ -809,7 +909,8 @@ let OrdersService = class OrdersService {
             const text = namesText ? `Изменения применены: ${approvedNames.map((n) => '+' + n).join(', ')}` : 'Изменения применены: клиент подтвердил доп.работы.';
             await this.chats.sendMessage(chat.id, { text, is_system: true }, false);
         }
-        return this.findOne(orderId);
+        await this.chats.markApprovalRequestsResolvedForOrder(orderId, 'accepted');
+        return this.findOne(orderId, clientUserId);
     }
     async approveBySto(orderId, organizationId) {
         const order = await this.orderRepo.findOne({ where: { id: orderId }, relations: ['items'] });
@@ -903,6 +1004,7 @@ let OrdersService = class OrdersService {
                 : 'Изменения применены: сервис подтвердил по телефону.';
             await this.chats.sendMessage(chat.id, { text, is_system: true }, false);
         }
+        await this.chats.markApprovalRequestsResolvedForOrder(orderId, 'accepted');
         return this.findOne(orderId);
     }
     async updateItems(id, items, organizationId) {
@@ -978,6 +1080,10 @@ let OrdersService = class OrdersService {
             const userPhone = this.normalizePhoneForCompare(opts.clientPhone);
             if (orderPhone !== userPhone)
                 throw new common_1.NotFoundException('Order not found');
+            const uid = await this.usersService.findIdByNormalizedPhone(userPhone, 'client');
+            if (uid && (await this.isCarHiddenForClient(uid, order.carId))) {
+                throw new common_1.NotFoundException('Order not found');
+            }
         }
         else {
             throw new common_1.NotFoundException('Order not found');
@@ -1065,6 +1171,55 @@ let OrdersService = class OrdersService {
         const deletedOrders = result.affected ?? 0;
         return { deletedOrders, deletedItems, deletedPhotos };
     }
+    async purgeOrdersByCarIdForInternal(carId) {
+        const cid = String(carId || '').trim();
+        if (!cid) {
+            return { deletedOrders: 0, deletedItems: 0, deletedPhotos: 0 };
+        }
+        const orders = await this.orderRepo.find({ where: { carId: cid }, select: ['id'] });
+        const orderIds = orders.map((o) => o.id);
+        if (orderIds.length === 0) {
+            return { deletedOrders: 0, deletedItems: 0, deletedPhotos: 0 };
+        }
+        const { deleted_assets: deletedMediaAssets } = await this.mediaService.purgeMediaForOrders(orderIds);
+        const photoResult = await this.photoRepo.createQueryBuilder().delete().where('order_id IN (:...ids)', { ids: orderIds }).execute();
+        const deletedLegacyPhotos = photoResult.affected ?? 0;
+        const deletedPhotos = deletedMediaAssets + deletedLegacyPhotos;
+        const itemResult = await this.itemRepo.createQueryBuilder().delete().where('order_id IN (:...ids)', { ids: orderIds }).execute();
+        const deletedItems = itemResult.affected ?? 0;
+        await this.chatMsgRepo.createQueryBuilder().update().set({ orderId: null }).where('order_id IN (:...ids)', { ids: orderIds }).execute();
+        await this.chatRepo.createQueryBuilder().update().set({ lastOrderId: null }).where('order_id IN (:...ids)', { ids: orderIds }).execute();
+        const result = await this.orderRepo.createQueryBuilder().delete().where('car_id = :cid', { cid }).execute();
+        const deletedOrders = result.affected ?? 0;
+        return { deletedOrders, deletedItems, deletedPhotos };
+    }
+    async moderateClearCarFieldsForInternal(clientPhone, carId, fields) {
+        const norm = this.normalizePhoneForCompare(clientPhone);
+        const cid = String(carId || '').trim();
+        if (!norm || !cid)
+            return { updated: 0 };
+        const orders = await this.orderRepo.find({ where: { carId: cid } });
+        let n = 0;
+        for (const o of orders) {
+            const op = this.normalizePhoneForCompare(o.clientPhone || '');
+            if (op !== norm)
+                continue;
+            const patch = {};
+            if (fields.vin)
+                patch.vin = null;
+            if (fields.license_plate)
+                patch.licensePlate = null;
+            if (fields.car_info)
+                patch.carInfo = '';
+            if (fields.car_photo_url)
+                patch.carPhotoUrl = null;
+            if (Object.keys(patch).length === 0)
+                continue;
+            await this.orderRepo.update(o.id, patch);
+            n += 1;
+        }
+        return { updated: n };
+    }
     async listClientCarsAggregatedForInternal() {
         const rows = await this.orderRepo.find({
             order: { dateTime: 'DESC' },
@@ -1076,6 +1231,7 @@ let OrdersService = class OrdersService {
             if (!phone || !carId)
                 continue;
             const key = `${phone}|${carId}`;
+            const photo = (o.carPhotoUrl || '').trim() || null;
             if (!map.has(key)) {
                 map.set(key, {
                     client_phone: phone,
@@ -1084,10 +1240,15 @@ let OrdersService = class OrdersService {
                     client_name: o.clientName ?? null,
                     orders_count: 1,
                     last_order_at: o.dateTime.toISOString(),
+                    car_photo_url: photo,
                 });
             }
             else {
-                map.get(key).orders_count += 1;
+                const e = map.get(key);
+                e.orders_count += 1;
+                if ((!e.car_photo_url || !String(e.car_photo_url).trim()) && photo) {
+                    e.car_photo_url = photo;
+                }
             }
         }
         const items = [...map.values()].sort((a, b) => b.last_order_at.localeCompare(a.last_order_at));
@@ -1102,16 +1263,17 @@ let OrdersService = class OrdersService {
         });
         const filtered = orders.filter((o) => this.normalizePhoneForCompare(o.clientPhone || '') === norm);
         const bayCache = new Map();
-        return Promise.all(filtered.map((o) => this.toOrderJsonWithApprovalPreview(o, bayCache)));
+        const avatarMap = await this.buildClientAvatarMapForOrders(filtered);
+        return Promise.all(filtered.map((o) => this.toOrderJsonWithApprovalPreview(o, bayCache, avatarMap)));
     }
-    async toOrderJsonWithApprovalPreview(o, orgBayCaches = new Map()) {
+    async toOrderJsonWithApprovalPreview(o, orgBayCaches = new Map(), clientAvatarByPhoneKey) {
         let orgMap = orgBayCaches.get(o.organizationId);
         if (!orgMap) {
             const raw = await this.orgService.getSettings(o.organizationId);
             orgMap = (0, bay_settings_util_1.bayNameMapFromSlots)(raw.slots);
             orgBayCaches.set(o.organizationId, orgMap);
         }
-        const json = this.toOrderJson(o, orgMap);
+        const json = this.toOrderJson(o, orgMap, clientAvatarByPhoneKey);
         const status = o.status;
         if (status !== 'pending_approval') {
             return json;
@@ -1279,10 +1441,12 @@ let OrdersService = class OrdersService {
             estimated_minutes,
         };
     }
-    toOrderJson(o, bayNames = new Map()) {
+    toOrderJson(o, bayNames = new Map(), clientAvatarByPhoneKey) {
         const org = o.organization;
         const order = o;
         const bid = o.bayId;
+        const phoneKey = this.usersService.clientPhoneMatchKey(String(o.clientPhone || ''));
+        const clientAvatarUrl = clientAvatarByPhoneKey && phoneKey ? clientAvatarByPhoneKey.get(phoneKey) ?? null : null;
         return {
             id: o.id,
             order_number: o.orderNumber,
@@ -1296,6 +1460,8 @@ let OrdersService = class OrdersService {
             engine_type: o.engineType ?? null,
             client_name: o.clientName,
             client_phone: o.clientPhone,
+            client_avatar_url: clientAvatarUrl,
+            car_photo_url: o.carPhotoUrl ?? null,
             status: o.status,
             previous_status: o.previousStatus ?? null,
             first_confirmed_at: o.firstConfirmedAt?.toISOString?.() ?? null,
@@ -1340,6 +1506,7 @@ exports.OrdersService = OrdersService = __decorate([
     __param(3, (0, typeorm_1.InjectRepository)(staff_member_entity_1.StaffMember)),
     __param(4, (0, typeorm_1.InjectRepository)(chat_entity_1.Chat)),
     __param(5, (0, typeorm_1.InjectRepository)(chat_message_entity_1.ChatMessage)),
+    __param(12, (0, typeorm_1.InjectRepository)(user_client_hidden_car_entity_1.UserClientHiddenCar)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,
@@ -1350,6 +1517,8 @@ exports.OrdersService = OrdersService = __decorate([
         notifications_service_1.NotificationsService,
         organizations_service_1.OrganizationsService,
         subscription_quota_service_1.SubscriptionQuotaService,
-        media_service_1.MediaService])
+        media_service_1.MediaService,
+        users_service_1.UsersService,
+        typeorm_2.Repository])
 ], OrdersService);
 //# sourceMappingURL=orders.service.js.map

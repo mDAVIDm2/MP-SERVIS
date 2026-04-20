@@ -1,5 +1,7 @@
 import 'package:dio/dio.dart';
 
+import '../config/app_config.dart';
+
 enum ApiErrorCode {
   validation('ERR_VALIDATION', 'Ошибка валидации'),
   unauthorized('ERR_UNAUTHORIZED', 'Не авторизован'),
@@ -39,6 +41,21 @@ class ApiException implements Exception {
   });
 
   factory ApiException.fromDioError(DioException error) {
+    final nested = error.error;
+    if (nested is ApiException) {
+      return nested;
+    }
+
+    String underlyingDetail() {
+      final o = error.error;
+      if (o == null) return '';
+      final s = o.toString().trim();
+      if (s.isEmpty || s == 'null') return '';
+      return s;
+    }
+
+    final api = AppConfig.baseUrl;
+
     switch (error.type) {
       case DioExceptionType.connectionTimeout:
       case DioExceptionType.sendTimeout:
@@ -48,22 +65,47 @@ class ApiException implements Exception {
           message: 'Сервер не отвечает. Попробуйте позже.',
         );
       case DioExceptionType.connectionError:
-        return const ApiException(
+        return ApiException(
           code: ApiErrorCode.network,
-          message: 'Нет подключения к интернету.',
+          message:
+              'Не удаётся достучаться до API ($api). Телефон и ПК в одной Wi‑Fi сети, на ПК запущен Nest и в брандмауэре разрешён входящий TCP порт ${AppConfig.apiPort}.',
         );
       case DioExceptionType.badResponse:
         return _fromResponse(error.response);
-      default:
-        // У части версий Dio при разборе тела или прокси тип не badResponse, но status уже есть.
+      case DioExceptionType.cancel:
+        return const ApiException(
+          code: ApiErrorCode.unknown,
+          message: 'Запрос отменён',
+        );
+      case DioExceptionType.badCertificate:
+        return ApiException(
+          code: ApiErrorCode.unknown,
+          message:
+              'Проблема с сертификатом HTTPS (${error.message ?? 'недоверенный'}). Для разработки по LAN используйте HTTP в baseUrl.',
+        );
+      case DioExceptionType.unknown:
         if (error.response != null) {
           return _fromResponse(error.response);
         }
+        final dioMsg = (error.message ?? '').trim();
+        final under = underlyingDetail();
+        if (dioMsg.isNotEmpty) {
+          return ApiException(
+            code: ApiErrorCode.unknown,
+            message: 'Сбой сети (${error.type.name}): $dioMsg${under.isNotEmpty ? ' ($under)' : ''}. API: $api',
+          );
+        }
+        if (under.isNotEmpty) {
+          return ApiException(
+            code: ApiErrorCode.unknown,
+            message:
+                'Сбой сети (${error.type.name}): $under. Проверьте API $api, что Nest слушает 0.0.0.0:${AppConfig.apiPort} и порт открыт в брандмауэре Windows.',
+          );
+        }
         return ApiException(
           code: ApiErrorCode.unknown,
-          message: error.message?.trim().isNotEmpty == true
-              ? error.message!.trim()
-              : 'Сетевая ошибка (проверьте адрес API и доступность сервера)',
+          message:
+              'Сбой сети (${error.type.name}). Проверьте API $api, Wi‑Fi без изоляции клиентов, Nest на 0.0.0.0:${AppConfig.apiPort} и брандмауэр.',
         );
     }
   }

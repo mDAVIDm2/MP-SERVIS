@@ -17,7 +17,7 @@ const common_1 = require("@nestjs/common");
 const passport_1 = require("@nestjs/passport");
 const notifications_service_1 = require("./notifications.service");
 function respectClientNotificationPrefs(req) {
-    const h = req.headers?.['x-autohub-app'] ?? req.headers?.['X-AutoHub-App'];
+    const h = req.headers?.['x-mp-servis-app'] ?? req.headers?.['X-MP-Servis-App'];
     const v = Array.isArray(h) ? h[0] : h;
     return String(v || '').toLowerCase() === 'client';
 }

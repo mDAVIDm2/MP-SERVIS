@@ -71,6 +71,9 @@ class OrderApiService {
           'name': i.name,
           'price_kopecks': i.priceKopecks,
           'estimated_minutes': i.estimatedMinutes,
+          if (i.serviceId != null && i.serviceId!.trim().isNotEmpty) 'service_id': i.serviceId!.trim(),
+          if (i.catalogItemId != null && i.catalogItemId!.trim().isNotEmpty)
+            'catalog_item_id': i.catalogItemId!.trim(),
         }).toList(),
         if (clientName != null) 'client_name': clientName,
         if (clientPhone != null) 'client_phone': clientPhone,
@@ -200,6 +203,9 @@ class OrderApiService {
           'estimated_minutes': i.estimatedMinutes,
           'is_completed': i.isCompleted,
           'is_additional': i.isAdditional,
+          if (i.serviceId != null && i.serviceId!.trim().isNotEmpty) 'service_id': i.serviceId!.trim(),
+          if (i.catalogItemId != null && i.catalogItemId!.trim().isNotEmpty)
+            'catalog_item_id': i.catalogItemId!.trim(),
         }).toList(),
       };
       final res = await _client.patch(ApiEndpoints.orderItems(orderId), data: body);
@@ -250,11 +256,10 @@ class OrderApiService {
   Future<Result<Uint8List>> getOrderPhotoBytes(String orderId, String photoId) async {
     final path = ApiEndpoints.orderPhotoFile(orderId, photoId);
     final result = await _client.getBytes(path);
-    final res = result.dataOrNull;
-    if (res == null || res.data == null) {
-      return Result.failure(result.errorOrNull ?? const ApiException(code: ApiErrorCode.network, message: 'Не удалось загрузить'));
-    }
-    return Result.success(Uint8List.fromList(res.data!));
+    return result.when(
+      success: (bytes) => Result.success(Uint8List.fromList(bytes)),
+      failure: (e) => Result.failure(e),
+    );
   }
 
   /// Доступные слоты на дату для организации (запрос согласования — выбор времени).

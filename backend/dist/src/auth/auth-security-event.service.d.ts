@@ -4,6 +4,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 export declare class AuthSecurityEventService {
     private readonly repo;
     private readonly notifications;
+    private readonly _lastRefreshReusePush;
     constructor(repo: Repository<SecurityEvent>, notifications: NotificationsService);
     record(userId: string, type: string, opts: {
         sessionId?: string | null;

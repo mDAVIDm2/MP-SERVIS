@@ -3,7 +3,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { NotificationsService } from './notifications.service';
 
 function respectClientNotificationPrefs(req: { headers?: Record<string, string | string[] | undefined> }): boolean {
-  const h = req.headers?.['x-autohub-app'] ?? req.headers?.['X-AutoHub-App'];
+  const h = req.headers?.['x-mp-servis-app'] ?? req.headers?.['X-MP-Servis-App'];
   const v = Array.isArray(h) ? h[0] : h;
   return String(v || '').toLowerCase() === 'client';
 }

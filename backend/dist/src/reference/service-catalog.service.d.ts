@@ -20,6 +20,10 @@ export declare class ServiceCatalogService implements OnModuleInit {
             items: unknown[];
         }[];
     }>;
+    resolveItemBasicsByIds(ids: string[]): Promise<Map<string, {
+        name: string;
+        defaultDurationMinutes: number;
+    }>>;
     private nextCategorySortOrder;
     private nextItemSortOrder;
     createCatalogCategoryAdmin(dto: {

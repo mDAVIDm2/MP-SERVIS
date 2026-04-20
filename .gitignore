@@ -2,3 +2,6 @@
 .DS_Store
 Thumbs.db
 *.log
+
+# Локальные учётные данные Control Center (не коммитить)
+control_center.credentials.dat

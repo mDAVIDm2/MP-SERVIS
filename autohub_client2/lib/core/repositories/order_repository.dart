@@ -1,6 +1,19 @@
 import '../../shared/models/order_model.dart';
 import '../api/api_exceptions.dart';
 
+/// Строка заказа для API (имя, цена, длительность). Если задано при создании — подставляется в `items` вместо расчёта по прайсу.
+class ClientOrderLineDraft {
+  final String name;
+  final int priceKopecks;
+  final int estimatedMinutes;
+
+  const ClientOrderLineDraft({
+    required this.name,
+    required this.priceKopecks,
+    required this.estimatedMinutes,
+  });
+}
+
 /// Абстрактный репозиторий заказов
 abstract class OrderRepository {
   /// Все заказы пользователя
@@ -31,6 +44,10 @@ abstract class OrderRepository {
     String? color,
     int? mileage,
     String? engineType,
+    /// URL фото авто (https), уходит в API как car_photo_url для бизнес-приложения.
+    String? carPhotoUrl,
+    /// Если не null и не пусто — цены/время в заказе как у комплекса + допов, а не сумма прайса по услугам.
+    List<ClientOrderLineDraft>? orderLineItems,
   });
 
   /// Отменить заказ

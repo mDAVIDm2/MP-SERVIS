@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../auth/auth_provider.dart' show authProvider, sharedPreferencesProvider;
+import '../sync/client_app_state_push_bridge.dart';
 
 const _kKmBeforePrefix = 'maintenance_alert_km_before_';
 
@@ -29,5 +30,6 @@ class MaintenanceAlertKmBeforeNotifier extends StateNotifier<int> {
     if (_prefs != null && _userId != null && _userId!.isNotEmpty) {
       await _prefs!.setInt(_kKmBeforePrefix + _userId!, v);
     }
+    scheduleClientAppStatePush();
   }
 }

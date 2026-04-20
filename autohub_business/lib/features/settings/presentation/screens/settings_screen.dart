@@ -7,16 +7,14 @@ import '../../../../core/auth/auth_provider.dart';
 import '../../../../core/repositories/settings_repository.dart';
 import '../../../../core/repositories/order_repository.dart';
 import '../../../../core/repositories/chat_repository.dart';
-import '../../../clients/presentation/screens/clients_screen.dart';
-import '../../../profile/presentation/screens/staff_screen.dart';
+import '../widgets/desktop_settings_workspace.dart';
 import 'services_settings_screen.dart';
 import 'brands_settings_screen.dart';
 import 'slots_settings_screen.dart';
 import 'notifications_settings_screen.dart';
 import 'message_templates_screen.dart';
-import '../widgets/settings_business_desktop_body.dart';
 
-/// Главный экран настроек: на desktop — вкладки Бизнес, Клиенты, Персонал; на мобиле — только бизнес-настройки.
+/// Главный экран настроек: на desktop — организация (персонал, клиенты, авто, сервис); на мобиле — только бизнес-настройки.
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
@@ -63,42 +61,13 @@ class SettingsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isDesktop = isDesktopPlatform;
+    final canOrg = ref.watch(authProvider).user?.effectiveCanManageOrgSettings ?? false;
     final backgroundColor = isDesktop ? AppColorsDesktop.background : AppColors.background;
 
     if (isDesktop) {
-      return DefaultTabController(
-        length: 3,
-        child: Scaffold(
-          backgroundColor: backgroundColor,
-          body: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Material(
-                color: AppColorsDesktop.surface,
-                child: TabBar(
-                  labelColor: AppColorsDesktop.primary,
-                  unselectedLabelColor: AppColorsDesktop.textSecondary,
-                  indicatorColor: AppColorsDesktop.primary,
-                  tabs: const [
-                    Tab(text: 'Бизнес', icon: Icon(Icons.build_circle_outlined, size: 20)),
-                    Tab(text: 'Клиенты', icon: Icon(Icons.people_rounded, size: 20)),
-                    Tab(text: 'Персонал', icon: Icon(Icons.badge_rounded, size: 20)),
-                  ],
-                ),
-              ),
-              const Divider(height: 1, color: AppColorsDesktop.border),
-              Expanded(
-                child: TabBarView(
-                  children: [
-                    SettingsBusinessDesktopBody(onDangerClearOrders: _confirmClearAllOrders),
-                    const ClientsScreen(),
-                    const StaffScreen(),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
+      return Scaffold(
+        backgroundColor: backgroundColor,
+        body: DesktopSettingsWorkspace(onDangerClearOrders: _confirmClearAllOrders),
       );
     }
 
@@ -115,55 +84,93 @@ class SettingsScreen extends ConsumerWidget {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+          if (!canOrg)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                'Настройки организации недоступны для вашей учётной записи.',
+                style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+              ),
+            ),
           ListTile(
-            leading: const Icon(Icons.build_circle_outlined, color: AppColors.textSecondary),
+            leading: Icon(
+              Icons.build_circle_outlined,
+              color: canOrg ? AppColors.textSecondary : AppColors.textTertiary,
+            ),
             title: const Text('Услуги и цены'),
             subtitle: const Text('Категории и позиции с ценой и длительностью'),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const ServicesSettingsScreen()),
-            ),
+            enabled: canOrg,
+            onTap: canOrg
+                ? () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const ServicesSettingsScreen()),
+                    )
+                : null,
           ),
           ListTile(
-            leading: const Icon(Icons.directions_car_outlined, color: AppColors.textSecondary),
+            leading: Icon(
+              Icons.directions_car_outlined,
+              color: canOrg ? AppColors.textSecondary : AppColors.textTertiary,
+            ),
             title: const Text('Специализация по маркам'),
             subtitle: const Text('Марки автомобилей'),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const BrandsSettingsScreen()),
-            ),
+            enabled: canOrg,
+            onTap: canOrg
+                ? () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const BrandsSettingsScreen()),
+                    )
+                : null,
           ),
           ListTile(
-            leading: const Icon(Icons.schedule_rounded, color: AppColors.textSecondary),
+            leading: Icon(
+              Icons.schedule_rounded,
+              color: canOrg ? AppColors.textSecondary : AppColors.textTertiary,
+            ),
             title: const Text('Слоты и подтверждение'),
             subtitle: const Text('Длительность слота, таймаут подтверждения'),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const SlotsSettingsScreen()),
-            ),
+            enabled: canOrg,
+            onTap: canOrg
+                ? () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const SlotsSettingsScreen()),
+                    )
+                : null,
           ),
           ListTile(
-            leading: const Icon(Icons.notifications_outlined, color: AppColors.textSecondary),
+            leading: Icon(
+              Icons.notifications_outlined,
+              color: canOrg ? AppColors.textSecondary : AppColors.textTertiary,
+            ),
             title: const Text('Уведомления'),
             subtitle: const Text('Push по типам событий'),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const NotificationsSettingsScreen()),
-            ),
+            enabled: canOrg,
+            onTap: canOrg
+                ? () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const NotificationsSettingsScreen()),
+                    )
+                : null,
           ),
           ListTile(
-            leading: const Icon(Icons.message_outlined, color: AppColors.textSecondary),
+            leading: Icon(
+              Icons.message_outlined,
+              color: canOrg ? AppColors.textSecondary : AppColors.textTertiary,
+            ),
             title: const Text('Шаблоны сообщений'),
             subtitle: const Text('Для чата с клиентами'),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const MessageTemplatesScreen()),
-            ),
+            enabled: canOrg,
+            onTap: canOrg
+                ? () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const MessageTemplatesScreen()),
+                    )
+                : null,
           ),
           const Divider(height: 32),
           Padding(
@@ -182,7 +189,8 @@ class SettingsScreen extends ConsumerWidget {
             title: const Text('Очистить все заказы'),
             subtitle: const Text('Удалить все заказы из БД и очистить диалоги. Нельзя отменить.'),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () => _confirmClearAllOrders(context, ref),
+            enabled: canOrg,
+            onTap: canOrg ? () => _confirmClearAllOrders(context, ref) : null,
           ),
         ],
         ),

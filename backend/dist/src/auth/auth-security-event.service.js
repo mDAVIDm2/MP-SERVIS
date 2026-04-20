@@ -24,10 +24,12 @@ const CRITICAL_TYPES = new Set([
     'session_revoked',
     'login_failed',
 ]);
+const REFRESH_REUSE_PUSH_COOLDOWN_MS = 15 * 60 * 1000;
 let AuthSecurityEventService = class AuthSecurityEventService {
     constructor(repo, notifications) {
         this.repo = repo;
         this.notifications = notifications;
+        this._lastRefreshReusePush = new Map();
     }
     async record(userId, type, opts) {
         const row = this.repo.create({
@@ -39,21 +41,29 @@ let AuthSecurityEventService = class AuthSecurityEventService {
             metadata: opts.metadata ?? null,
         });
         await this.repo.save(row);
-        if (CRITICAL_TYPES.has(type)) {
-            const titles = {
-                refresh_reuse_detected: 'Безопасность: попытка повторного использования сессии',
-                sessions_revoked_all_except: 'Завершены другие сессии',
-                session_revoked: 'Сессия завершена',
-                login_failed: 'Неудачная попытка входа',
-            };
-            await this.notifications.create({
-                userId,
-                type: 'security',
-                title: titles[type] || 'Событие безопасности',
-                body: type,
-                payload: { security_event_type: type, ...opts.metadata },
-            });
+        if (!CRITICAL_TYPES.has(type))
+            return;
+        if (type === 'refresh_reuse_detected') {
+            const now = Date.now();
+            const prev = this._lastRefreshReusePush.get(userId) ?? 0;
+            if (now - prev < REFRESH_REUSE_PUSH_COOLDOWN_MS) {
+                return;
+            }
+            this._lastRefreshReusePush.set(userId, now);
         }
+        const titles = {
+            refresh_reuse_detected: 'Безопасность: попытка повторного использования сессии',
+            sessions_revoked_all_except: 'Завершены другие сессии',
+            session_revoked: 'Сессия завершена',
+            login_failed: 'Неудачная попытка входа',
+        };
+        await this.notifications.create({
+            userId,
+            type: 'security',
+            title: titles[type] || 'Событие безопасности',
+            body: type,
+            payload: { security_event_type: type, ...opts.metadata },
+        });
     }
     async listForUser(userId, limit = 50) {
         const rows = await this.repo.find({

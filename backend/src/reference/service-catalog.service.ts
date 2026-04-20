@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { ServiceCatalogItem } from './service-catalog-item.entity';
 import { ServiceCatalogSuggestion } from './service-catalog-suggestion.entity';
 import { SERVICE_CATALOG_SEED } from './service-catalog.seed';
@@ -114,6 +114,25 @@ export class ServiceCatalogService implements OnModuleInit {
       });
     }
     return { categories: Array.from(byKey.values()) };
+  }
+
+  /**
+   * Название и длительность из справочника по id (для строк прайса, собранных из пакетов в поиске каталога).
+   */
+  async resolveItemBasicsByIds(
+    ids: string[],
+  ): Promise<Map<string, { name: string; defaultDurationMinutes: number }>> {
+    const out = new Map<string, { name: string; defaultDurationMinutes: number }>();
+    const uniq = [...new Set(ids.map((id) => String(id).trim()).filter((id) => id.length > 0))];
+    if (uniq.length === 0) return out;
+    const rows = await this.itemRepo.find({ where: { id: In(uniq) } });
+    for (const r of rows) {
+      out.set(r.id, {
+        name: r.name ?? '',
+        defaultDurationMinutes: r.defaultDurationMinutes ?? 60,
+      });
+    }
+    return out;
   }
 
   private async nextCategorySortOrder(): Promise<number> {
@@ -356,7 +375,7 @@ export class ServiceCatalogService implements OnModuleInit {
     return {
       id: row.id,
       status: row.status,
-      message: 'Запрос отправлен разработчикам AutoHub. Услугу добавят в справочник после проверки.',
+      message: 'Запрос отправлен разработчикам MP-Servis. Услугу добавят в справочник после проверки.',
     };
   }
 

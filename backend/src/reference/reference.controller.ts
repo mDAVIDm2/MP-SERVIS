@@ -44,15 +44,33 @@ export class ReferenceController {
     @Req() req: { user: { id: string } },
     @Body() body: Record<string, unknown>,
   ) {
-    const carId = String(body?.carId ?? '');
+    const carId = String(body?.carId ?? '').trim();
     const pendingBrand = typeof body?.pendingBrand === 'string' ? body.pendingBrand : (typeof body?.pending_brand === 'string' ? body.pending_brand : undefined);
     const pendingModel = typeof body?.pendingModel === 'string' ? body.pendingModel : (typeof body?.pending_model === 'string' ? body.pending_model : undefined);
     const pendingGeneration = typeof body?.pendingGeneration === 'string' ? body.pendingGeneration : (typeof body?.pending_generation === 'string' ? body.pending_generation : undefined);
+    const referenceBrandId = ReferenceController.optPositiveInt(
+      body?.referenceBrandId ?? body?.reference_brand_id ?? body?.brandId,
+    );
+    const referenceModelId = ReferenceController.optPositiveInt(
+      body?.referenceModelId ?? body?.reference_model_id ?? body?.modelId,
+    );
     return this.reference.createPending(req.user.id, carId, {
       pendingBrand: pendingBrand?.trim() || undefined,
       pendingModel: pendingModel?.trim() || undefined,
       pendingGeneration: pendingGeneration?.trim() || undefined,
+      referenceBrandId,
+      referenceModelId,
     });
+  }
+
+  private static optPositiveInt(v: unknown): number | undefined {
+    if (v === null || v === undefined) return undefined;
+    if (typeof v === 'number' && Number.isFinite(v)) return Math.trunc(v);
+    if (typeof v === 'string' && v.trim() !== '') {
+      const n = parseInt(v.trim(), 10);
+      if (!Number.isNaN(n) && n > 0) return n;
+    }
+    return undefined;
   }
 
   /** Список заявок на подтверждение марки/модели/поколения (для разработчиков). */
@@ -63,7 +81,7 @@ export class ReferenceController {
   }
 
   /**
-   * Единый справочник услуг AutoHub (для настроек организации).
+   * Единый справочник услуг MP-Servis (для настроек организации).
    * - `organization_id` (или организация из JWT) — фильтр по `business_kind` этой организации.
    * - без организации: опционально `business_kind` — только позиции, разрешённые для этого вида точки.
    */

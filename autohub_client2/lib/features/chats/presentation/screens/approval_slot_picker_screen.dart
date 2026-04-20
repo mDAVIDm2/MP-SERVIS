@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/availability/availability_helper.dart';
 import '../../../../core/providers/app_providers.dart';
 import '../../../../core/repositories/sto_repository.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../shared/models/order_model.dart';
 import '../../../../shared/organization_ui_copy.dart';
@@ -188,7 +188,7 @@ class _ApprovalSlotPickerScreenState extends ConsumerState<ApprovalSlotPickerScr
       setState(() => _isSubmitting = false);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(result.errorOrNull?.message ?? 'Не удалось подтвердить запись'),
-        backgroundColor: AppColors.error,
+        backgroundColor: context.palette.error,
       ));
     }
   }
@@ -235,17 +235,17 @@ class _ApprovalSlotPickerScreenState extends ConsumerState<ApprovalSlotPickerScr
     final jobDur = _jobDurationMinutes;
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       appBar: AppBar(
-        backgroundColor: AppColors.background,
-        title: const Text('Выбор времени', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+        backgroundColor: context.palette.background,
+        title: Text('Выбор времени', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
       ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Padding(
+          Padding(
             padding: EdgeInsets.all(16),
-            child: Text('Выберите дату и удобное время', style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
+            child: Text('Выберите дату и удобное время', style: TextStyle(fontSize: 14, color: context.palette.textSecondary)),
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -265,26 +265,26 @@ class _ApprovalSlotPickerScreenState extends ConsumerState<ApprovalSlotPickerScr
                         _loadSlots();
                       }
                     },
-                    icon: const Icon(Icons.calendar_today_rounded, size: 18),
+                    icon: Icon(Icons.calendar_today_rounded, size: 18),
                     label: Text(Formatters.dateFullRu(_selectedDate)),
                     style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.textPrimary,
-                      side: const BorderSide(color: AppColors.border),
+                      foregroundColor: context.palette.textPrimary,
+                      side: BorderSide(color: context.palette.border),
                     ),
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 16),
+          SizedBox(height: 16),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: loading
-                ? const Row(
+                ? Row(
                     children: [
-                      SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary)),
+                      SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: context.palette.primary)),
                       SizedBox(width: 8),
-                      Text('Загрузка слотов...', style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+                      Text('Загрузка слотов...', style: TextStyle(fontSize: 13, color: context.palette.textSecondary)),
                     ],
                   )
                 : Text(
@@ -294,7 +294,7 @@ class _ApprovalSlotPickerScreenState extends ConsumerState<ApprovalSlotPickerScr
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: available.isNotEmpty ? AppColors.textPrimary : AppColors.textSecondary,
+                      color: available.isNotEmpty ? context.palette.textPrimary : context.palette.textSecondary,
                     ),
                   ),
           ),
@@ -303,12 +303,12 @@ class _ApprovalSlotPickerScreenState extends ConsumerState<ApprovalSlotPickerScr
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Text(
                 OrganizationUiCopy.approvalEmptySlotsHint(),
-                style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                style: TextStyle(fontSize: 13, color: context.palette.textSecondary),
               ),
             ),
-            const SizedBox(height: 8),
+            SizedBox(height: 8),
           ],
-          const SizedBox(height: 8),
+          SizedBox(height: 8),
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -323,45 +323,86 @@ class _ApprovalSlotPickerScreenState extends ConsumerState<ApprovalSlotPickerScr
                   final isAvailable = available.contains(slot);
                   final isDisabled = loading || !isAvailable;
                   final isStart = isSelected && isAvailable;
-                  final isContinuation = !isStart &&
-                      jobStart != null &&
-                      slotIsJobContinuation(slot, jobStart, _selectedDate, jobDur) &&
-                      isAvailable;
-                  final Color slotBg = isAvailable
-                      ? (isStart ? AppColors.primary : AppColors.success.withValues(alpha: 0.2))
-                      : isOccupied
-                          ? AppColors.error.withValues(alpha: 0.25)
-                          : AppColors.nestedBg;
-                  final Color slotBorder = isAvailable
-                      ? (isStart
-                          ? AppColors.primary
-                          : isContinuation
-                              ? const Color(0xFFE65100)
-                              : AppColors.success)
-                      : isOccupied
-                          ? AppColors.error
-                          : AppColors.border;
-                  final Color slotText = isAvailable
-                      ? (isStart ? const Color(0xFF0D0D0D) : AppColors.success)
-                      : isOccupied
-                          ? AppColors.error
-                          : AppColors.textTertiary;
+                  final isContinuation = jobStart != null &&
+                      slotIsJobContinuation(slot, jobStart, _selectedDate, jobDur);
+
+                  late final Color slotBg;
+                  late final Color slotBorder;
+                  late final Color slotText;
+
+                  if (isStart) {
+                    slotBg = context.palette.primary;
+                    slotBorder = context.palette.primary;
+                    slotText = context.palette.onAccent;
+                  } else if (isContinuation) {
+                    if (isAvailable) {
+                      slotBg = context.palette.success.withValues(alpha: 0.2);
+                      slotBorder = context.palette.success;
+                      slotText = context.palette.success;
+                    } else if (isOccupied) {
+                      slotBg = context.palette.error.withValues(alpha: 0.25);
+                      slotBorder = context.palette.error;
+                      slotText = context.palette.error;
+                    } else {
+                      slotBg = context.palette.nestedBg;
+                      slotBorder = context.palette.border;
+                      slotText = context.palette.textTertiary;
+                    }
+                  } else if (isAvailable) {
+                    slotBg = context.palette.success.withValues(alpha: 0.2);
+                    slotBorder = context.palette.success;
+                    slotText = context.palette.success;
+                  } else if (isOccupied) {
+                    slotBg = context.palette.error.withValues(alpha: 0.25);
+                    slotBorder = context.palette.error;
+                    slotText = context.palette.error;
+                  } else {
+                    slotBg = context.palette.nestedBg;
+                    slotBorder = context.palette.border;
+                    slotText = context.palette.textTertiary;
+                  }
+
+                  final showVisitStrip = isContinuation;
 
                   return GestureDetector(
                     onTap: isDisabled ? null : () => setState(() => _selectedTimeSlotIndex = i),
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 200),
                       width: 72,
-                      height: 40,
-                      alignment: Alignment.center,
+                      height: 42,
                       decoration: BoxDecoration(
                         color: slotBg,
                         borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: slotBorder, width: isContinuation ? 2 : 1),
+                        border: Border.all(color: slotBorder, width: 1),
                       ),
-                      child: Text(
-                        slot,
-                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: slotText),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(9),
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            if (showVisitStrip)
+                              Positioned(
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                child: Container(
+                                  height: 3,
+                                  decoration: BoxDecoration(color: context.palette.gold2),
+                                ),
+                              ),
+                            Padding(
+                              padding: EdgeInsets.only(top: showVisitStrip ? 2 : 0),
+                              child: Text(
+                                slot,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: slotText,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   );
@@ -379,7 +420,7 @@ class _ApprovalSlotPickerScreenState extends ConsumerState<ApprovalSlotPickerScr
                   onPressed: (_canConfirm && !_isSubmitting) ? _confirm : null,
                 ),
                 if (!loading && available.isEmpty && !_isSubmitting) ...[
-                  const SizedBox(height: 10),
+                  SizedBox(height: 10),
                   TextButton(
                     onPressed: _confirmDateOnly,
                     child: Text(OrganizationUiCopy.approvalConfirmDate()),

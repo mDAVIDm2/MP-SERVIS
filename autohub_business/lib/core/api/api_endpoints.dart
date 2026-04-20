@@ -1,6 +1,6 @@
 import '../config/app_config.dart';
 
-/// API endpoints — общий бэкенд с AutoHub Client.
+/// API endpoints — общий бэкенд с клиентом MP-Servis.
 class ApiEndpoints {
   ApiEndpoints._();
 
@@ -15,6 +15,8 @@ class ApiEndpoints {
 
   // Profile (Business: с ролью и organization_id)
   static const String profile = '/profile';
+  static const String profileDelete = '/profile/delete';
+  static const String profileAvatar = '/profile/avatar';
   static const String profileSwitchOrganization = '/profile/switch-organization';
   static const String profileCreateOrganization = '/profile/organizations';
   static const String profileInvitations = '/profile/invitations';

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../core/theme/app_colors.dart';
+import '../../core/theme/client_palette.dart';
 import '../../core/theme/app_design_system.dart';
 
 export 'marquee_text.dart';
@@ -94,6 +94,7 @@ class PremiumButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.palette;
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -101,7 +102,7 @@ class PremiumButton extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppDesignSystem.radiusPill),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          decoration: AppDesignSystem.premiumButtonDecoration(isActive: isActive || overlayColor != null),
+          decoration: AppDesignSystem.premiumButtonDecoration(p, isActive: isActive || overlayColor != null),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -110,13 +111,13 @@ class PremiumButton extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.w600,
-                  color: overlayColor ?? AppColors.gold1,
+                  color: overlayColor ?? p.gold1,
                 ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
-              const SizedBox(width: 6),
-              Icon(Icons.arrow_forward_rounded, size: 16, color: overlayColor ?? AppColors.gold1),
+              SizedBox(width: 6),
+              Icon(Icons.arrow_forward_rounded, size: 16, color: overlayColor ?? p.gold1),
             ],
           ),
         ),
@@ -143,17 +144,19 @@ class GoldButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.palette;
     return SizedBox(
       width: fullWidth ? double.infinity : null,
       height: height,
       child: DecoratedBox(
         decoration: BoxDecoration(
-          gradient: AppColors.primaryGradient,
+          gradient: p.primaryGradient,
           borderRadius: BorderRadius.circular(12),
           boxShadow: [
             BoxShadow(
-              color: AppColors.primary.withValues(alpha: 0.3),
-              blurRadius: 12, offset: const Offset(0, 4),
+              color: p.primary.withValues(alpha: 0.3),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
             ),
           ],
         ),
@@ -165,17 +168,20 @@ class GoldButton extends StatelessWidget {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           ),
           child: isLoading
-              ? const SizedBox(
-                  width: 24, height: 24,
+              ? SizedBox(
+                  width: 24,
+                  height: 24,
                   child: CircularProgressIndicator(
-                    strokeWidth: 2.5, color: Color(0xFF0D0D0D),
+                    strokeWidth: 2.5,
+                    color: p.onAccent,
                   ),
                 )
               : Text(
                   text,
-                  style: const TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w600,
-                    color: Color(0xFF0D0D0D),
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: p.onAccent,
                   ),
                 ),
         ),
@@ -184,7 +190,7 @@ class GoldButton extends StatelessWidget {
   }
 }
 
-/// Заголовок секции: золотой текст; [compact] — меньший размер (например «Последняя активность»).
+/// Заголовок секции: акцентный цвет; [compact] — меньший размер.
 class SectionHeader extends StatelessWidget {
   final String title;
   final String? actionText;
@@ -201,11 +207,11 @@ class SectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.palette;
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: 16, vertical: compact ? 10 : 14),
       child: Row(
         children: [
-          // Заголовок пишется полностью (подгонка по ширине через FittedBox)
           Expanded(
             child: FittedBox(
               fit: BoxFit.scaleDown,
@@ -215,7 +221,7 @@ class SectionHeader extends StatelessWidget {
                 style: TextStyle(
                   fontSize: compact ? 26 : 32,
                   fontWeight: FontWeight.w800,
-                  color: AppColors.gold1,
+                  color: p.gold1,
                   letterSpacing: -0.5,
                 ),
                 maxLines: 1,
@@ -223,7 +229,7 @@ class SectionHeader extends StatelessWidget {
             ),
           ),
           if (actionText != null) ...[
-            const SizedBox(width: 8),
+            SizedBox(width: 8),
             Flexible(
               child: Material(
                 color: Colors.transparent,
@@ -237,7 +243,7 @@ class SectionHeader extends StatelessWidget {
                       style: TextStyle(
                         fontSize: compact ? 13 : 15,
                         fontWeight: FontWeight.w500,
-                        color: AppColors.textSecondary,
+                        color: p.textSecondary,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -272,6 +278,7 @@ class EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.palette;
     return Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 48),
@@ -282,38 +289,38 @@ class EmptyState extends StatelessWidget {
               width: 96,
               height: 96,
               decoration: BoxDecoration(
-                color: AppColors.bgCard,
+                color: p.bgCard,
                 borderRadius: BorderRadius.circular(AppDesignSystem.radiusStatCard),
-                border: Border.all(color: AppColors.strokeGold.withValues(alpha: 0.14), width: 1),
-                boxShadow: AppColors.cardShadow,
+                border: Border.all(color: p.strokeGold.withValues(alpha: 0.14), width: 1),
+                boxShadow: p.cardShadow,
               ),
               child: Center(
-                child: Text(icon, style: const TextStyle(fontSize: 48)),
+                child: Text(icon, style: TextStyle(fontSize: 48)),
               ),
             ),
-            const SizedBox(height: 28),
+            SizedBox(height: 28),
             Text(
               title,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w600,
-                color: AppColors.textPrimary,
+                color: p.textPrimary,
                 letterSpacing: -0.3,
               ),
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 10),
+            SizedBox(height: 10),
             Text(
               subtitle,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 15,
                 height: 1.4,
-                color: AppColors.textSecondary,
+                color: p.textSecondary,
               ),
               textAlign: TextAlign.center,
             ),
             if (buttonText != null) ...[
-              const SizedBox(height: 28),
+              SizedBox(height: 28),
               GoldButton(
                 text: buttonText!,
                 onPressed: onButton,
@@ -328,7 +335,7 @@ class EmptyState extends StatelessWidget {
   }
 }
 
-/// Премиальная stat card: градиент, тонкий золотой бордер, тень.
+/// Премиальная stat card: градиент, тонкий акцентный бордер, тень.
 class StatBlock extends StatelessWidget {
   final String value;
   final String label;
@@ -347,6 +354,7 @@ class StatBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.palette;
     return Expanded(
       child: Material(
         color: Colors.transparent,
@@ -354,72 +362,82 @@ class StatBlock extends StatelessWidget {
           onTap: onTap,
           borderRadius: BorderRadius.circular(AppDesignSystem.radiusStatCard),
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
-            decoration: AppDesignSystem.statCardDecoration,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+            decoration: AppDesignSystem.statCardDecoration(p),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.center,
               mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Row(
-                  children: [
-                    if (dotColor != null) ...[
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: BoxDecoration(
-                          color: dotColor,
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: dotColor!.withValues(alpha: 0.5),
-                              blurRadius: 4,
-                              spreadRadius: 0,
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                    ],
-                    Expanded(
-                      child: FittedBox(
-                        fit: BoxFit.scaleDown,
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          value,
-                          style: const TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w800,
-                            color: AppColors.textPrimary,
-                            letterSpacing: -0.5,
+                SizedBox(
+                  width: double.infinity,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.max,
+                    children: [
+                      if (dotColor != null) ...[
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: dotColor,
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: dotColor!.withValues(alpha: 0.5),
+                                blurRadius: 4,
+                                spreadRadius: 0,
+                              ),
+                            ],
                           ),
-                          maxLines: 1,
+                        ),
+                        SizedBox(width: 6),
+                      ],
+                      Flexible(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.center,
+                          child: Text(
+                            value,
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w800,
+                              color: p.textPrimary,
+                              letterSpacing: -0.5,
+                            ),
+                            maxLines: 1,
+                            textAlign: TextAlign.center,
+                          ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
                 if (subtitle != null && subtitle!.isNotEmpty) ...[
-                  const SizedBox(height: 4),
+                  SizedBox(height: 4),
                   Text(
                     subtitle!,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.gold1,
+                      color: p.gold1,
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
                   ),
                 ],
-                const SizedBox(height: 6),
+                SizedBox(height: 6),
                 Text(
                   label,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: AppColors.textSecondary,
+                  style: TextStyle(
+                    fontSize: 11,
+                    height: 1.2,
+                    color: p.textSecondary,
                   ),
-                  maxLines: 1,
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
                 ),
               ],
             ),

@@ -1,14 +1,16 @@
 import { Repository } from 'typeorm';
 import { PushDevice } from './push-device.entity';
 import { Notification, NotificationType } from './notification.entity';
+import { StaffMember } from '../organizations/staff-member.entity';
 import { FcmPushService } from './fcm-push.service';
 import { UsersService } from '../users/users.service';
 export declare class NotificationsService {
     private pushRepo;
     private notificationRepo;
+    private staffRepo;
     private fcm;
     private users;
-    constructor(pushRepo: Repository<PushDevice>, notificationRepo: Repository<Notification>, fcm: FcmPushService, users: UsersService);
+    constructor(pushRepo: Repository<PushDevice>, notificationRepo: Repository<Notification>, staffRepo: Repository<StaffMember>, fcm: FcmPushService, users: UsersService);
     registerDevice(userId: string, deviceToken: string, platform: string, fcmApp?: 'client' | 'business'): Promise<void>;
     private payloadToFcmData;
     notifyOrganizationInvite(params: {
@@ -33,6 +35,13 @@ export declare class NotificationsService {
         body?: string | null;
         payload?: Record<string, unknown> | null;
     }): Promise<Notification | null>;
+    notifyOrganizationStaffOrderEvent(organizationId: string, data: {
+        title: string;
+        body: string;
+        payload: Record<string, unknown> & {
+            order_id: string;
+        };
+    }): Promise<void>;
     createOrRefreshChatMessageForClientPhone(phoneDigits: string, data: {
         title: string;
         messageLine: string;

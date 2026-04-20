@@ -10,7 +10,7 @@ const { Client } = require('pg');
 const bcrypt = require('bcrypt');
 
 const SALT_ROUNDS = 10;
-const defaultUrl = 'postgresql://postgres:postgres@localhost:5432/autohub';
+const defaultUrl = 'postgresql://postgres:postgres@localhost:5432/mp_servis';
 const url = process.env.DATABASE_URL || defaultUrl;
 const email = (process.env.INITIAL_SUPERADMIN_EMAIL || '').trim().toLowerCase();
 const password = (process.env.INITIAL_SUPERADMIN_PASSWORD || '').trim();

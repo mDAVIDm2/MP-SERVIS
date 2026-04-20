@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../../core/l10n/l10n_scope.dart';
 import '../../../../core/theme/app_design_system.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/settings/maintenance_reminders_provider.dart';
 import '../../../../core/settings/maintenance_warn_threshold_provider.dart';
 import '../../../../shared/models/car_model.dart';
@@ -24,8 +25,10 @@ class GarageMaintenanceRecommendationsBlock extends ConsumerWidget {
     final notifier = ref.read(maintenanceRemindersProvider.notifier);
     final warnKm = ref.watch(maintenanceWarnWithinKmProvider);
     final warnDays = ref.watch(maintenanceWarnWithinDaysProvider);
+    final l10n = L10nScope.of(context);
 
     final urgent = listUrgentMaintenanceSuggestions(
+      l10n: l10n,
       notifier: notifier,
       carId: car.id,
       mileage: car.mileage,
@@ -40,7 +43,7 @@ class GarageMaintenanceRecommendationsBlock extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SectionHeader(title: 'Рекомендации', compact: true),
+          SectionHeader(title: l10n.maintenanceRecommendations, compact: true),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: AppDesignSystem.pagePaddingH),
             child: Column(
@@ -70,14 +73,15 @@ class _UrgentRecommendationCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = L10nScope.of(context);
     final emoji = CompactMaintenanceReminderTile.emojiFor(suggestion.type);
     final visibleLines = suggestion.bodyLines.take(2).toList();
 
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.cardBg,
+        color: context.palette.cardBg,
         borderRadius: BorderRadius.circular(AppDesignSystem.radiusSmall),
-        border: Border.all(color: AppColors.strokeGold.withValues(alpha: 0.35)),
+        border: Border.all(color: context.palette.strokeGold.withValues(alpha: 0.35)),
       ),
       padding: const EdgeInsets.all(14),
       child: Column(
@@ -86,46 +90,46 @@ class _UrgentRecommendationCard extends ConsumerWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(emoji, style: const TextStyle(fontSize: 22)),
-              const SizedBox(width: 10),
+              Text(emoji, style: TextStyle(fontSize: 22)),
+              SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       suggestion.title,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w700,
-                        color: AppColors.textPrimary,
+                        color: context.palette.textPrimary,
                         height: 1.25,
                       ),
                     ),
-                    const SizedBox(height: 8),
+                    SizedBox(height: 8),
                     ...visibleLines.map(
                       (l) => Padding(
                         padding: const EdgeInsets.only(bottom: 4),
                         child: Text(
                           l,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 13,
                             height: 1.35,
-                            color: AppColors.textSecondary,
+                            color: context.palette.textSecondary,
                           ),
                         ),
                       ),
                     ),
                     if (suggestion.bodyLines.length > visibleLines.length)
-                      const Text(
-                        'Подробнее в карточке',
-                        style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
+                      Text(
+                        l10n.garageRecMoreInCard,
+                        style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
                       ),
                   ],
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 14),
+          SizedBox(height: 14),
           Row(
             children: [
               Expanded(
@@ -141,10 +145,17 @@ class _UrgentRecommendationCard extends ConsumerWidget {
                       ),
                     );
                   },
-                  child: const Text('Подробнее'),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      l10n.garageRecDetails,
+                      maxLines: 1,
+                      softWrap: false,
+                    ),
+                  ),
                 ),
               ),
-              const SizedBox(width: 10),
+              SizedBox(width: 10),
               Expanded(
                 flex: 2,
                 child: FilledButton(
@@ -153,7 +164,14 @@ class _UrgentRecommendationCard extends ConsumerWidget {
                     ref,
                     suggestion.serviceIds,
                   ),
-                  child: const Text('Записаться'),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      l10n.garageRecBook,
+                      maxLines: 1,
+                      softWrap: false,
+                    ),
+                  ),
                 ),
               ),
             ],

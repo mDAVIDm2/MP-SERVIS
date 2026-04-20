@@ -55,12 +55,7 @@ class _AuthenticatedChatImageState extends ConsumerState<AuthenticatedChatImage>
     final r = await client.getBytes(path);
     if (!mounted) return;
     r.when(
-      success: (res) {
-        final data = res.data;
-        if (data == null) {
-          setState(() => _failed = true);
-          return;
-        }
+      success: (data) {
         setState(() {
           _bytes = Uint8List.fromList(data);
           _failed = false;

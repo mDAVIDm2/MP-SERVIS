@@ -3,7 +3,7 @@ import 'dart:math';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-const _kDeviceId = 'autohub_business_install_id';
+const _kDeviceId = 'mp_servis_business_install_id';
 
 /// Стабильный id установки для привязки сессий на бэкенде.
 Future<String> getOrCreateDeviceId(SharedPreferences prefs) async {

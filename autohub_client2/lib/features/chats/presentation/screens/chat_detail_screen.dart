@@ -4,10 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../../../../core/auth/auth_provider.dart';
+import '../../../../core/config/app_config.dart';
 import '../../../../core/navigation/app_routes.dart';
 import '../../../../core/providers/app_providers.dart';
 import '../../../../core/settings/filter_by_car_setting.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../shared/models/chat_model.dart';
 import '../../../../shared/models/order_model.dart';
@@ -142,9 +146,9 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
     if (!mounted) return;
     if (!ok) {
       setState(() => _messages.removeWhere((m) => m.id == tempId));
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Не удалось отправить сообщение. Проверьте сеть.'),
-        backgroundColor: AppColors.error,
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text('Не удалось отправить сообщение. Проверьте сеть.'),
+        backgroundColor: context.palette.error,
       ));
       return;
     }
@@ -165,9 +169,9 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
     final id = orderId?.trim() ?? '';
     if (id.isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Не удалось определить заказ. Обновите чат.'),
-          backgroundColor: AppColors.error,
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Text('Не удалось определить заказ. Обновите чат.'),
+          backgroundColor: context.palette.error,
         ));
       }
       return;
@@ -216,7 +220,7 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
       final msg = result.errorOrNull?.message ?? 'Не удалось отправить согласование. Проверьте сеть.';
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(msg),
-        backgroundColor: AppColors.error,
+        backgroundColor: context.palette.error,
       ));
       return;
     }
@@ -256,7 +260,7 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
           ? '✅ Работы согласованы'
           : '❌ Дополнительные работы отклонены'),
       backgroundColor: approved && (approvedNames.isNotEmpty || approvedIds.isNotEmpty)
-          ? AppColors.success : AppColors.error,
+          ? context.palette.success : context.palette.error,
       duration: const Duration(seconds: 2),
     ));
   }
@@ -381,11 +385,41 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
     if (orders.isNotEmpty) pushCupertino(context, OrderDetailScreen(order: orders.first));
   }
 
+  Future<void> _callOrganization(BuildContext context, WidgetRef ref) async {
+    var raw = widget.chat.stoPhone?.trim();
+    if (raw == null || raw.isEmpty) {
+      final sto = await ref.read(stoByIdProvider(widget.chat.stoId).future);
+      final phones = sto?.displayPhones ?? [];
+      if (phones.isNotEmpty) raw = phones.first.trim();
+    }
+    if (raw == null || raw.isEmpty) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Номер не указан'), backgroundColor: context.palette.warning),
+        );
+      }
+      return;
+    }
+    final digits = raw.replaceAll(RegExp(r'[^\d+]'), '');
+    try {
+      await launchUrl(Uri.parse('tel:$digits'), mode: LaunchMode.externalApplication);
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Не удалось открыть набор номера'),
+            backgroundColor: context.palette.error,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _navigateToStoCard() async {
     final sto = await ref.read(stoByIdProvider(widget.chat.stoId).future);
     if (!mounted) return;
     if (sto != null) {
-      pushCupertino(context, STODetailScreen(sto: sto));
+      pushStoDetailScreen(context, STODetailScreen(sto: sto));
     } else {
       _showOrdersSheet(context);
     }
@@ -395,8 +429,8 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
     final orders = _ordersForChat(ref)..sort((a, b) => b.timelineSortAt.compareTo(a.timelineSortAt));
     showModalBottomSheet(
       context: context,
-      backgroundColor: AppColors.cardBg,
-      shape: const RoundedRectangleBorder(
+      backgroundColor: context.palette.cardBg,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (ctx) => SafeArea(
@@ -408,10 +442,10 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
               child: Text(
                 'Заказы в ${widget.chat.stoName}',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w700,
-                  color: AppColors.textPrimary,
+                  color: context.palette.textPrimary,
                 ),
               ),
             ),
@@ -425,9 +459,9 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
                   return ListTile(
                     title: Text(
                       '#${order.orderNumber}',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
+                        color: context.palette.textPrimary,
                         fontFamily: 'monospace',
                       ),
                       maxLines: 1,
@@ -435,7 +469,7 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
                     ),
                     subtitle: Text(
                       '${order.displayStatus.label} · ${Formatters.dateShortRu(order.dateTime)} ${Formatters.time(order.dateTime)}',
-                      style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                      style: TextStyle(fontSize: 13, color: context.palette.textSecondary),
                     ),
                     trailing: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -465,53 +499,74 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       appBar: AppBar(
-        backgroundColor: AppColors.background,
-        titleSpacing: 0,
+        backgroundColor: context.palette.background,
+        leading: IconButton(
+          icon: Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: context.palette.textPrimary),
+          onPressed: () => Navigator.maybePop(context),
+        ),
+        titleSpacing: 4,
         title: widget.chat.isSupportChat
             ? Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     widget.chat.stoName,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
+                      color: context.palette.textPrimary,
                     ),
                   ),
                   Text(
                     widget.chat.chatWithOrganizationSubtitle,
-                    style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                    style: TextStyle(fontSize: 12, color: context.palette.textSecondary),
                   ),
                 ],
               )
             : GestureDetector(
                 onTap: _navigateToStoCard,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: Row(
                   children: [
-                    Text(
-                      widget.chat.stoName,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
+                    _ChatOrgAvatar(logoUrl: widget.chat.stoLogoUrl, name: widget.chat.stoName),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.chat.stoName,
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: context.palette.textPrimary,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            widget.chat.chatWithOrganizationSubtitle,
+                            style: TextStyle(fontSize: 12, color: context.palette.textSecondary),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
                       ),
-                    ),
-                    Text(
-                      widget.chat.chatWithOrganizationSubtitle,
-                      style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
                     ),
                   ],
                 ),
               ),
         actions: [
-          IconButton(onPressed: () {}, icon: const Icon(Icons.phone_rounded, size: 22)),
+          if (!widget.chat.isSupportChat)
+            IconButton(
+              onPressed: () => _callOrganization(context, ref),
+              icon: Icon(Icons.phone_rounded, size: 22),
+              tooltip: 'Позвонить',
+            ),
           IconButton(
             onPressed: () => _showOrdersSheet(context),
-            icon: const Icon(Icons.info_outline_rounded, size: 22),
+            icon: Icon(Icons.info_outline_rounded, size: 22),
             tooltip: widget.chat.isSupportChat ? 'Справка' : 'Заказы в этом чате',
           ),
         ],
@@ -589,7 +644,7 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
                             ),
                         ]
                         else
-                            _MessageBubble(message: item.message!),
+                            _MessageBubble(message: item.message!, chat: widget.chat),
                       ],
                     );
                   },
@@ -606,9 +661,9 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
   Widget _buildInputBar() {
     return Container(
       padding: EdgeInsets.fromLTRB(8, 8, 8, MediaQuery.of(context).padding.bottom + 8),
-      decoration: const BoxDecoration(
-        color: AppColors.cardBg,
-        border: Border(top: BorderSide(color: AppColors.border)),
+      decoration: BoxDecoration(
+        color: context.palette.cardBg,
+        border: Border(top: BorderSide(color: context.palette.border)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
@@ -618,24 +673,24 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
             child: Container(
               width: 40, height: 40,
               alignment: Alignment.center,
-              child: const Icon(Icons.attach_file_rounded, size: 22, color: AppColors.textSecondary),
+              child: Icon(Icons.attach_file_rounded, size: 22, color: context.palette.textSecondary),
             ),
           ),
           Expanded(
             child: Container(
               constraints: const BoxConstraints(maxHeight: 120),
               decoration: BoxDecoration(
-                color: AppColors.nestedBg,
+                color: context.palette.nestedBg,
                 borderRadius: BorderRadius.circular(20),
               ),
               child: TextField(
                 controller: _textController,
                 maxLines: 5,
                 minLines: 1,
-                style: const TextStyle(fontSize: 14, color: AppColors.textPrimary),
-                decoration: const InputDecoration(
+                style: TextStyle(fontSize: 14, color: context.palette.textPrimary),
+                decoration: InputDecoration(
                   hintText: 'Сообщение...',
-                  hintStyle: TextStyle(color: AppColors.textPlaceholder, fontSize: 14),
+                  hintStyle: TextStyle(color: context.palette.textPlaceholder, fontSize: 14),
                   border: InputBorder.none,
                   contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   isDense: true,
@@ -643,19 +698,19 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
               ),
             ),
           ),
-          const SizedBox(width: 4),
+          SizedBox(width: 4),
           GestureDetector(
             onTap: _hasText ? _sendMessage : null,
             child: Container(
               width: 40, height: 40,
               decoration: BoxDecoration(
-                color: _hasText ? AppColors.primary : Colors.transparent,
+                color: _hasText ? context.palette.primary : Colors.transparent,
                 shape: BoxShape.circle,
               ),
               child: Icon(
                 _hasText ? Icons.send_rounded : Icons.mic_rounded,
                 size: 20,
-                color: _hasText ? const Color(0xFF0D0D0D) : AppColors.textSecondary,
+                color: _hasText ? context.palette.onAccent : context.palette.textSecondary,
               ),
             ),
           ),
@@ -673,30 +728,38 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
       outgoing.add(ChatOutgoingImage(bytes: b, filename: name));
     }
     final text = _textController.text.trim();
-    final ok = await ref.read(chatsProvider.notifier).sendMessageWithMedia(
+    final result = await ref.read(chatsProvider.notifier).sendMessageWithMedia(
           widget.chat.id,
           text: text,
           images: outgoing,
         );
     if (!mounted) return;
-    if (!ok) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Не удалось отправить фото. Проверьте сеть и тариф.'),
-        backgroundColor: AppColors.error,
-      ));
-      return;
-    }
-    _textController.clear();
-    setState(() => _hasText = false);
-    await _loadMessages();
-    if (mounted) WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+    await result.when(
+      success: (_) async {
+        _textController.clear();
+        setState(() => _hasText = false);
+        await _loadMessages();
+        if (mounted) WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+      },
+      failure: (e) {
+        if (!mounted) return;
+        final msg = e.message.trim();
+        final text = msg.isNotEmpty
+            ? msg
+            : 'Не удалось отправить фото. Проверьте интернет и попробуйте снова.';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(text),
+          backgroundColor: context.palette.error,
+        ));
+      },
+    );
   }
 
   void _showAttachSheet() {
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: AppColors.cardBg,
-      shape: const RoundedRectangleBorder(
+      backgroundColor: context.palette.cardBg,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (sheetCtx) => Padding(
@@ -707,16 +770,16 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
             Container(
               width: 36, height: 4,
               decoration: BoxDecoration(
-                color: AppColors.textTertiary, borderRadius: BorderRadius.circular(2)),
+                color: context.palette.textTertiary, borderRadius: BorderRadius.circular(2)),
             ),
-            const SizedBox(height: 24),
+            SizedBox(height: 24),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
                 _AttachOption(
                   icon: Icons.camera_alt_rounded,
                   label: 'Камера',
-                  color: AppColors.primary,
+                  color: context.palette.primary,
                   onTap: () async {
                     Navigator.pop(sheetCtx);
                     final x = await ImagePicker().pickImage(source: ImageSource.camera, imageQuality: 85);
@@ -727,7 +790,7 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
                 _AttachOption(
                   icon: Icons.photo_rounded,
                   label: 'Галерея',
-                  color: AppColors.info,
+                  color: context.palette.info,
                   onTap: () async {
                     Navigator.pop(sheetCtx);
                     final imgs = await ImagePicker().pickMultiImage(imageQuality: 85);
@@ -738,7 +801,7 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
                 _AttachOption(
                   icon: Icons.description_rounded,
                   label: 'Документ',
-                  color: AppColors.success,
+                  color: context.palette.success,
                   onTap: () {
                     Navigator.pop(sheetCtx);
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -748,7 +811,7 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
                 ),
               ],
             ),
-            const SizedBox(height: 16),
+            SizedBox(height: 16),
           ],
         ),
       ),
@@ -762,72 +825,110 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
 
 class _MessageBubble extends ConsumerWidget {
   final ChatMessage message;
-  const _MessageBubble({required this.message});
+  final Chat chat;
+  const _MessageBubble({required this.message, required this.chat});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isUser = message.isFromUser;
     final hasText = message.content.trim().isNotEmpty;
     final atts = message.attachments;
-    return Align(
-      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: EdgeInsets.only(
-          top: 4, bottom: 4,
-          left: isUser ? 60 : 0,
-          right: isUser ? 0 : 60,
+    final bubble = Container(
+      margin: EdgeInsets.only(
+        top: 4,
+        bottom: 4,
+        left: isUser ? 8 : 0,
+        right: isUser ? 0 : 60,
+      ),
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 6),
+      decoration: BoxDecoration(
+        color: isUser ? context.palette.primary : context.palette.nestedBg,
+        borderRadius: BorderRadius.only(
+          topLeft: const Radius.circular(16),
+          topRight: const Radius.circular(16),
+          bottomLeft: Radius.circular(isUser ? 16 : 4),
+          bottomRight: Radius.circular(isUser ? 4 : 16),
         ),
-        padding: const EdgeInsets.fromLTRB(14, 10, 14, 6),
-        decoration: BoxDecoration(
-          color: isUser ? AppColors.primary : AppColors.nestedBg,
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(16),
-            topRight: const Radius.circular(16),
-            bottomLeft: Radius.circular(isUser ? 16 : 4),
-            bottomRight: Radius.circular(isUser ? 4 : 16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (atts.isNotEmpty) ...[
+            ...atts.map(
+              (a) => Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 220),
+                  child: AuthenticatedChatImage(attachment: a, maxHeight: 140),
+                ),
+              ),
+            ),
+          ],
+          if (hasText)
+            Text(
+              message.content,
+              style: TextStyle(
+                fontSize: 14,
+                color: isUser ? context.palette.onAccent : context.palette.textPrimary,
+              ),
+            ),
+          SizedBox(height: 4),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                Formatters.time(message.timestamp),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: isUser
+                      ? context.palette.onAccent.withValues(alpha: 0.6)
+                      : context.palette.textTertiary,
+                ),
+              ),
+              if (isUser) ...[
+                SizedBox(width: 4),
+                _DeliveryIcon(status: message.deliveryStatus),
+              ],
+            ],
           ),
+        ],
+      ),
+    );
+
+    if (!isUser) {
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: bubble,
+      );
+    }
+
+    // Сообщения клиента: мини-аватар профиля справа от пузырька (как в мессенджерах).
+    final showOwnAvatar = !chat.isSupportChat;
+    if (!showOwnAvatar) {
+      return Align(
+        alignment: Alignment.centerRight,
+        child: Padding(
+          padding: const EdgeInsets.only(left: 60),
+          child: bubble,
         ),
-        child: Column(
+      );
+    }
+
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Padding(
+        padding: const EdgeInsets.only(left: 24),
+        child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
+          mainAxisAlignment: MainAxisAlignment.end,
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (atts.isNotEmpty) ...[
-              ...atts.map(
-                (a) => Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 220),
-                    child: AuthenticatedChatImage(attachment: a, maxHeight: 140),
-                  ),
-                ),
-              ),
-            ],
-            if (hasText)
-              Text(
-                message.content,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: isUser ? const Color(0xFF0D0D0D) : AppColors.textPrimary,
-                ),
-              ),
-            const SizedBox(height: 4),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  Formatters.time(message.timestamp),
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: isUser
-                        ? const Color(0xFF0D0D0D).withValues(alpha: 0.6)
-                        : AppColors.textTertiary,
-                  ),
-                ),
-                if (isUser) ...[
-                  const SizedBox(width: 4),
-                  _DeliveryIcon(status: message.deliveryStatus),
-                ],
-              ],
+            Flexible(child: bubble),
+            SizedBox(width: 6),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: _ClientOwnChatAvatar(),
             ),
           ],
         ),
@@ -845,17 +946,17 @@ class _DeliveryIcon extends StatelessWidget {
     switch (status) {
       case MessageDeliveryStatus.pending:
         return Icon(Icons.access_time, size: 13,
-          color: const Color(0xFF0D0D0D).withValues(alpha: 0.5));
+          color: context.palette.onAccent.withValues(alpha: 0.5));
       case MessageDeliveryStatus.sent:
         return Icon(Icons.check, size: 13,
-          color: const Color(0xFF0D0D0D).withValues(alpha: 0.6));
+          color: context.palette.onAccent.withValues(alpha: 0.6));
       case MessageDeliveryStatus.delivered:
         return Icon(Icons.done_all, size: 13,
-          color: const Color(0xFF0D0D0D).withValues(alpha: 0.6));
+          color: context.palette.onAccent.withValues(alpha: 0.6));
       case MessageDeliveryStatus.read:
-        return const Icon(Icons.done_all, size: 13, color: AppColors.info);
+        return Icon(Icons.done_all, size: 13, color: context.palette.info);
       case MessageDeliveryStatus.error:
-        return const Icon(Icons.error_outline, size: 13, color: AppColors.error);
+        return Icon(Icons.error_outline, size: 13, color: context.palette.error);
     }
   }
 }
@@ -872,11 +973,11 @@ class _SystemMessage extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
           decoration: BoxDecoration(
-            color: AppColors.cardBg,
+            color: context.palette.cardBg,
             borderRadius: BorderRadius.circular(8),
           ),
-          child: Text(text, style: const TextStyle(
-            fontSize: 12, color: AppColors.textSecondary,
+          child: Text(text, style: TextStyle(
+            fontSize: 12, color: context.palette.textSecondary,
           ), textAlign: TextAlign.center),
         ),
       ),
@@ -950,7 +1051,7 @@ class _OrderTimelineCard extends StatelessWidget {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 10),
+                  SizedBox(height: 10),
                   Center(
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 280),
@@ -961,17 +1062,17 @@ class _OrderTimelineCard extends StatelessWidget {
                           Flexible(
                             child: Text(
                               '#${order.orderNumber}',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 15,
                                 fontWeight: FontWeight.w600,
-                                color: AppColors.textPrimary,
+                                color: context.palette.textPrimary,
                               ),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               textAlign: TextAlign.center,
                             ),
                           ),
-                          const SizedBox(width: 10),
+                          SizedBox(width: 10),
                           Text(
                             range,
                             style: TextStyle(
@@ -982,8 +1083,8 @@ class _OrderTimelineCard extends StatelessWidget {
                             ),
                             maxLines: 1,
                           ),
-                          const SizedBox(width: 4),
-                          const Icon(Icons.chevron_right_rounded, size: 20, color: AppColors.textTertiary),
+                          SizedBox(width: 4),
+                          Icon(Icons.chevron_right_rounded, size: 20, color: context.palette.textTertiary),
                         ],
                       ),
                     ),
@@ -1016,9 +1117,9 @@ class _BookingCard extends StatelessWidget {
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.cardBg,
+        color: context.palette.cardBg,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.statusPending.withValues(alpha: 0.5)),
+        border: Border.all(color: context.palette.statusPending.withValues(alpha: 0.5)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1026,28 +1127,28 @@ class _BookingCard extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.check_circle_outline_rounded, size: 20, color: AppColors.statusPending),
-              const SizedBox(width: 8),
+              Icon(Icons.check_circle_outline_rounded, size: 20, color: context.palette.statusPending),
+              SizedBox(width: 8),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
+                    Text(
                       'Заявка отправлена',
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
+                        color: context.palette.textPrimary,
                       ),
                     ),
                     if (orderNumber != null && orderNumber!.isNotEmpty) ...[
-                      const SizedBox(height: 4),
+                      SizedBox(height: 4),
                       Text(
                         orderNumber!,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w700,
-                          color: AppColors.textSecondary,
+                          color: context.palette.textSecondary,
                           fontFamily: 'monospace',
                           letterSpacing: 0.2,
                         ),
@@ -1060,17 +1161,17 @@ class _BookingCard extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 6),
-          const Text(
+          SizedBox(height: 6),
+          Text(
             'Ожидайте подтверждения. Мы свяжемся с вами.',
-            style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+            style: TextStyle(fontSize: 13, color: context.palette.textSecondary),
           ),
           if (items.isNotEmpty) ...[
-            const Divider(color: AppColors.border, height: 24),
-            const Text('Выбранные услуги:', style: TextStyle(
-              fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textSecondary,
+            Divider(color: context.palette.border, height: 24),
+            Text('Выбранные услуги:', style: TextStyle(
+              fontSize: 13, fontWeight: FontWeight.w600, color: context.palette.textSecondary,
             )),
-            const SizedBox(height: 6),
+            SizedBox(height: 6),
             ...items.map((item) => _WorkRow(
                   name: item.name,
                   price: Formatters.money(item.priceKopecks),
@@ -1083,7 +1184,7 @@ class _BookingCard extends StatelessWidget {
               padding: const EdgeInsets.only(top: 10),
               child: Text(
                 Formatters.time(sentAt),
-                style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
+                style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
               ),
             ),
           ),
@@ -1106,35 +1207,35 @@ class _ClientOrderCreatedCard extends StatelessWidget {
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.cardBg,
+        color: context.palette.cardBg,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.statusPending.withValues(alpha: 0.5)),
+        border: Border.all(color: context.palette.statusPending.withValues(alpha: 0.5)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(Icons.check_circle_outline_rounded, size: 20, color: AppColors.statusPending),
-              const SizedBox(width: 8),
-              const Text(
+              Icon(Icons.check_circle_outline_rounded, size: 20, color: context.palette.statusPending),
+              SizedBox(width: 8),
+              Text(
                 'Заявка отправлена',
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary,
+                  color: context.palette.textPrimary,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 6),
-          const Text(
+          SizedBox(height: 6),
+          Text(
             'Ожидайте подтверждения. Мы свяжемся с вами.',
-            style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+            style: TextStyle(fontSize: 13, color: context.palette.textSecondary),
           ),
-          const SizedBox(height: 10),
+          SizedBox(height: 10),
           Material(
-            color: AppColors.primary.withValues(alpha: 0.08),
+            color: context.palette.primary.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(10),
             child: InkWell(
               onTap: () => pushCupertino(context, OrderDetailScreen(order: order)),
@@ -1143,8 +1244,8 @@ class _ClientOrderCreatedCard extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                 child: Row(
                   children: [
-                    Icon(Icons.receipt_long_outlined, size: 18, color: AppColors.primary.withValues(alpha: 0.9)),
-                    const SizedBox(width: 10),
+                    Icon(Icons.receipt_long_outlined, size: 18, color: context.palette.primary.withValues(alpha: 0.9)),
+                    SizedBox(width: 10),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1154,17 +1255,17 @@ class _ClientOrderCreatedCard extends StatelessWidget {
                             style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w500,
-                              color: AppColors.textTertiary,
+                              color: context.palette.textTertiary,
                               letterSpacing: 0.2,
                             ),
                           ),
-                          const SizedBox(height: 2),
+                          SizedBox(height: 2),
                           Text(
                             order.orderNumber,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.w700,
-                              color: AppColors.textPrimary,
+                              color: context.palette.textPrimary,
                               fontFamily: 'monospace',
                               letterSpacing: 0.3,
                             ),
@@ -1174,51 +1275,51 @@ class _ClientOrderCreatedCard extends StatelessWidget {
                         ],
                       ),
                     ),
-                    Icon(Icons.chevron_right_rounded, size: 22, color: AppColors.textTertiary),
+                    Icon(Icons.chevron_right_rounded, size: 22, color: context.palette.textTertiary),
                   ],
                 ),
               ),
             ),
           ),
           if (order.plannedStartTime != null || order.plannedEndTime != null) ...[
-            const SizedBox(height: 8),
+            SizedBox(height: 8),
             Text(
               order.plannedStartTime != null && order.plannedEndTime != null
                   ? '${Formatters.dateShortRu(order.plannedStartTime!)} ${Formatters.time(order.plannedStartTime!)} – ${Formatters.time(order.plannedEndTime!)}'
                   : order.plannedEndTime != null
                       ? 'Ориентировочное окончание: ${Formatters.time(order.plannedEndTime!)} ${Formatters.dateShortRu(order.plannedEndTime!)}'
                       : '${Formatters.dateShortRu(order.dateTime)} ${Formatters.time(order.dateTime)}',
-              style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+              style: TextStyle(fontSize: 13, color: context.palette.textSecondary),
             ),
           ] else ...[
-            const SizedBox(height: 8),
+            SizedBox(height: 8),
             Text(
               '${Formatters.dateShortRu(order.dateTime)} ${Formatters.time(order.dateTime)}',
-              style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+              style: TextStyle(fontSize: 13, color: context.palette.textSecondary),
             ),
           ],
-          const Divider(color: AppColors.border, height: 24),
-          const Text('Перечень работ:', style: TextStyle(
-            fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textSecondary,
+          Divider(color: context.palette.border, height: 24),
+          Text('Перечень работ:', style: TextStyle(
+            fontSize: 13, fontWeight: FontWeight.w600, color: context.palette.textSecondary,
           )),
-          const SizedBox(height: 6),
+          SizedBox(height: 6),
           ...displayItems.map((item) => _WorkRow(
                 name: item.name,
                 price: Formatters.money(item.priceKopecks),
                 duration: item.durationLabel,
               )),
-          const Divider(color: AppColors.border, height: 24),
+          Divider(color: context.palette.border, height: 24),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Итого:', style: TextStyle(
-                fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textPrimary,
+              Text('Итого:', style: TextStyle(
+                fontSize: 16, fontWeight: FontWeight.w700, color: context.palette.textPrimary,
               )),
               Text(
                 Formatters.money(totalKopecks),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 18, fontWeight: FontWeight.w700,
-                  color: AppColors.primary, fontFamily: 'monospace',
+                  color: context.palette.primary, fontFamily: 'monospace',
                 ),
               ),
             ],
@@ -1240,7 +1341,7 @@ class _DateSeparator extends StatelessWidget {
       child: Center(
         child: Text(
           Formatters.dateFullRu(date),
-          style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
+          style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
         ),
       ),
     );
@@ -1350,6 +1451,38 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
     return false;
   }
 
+  /// Список id для POST approval — как в [_handleApproval], по текущим галочкам.
+  List<String> _approvedLineIdsForApproveApi(Order order) {
+    final hasAdditional = order.items.any((i) => i.isAdditional);
+    final fromOrder = hasAdditional
+        ? order.items.where((i) => i.isAdditional && _checked.contains(i.id)).map((i) => i.id).toList()
+        : <String>[];
+    final fromMessage = _checked.where((id) => !hasAdditional || !order.items.any((i) => i.id == id)).toList();
+    return [...fromOrder, ...fromMessage];
+  }
+
+  Set<String> _allCheckableApprovalIds(Order order) {
+    final keys = <String>{};
+    for (final i in order.items.where((x) => x.isAdditional)) {
+      keys.add(i.id);
+    }
+    final msg = widget.approvalMessage?.newApprovalItems ?? widget.approvalMessage?.approvalItems ?? [];
+    for (var i = 0; i < msg.length; i++) {
+      keys.add(msg[i].id ?? 'msg_$i');
+    }
+    return keys;
+  }
+
+  List<String> _approvedIdsToSendForConfirm(Order order) {
+    final selected = _approvedLineIdsForApproveApi(order);
+    if (selected.isEmpty) return [];
+    final all = _allCheckableApprovalIds(order);
+    if (all.isNotEmpty && all.every(_checked.contains)) {
+      return const ['0'];
+    }
+    return selected;
+  }
+
   Future<void> _confirmOrderWithTime(DateTime? dateTime, {bool acceptProposed = true}) async {
     final orderId = _effectiveOrderId;
     if (orderId.isEmpty) return;
@@ -1360,14 +1493,25 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
     } catch (_) {
       order = null;
     }
-    final hasPendingApproval = order?.status == OrderStatus.pendingApproval ?? false;
+    final hasPendingApproval = order?.status == OrderStatus.pendingApproval;
     final am = widget.approvalMessage;
     final safeMsgId =
         am != null && am.id.isNotEmpty && !am.id.startsWith('temp_') ? am.id : null;
     if (hasPendingApproval) {
+      final idsToSend = order != null ? _approvedIdsToSendForConfirm(order) : const <String>['0'];
+      if (idsToSend.isEmpty) {
+        if (mounted) {
+          setState(() => _isConfirming = false);
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: const Text('Отметьте услуги для согласования или нажмите «Отклонить» в карточке.'),
+            backgroundColor: context.palette.warning,
+          ));
+        }
+        return;
+      }
       final approvalResult = await ref.read(ordersProvider.notifier).approveItems(
         orderId,
-        approvedItemIds: const ['0'],
+        approvedItemIds: idsToSend,
         rejectedItemIds: [],
         approvalMessageId: safeMsgId,
       );
@@ -1376,7 +1520,7 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
           setState(() => _isConfirming = false);
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(approvalResult.errorOrNull?.message ?? 'Не удалось согласовать. Откройте чат и обновите.'),
-            backgroundColor: AppColors.error,
+            backgroundColor: context.palette.error,
           ));
         }
         return;
@@ -1411,13 +1555,13 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
         ref.invalidate(unreadNotificationCountProvider);
         ref.invalidate(unreadByCarProvider);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Запись подтверждена'), backgroundColor: AppColors.success),
+          SnackBar(content: Text('Запись подтверждена'), backgroundColor: context.palette.success),
         );
       }
     } else if (!ok && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(confirmResult.errorOrNull?.message ?? 'Не удалось подтвердить заказ'),
-        backgroundColor: AppColors.error,
+        backgroundColor: context.palette.error,
       ));
     }
   }
@@ -1465,7 +1609,7 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 16),
           child: Center(
-            child: Text('Загрузка заказа...', style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+            child: Text('Загрузка заказа...', style: TextStyle(fontSize: 13, color: context.palette.textSecondary)),
           ),
         );
       }
@@ -1478,15 +1622,15 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
             children: [
               Text(
                 hasError ? 'Не удалось загрузить заказ' : 'Заказ не найден',
-                style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                style: TextStyle(fontSize: 13, color: context.palette.textSecondary),
                 textAlign: TextAlign.center,
               ),
               if (hasError) ...[
-                const SizedBox(height: 8),
+                SizedBox(height: 8),
                 TextButton.icon(
                   onPressed: () => ref.invalidate(orderByIdProvider(orderId)),
-                  icon: const Icon(Icons.refresh, size: 18),
-                  label: const Text('Повторить'),
+                  icon: Icon(Icons.refresh, size: 18),
+                  label: Text('Повторить'),
                 ),
               ],
             ],
@@ -1570,11 +1714,11 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
       margin: const EdgeInsets.symmetric(vertical: 8),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.cardBg,
+        color: context.palette.cardBg,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: _isActioned
-            ? (_actionLabel == 'Одобрено' ? AppColors.success : AppColors.error).withValues(alpha: 0.4)
-            : AppColors.statusApproval.withValues(alpha: 0.4)),
+            ? (_actionLabel == 'Одобрено' ? context.palette.success : context.palette.error).withValues(alpha: 0.4)
+            : context.palette.statusApproval.withValues(alpha: 0.4)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1583,24 +1727,24 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
           Row(
             children: [
               Text(_isActioned ? (_actionLabel == 'Одобрено' ? '✅' : '❌') : '⚠️',
-                style: const TextStyle(fontSize: 16)),
-              const SizedBox(width: 8),
+                style: TextStyle(fontSize: 16)),
+              SizedBox(width: 8),
               Expanded(
                 child: Text(
                   _isActioned ? _actionLabel! : 'Требуется согласование',
                   style: TextStyle(
                     fontSize: 16, fontWeight: FontWeight.w600,
                     color: _isActioned
-                        ? (_actionLabel == 'Одобрено' ? AppColors.success : AppColors.error)
-                        : AppColors.statusApproval,
+                        ? (_actionLabel == 'Одобрено' ? context.palette.success : context.palette.error)
+                        : context.palette.statusApproval,
                   ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 6),
+          SizedBox(height: 6),
           Material(
-            color: AppColors.primary.withValues(alpha: 0.08),
+            color: context.palette.primary.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(10),
             child: InkWell(
               onTap: () => pushCupertino(context, OrderDetailScreen(order: order)),
@@ -1609,8 +1753,8 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: Row(
                   children: [
-                    Icon(Icons.receipt_long_outlined, size: 16, color: AppColors.primary.withValues(alpha: 0.9)),
-                    const SizedBox(width: 8),
+                    Icon(Icons.receipt_long_outlined, size: 16, color: context.palette.primary.withValues(alpha: 0.9)),
+                    SizedBox(width: 8),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1620,16 +1764,16 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
                             style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w500,
-                              color: AppColors.textTertiary,
+                              color: context.palette.textTertiary,
                             ),
                           ),
-                          const SizedBox(height: 2),
+                          SizedBox(height: 2),
                           Text(
                             order.orderNumber,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w700,
-                              color: AppColors.textPrimary,
+                              color: context.palette.textPrimary,
                               fontFamily: 'monospace',
                               letterSpacing: 0.2,
                             ),
@@ -1639,7 +1783,7 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
                         ],
                       ),
                     ),
-                    Icon(Icons.chevron_right_rounded, size: 20, color: AppColors.textTertiary),
+                    Icon(Icons.chevron_right_rounded, size: 20, color: context.palette.textTertiary),
                   ],
                 ),
               ),
@@ -1650,20 +1794,20 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
               padding: const EdgeInsets.only(top: 6),
               child: Row(
                 children: [
-                  Icon(Icons.directions_car_rounded, size: 14, color: AppColors.textSecondary),
-                  const SizedBox(width: 6),
-                  Text('Для всех машин', style: TextStyle(fontSize: 12, color: AppColors.textSecondary, fontStyle: FontStyle.italic)),
+                  Icon(Icons.directions_car_rounded, size: 14, color: context.palette.textSecondary),
+                  SizedBox(width: 6),
+                  Text('Для всех машин', style: TextStyle(fontSize: 12, color: context.palette.textSecondary, fontStyle: FontStyle.italic)),
                 ],
               ),
             ),
-          const Divider(color: AppColors.border, height: 24),
+          Divider(color: context.palette.border, height: 24),
 
           // Новый заказ от сервиса (нет исходных позиций) — только список «Услуги». Иначе — исходный состав + изменения.
           if (isNewOrderFromSto && messageItems.isNotEmpty) ...[
-            const Text('Услуги:', style: TextStyle(
-              fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textSecondary,
+            Text('Услуги:', style: TextStyle(
+              fontSize: 13, fontWeight: FontWeight.w600, color: context.palette.textSecondary,
             )),
-            const SizedBox(height: 6),
+            SizedBox(height: 6),
             ...messageItems.asMap().entries.map((e) => _CheckableWorkRow(
               name: e.value.name,
               price: Formatters.money(e.value.priceKopecks),
@@ -1680,20 +1824,20 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
             )),
           ] else ...[
             if (widget.approvalMessage?.originalApprovalItems != null && widget.approvalMessage!.originalApprovalItems!.isNotEmpty) ...[
-              const Text('Текущий состав заказа', style: TextStyle(
-                fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textSecondary,
+              Text('Текущий состав заказа', style: TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w600, color: context.palette.textSecondary,
               )),
-              const SizedBox(height: 6),
+              SizedBox(height: 6),
               ...widget.approvalMessage!.originalApprovalItems!.map((item) => _WorkRow(
                 name: item.name,
                 price: Formatters.money(item.priceKopecks),
                 duration: Formatters.durationMinutes(item.estimatedMinutes),
               )),
             ] else if (originalItems.isNotEmpty) ...[
-              const Text('Изначально согласовано:', style: TextStyle(
-                fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textSecondary,
+              Text('Изначально согласовано:', style: TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w600, color: context.palette.textSecondary,
               )),
-              const SizedBox(height: 6),
+              SizedBox(height: 6),
               ...originalItems.map((item) => _WorkRow(
                 name: item.name,
                 price: Formatters.money(item.priceKopecks),
@@ -1701,30 +1845,30 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
               )),
             ],
             if (editedItems.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              const Text('Скорректированные услуги:', style: TextStyle(
-                fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textSecondary,
+              SizedBox(height: 12),
+              Text('Скорректированные услуги:', style: TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w600, color: context.palette.textSecondary,
               )),
-              const SizedBox(height: 6),
+              SizedBox(height: 6),
               ...editedItems.map((item) => _WorkRow(
                 name: item.name,
                 price: Formatters.money(item.priceKopecks),
                 duration: '${item.estimatedMinutes} мин',
               )),
             ],
-            const SizedBox(height: 12),
+            SizedBox(height: 12),
             Row(
               children: [
-                Text(newItems.isNotEmpty ? 'Добавленные услуги:' : 'Добавлено сервисом:', style: const TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.statusApproval,
+                Text(newItems.isNotEmpty ? 'Добавленные услуги:' : 'Добавлено сервисом:', style: TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w600, color: context.palette.statusApproval,
                 )),
                 const Spacer(),
                 if (additionalTime > 0 && !_isActioned)
-                  Text('+ ${Formatters.durationMinutes(additionalTime)}', style: const TextStyle(
-                    fontSize: 12, color: AppColors.textTertiary)),
+                  Text('+ ${Formatters.durationMinutes(additionalTime)}', style: TextStyle(
+                    fontSize: 12, color: context.palette.textTertiary)),
               ],
             ),
-            const SizedBox(height: 6),
+            SizedBox(height: 6),
             if (useMessageForAdditional)
               ...messageItems.asMap().entries.map((e) => _CheckableWorkRow(
               name: e.value.name,
@@ -1757,27 +1901,27 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
             )),
           ],
 
-          const Divider(color: AppColors.border, height: 24),
+          Divider(color: context.palette.border, height: 24),
 
           // Итого (для нового заказа от сервиса — только итого; иначе — было / добавлено / итого)
           if (!isNewOrderFromSto) _PriceRow('Было:', Formatters.money(displayWasTotal)),
           if (editedTotal > 0)
             _PriceRow('Скорректировано:', Formatters.money(editedTotal),
-              color: AppColors.textSecondary),
+              color: context.palette.textSecondary),
           if (!isNewOrderFromSto && (displayAddedTotal != 0 || _checked.isNotEmpty))
-            _PriceRow(newItems.isNotEmpty ? 'Добавленные услуги:' : 'Добавлено сервисом:', Formatters.money(displayAddedTotal != 0 ? displayAddedTotal : additionalTotal), color: AppColors.statusApproval),
-          const SizedBox(height: 4),
+            _PriceRow(newItems.isNotEmpty ? 'Добавленные услуги:' : 'Добавлено сервисом:', Formatters.money(displayAddedTotal != 0 ? displayAddedTotal : additionalTotal), color: context.palette.statusApproval),
+          SizedBox(height: 4),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Итого:', style: TextStyle(
-                fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textPrimary,
+              Text('Итого:', style: TextStyle(
+                fontSize: 16, fontWeight: FontWeight.w700, color: context.palette.textPrimary,
               )),
               Text(
                 Formatters.money(displayTotalTotal),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 18, fontWeight: FontWeight.w700,
-                  color: AppColors.primary, fontFamily: 'monospace',
+                  color: context.palette.primary, fontFamily: 'monospace',
                 ),
               ),
             ],
@@ -1785,7 +1929,7 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
 
           // Время выполнения с ... до ... и кнопка «Изменить» (сетка слотов); Подтвердить / Отклонить.
           if (!_isActioned && _showInitialTimeAgreement(order)) ...[
-            const Divider(color: AppColors.border, height: 24),
+            Divider(color: context.palette.border, height: 24),
             Builder(
               builder: (context) {
                 final effectiveStart = _draftSelectedTime ?? order.plannedStartTime ?? widget.approvalMessage?.proposedDateTime ?? order.dateTime;
@@ -1797,7 +1941,7 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
                     Expanded(
                       child: Text(
                         'Время выполнения с ${Formatters.time(effectiveStart)} до ${Formatters.time(effectiveEnd)}',
-                        style: const TextStyle(fontSize: 13, color: AppColors.textPrimary),
+                        style: TextStyle(fontSize: 13, color: context.palette.textPrimary),
                       ),
                     ),
                     TextButton(
@@ -1824,13 +1968,13 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
                           ),
                         );
                       },
-                      child: const Text('Изменить'),
+                      child: Text('Изменить'),
                     ),
                   ],
                 );
               },
             ),
-            const SizedBox(height: 12),
+            SizedBox(height: 12),
             Row(
               children: [
                 Expanded(
@@ -1847,13 +1991,13 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
                       if (mounted) setState(() => _isSubmittingApproval = false);
                     },
                     style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: AppColors.textTertiary),
-                      foregroundColor: AppColors.textSecondary,
+                      side: BorderSide(color: context.palette.textTertiary),
+                      foregroundColor: context.palette.textSecondary,
                     ),
                     child: Text(_isSubmittingApproval ? '...' : 'Отклонить'),
                   ),
                 ),
-                const SizedBox(width: 8),
+                SizedBox(width: 8),
                 Expanded(
                   child: OutlinedButton(
                     onPressed: _isConfirming ? null : () => _confirmOrderWithTime(
@@ -1861,10 +2005,10 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
                       acceptProposed: _draftSelectedTime == null,
                     ),
                     style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.primary,
-                      side: const BorderSide(color: AppColors.primary),
+                      foregroundColor: context.palette.primary,
+                      side: BorderSide(color: context.palette.primary),
                     ),
-                    child: const Text('Подтвердить'),
+                    child: Text('Подтвердить'),
                   ),
                 ),
               ],
@@ -1873,7 +2017,7 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
 
           // Кнопки согласования доп. работ (когда заказ уже в работе)
           if (!_isActioned && order.status == OrderStatus.pendingApproval && order.items.any((i) => i.isAdditional)) ...[
-            const SizedBox(height: 16),
+            SizedBox(height: 16),
             Row(
               children: [
                 Expanded(
@@ -1890,19 +2034,19 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
                       if (mounted) setState(() => _isSubmittingApproval = false);
                     },
                     style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: AppColors.textTertiary),
-                      foregroundColor: AppColors.textSecondary,
+                      side: BorderSide(color: context.palette.textTertiary),
+                      foregroundColor: context.palette.textSecondary,
                     ),
                     child: Text(_isSubmittingApproval ? '...' : 'Отклонить'),
                   ),
                 ),
-                const SizedBox(width: 12),
+                SizedBox(width: 12),
                 Expanded(
                   child: SizedBox(
                     height: 48,
                     child: DecoratedBox(
                       decoration: BoxDecoration(
-                        gradient: AppColors.primaryGradient,
+                        gradient: context.palette.primaryGradient,
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: ElevatedButton(
@@ -1928,8 +2072,8 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
                           style: TextStyle(
                             fontWeight: FontWeight.w600,
                             color: _checked.isEmpty
-                                ? AppColors.textTertiary
-                                : const Color(0xFF0D0D0D),
+                                ? context.palette.textTertiary
+                                : context.palette.onAccent,
                           ),
                         ),
                       ),
@@ -1957,17 +2101,17 @@ class _WorkRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         children: [
-          const Icon(Icons.check_circle_rounded, size: 16, color: AppColors.success),
-          const SizedBox(width: 8),
+          Icon(Icons.check_circle_rounded, size: 16, color: context.palette.success),
+          SizedBox(width: 8),
           Expanded(child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(name, style: const TextStyle(fontSize: 14, color: AppColors.textPrimary)),
+              Text(name, style: TextStyle(fontSize: 14, color: context.palette.textPrimary)),
               if (duration != null)
-                Text('⏱ $duration', style: const TextStyle(fontSize: 11, color: AppColors.textTertiary)),
+                Text('⏱ $duration', style: TextStyle(fontSize: 11, color: context.palette.textTertiary)),
             ],
           )),
-          Text(price, style: const TextStyle(fontSize: 14, color: AppColors.textPrimary)),
+          Text(price, style: TextStyle(fontSize: 14, color: context.palette.textPrimary)),
         ],
       ),
     );
@@ -1999,31 +2143,31 @@ class _CheckableWorkRow extends StatelessWidget {
                 child: Checkbox(
                   value: isChecked,
                   onChanged: enabled ? (v) => onChanged(v ?? false) : null,
-                  activeColor: AppColors.primary,
-                  side: const BorderSide(color: AppColors.textTertiary),
+                  activeColor: context.palette.primary,
+                  side: BorderSide(color: context.palette.textTertiary),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
                   materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
               ),
-              const SizedBox(width: 8),
+              SizedBox(width: 8),
               Expanded(child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(name, style: const TextStyle(fontSize: 14, color: AppColors.textPrimary)),
+                  Text(name, style: TextStyle(fontSize: 14, color: context.palette.textPrimary)),
                   if (duration != null)
-                    Text('⏱ $duration', style: const TextStyle(fontSize: 11, color: AppColors.textTertiary)),
+                    Text('⏱ $duration', style: TextStyle(fontSize: 11, color: context.palette.textTertiary)),
                 ],
               )),
-              Text(price, style: const TextStyle(
-                fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.statusApproval,
+              Text(price, style: TextStyle(
+                fontSize: 14, fontWeight: FontWeight.w600, color: context.palette.statusApproval,
               )),
             ],
           ),
           if (comment != null)
             Padding(
               padding: const EdgeInsets.only(left: 28, top: 4),
-              child: Text(comment!, style: const TextStyle(
-                fontSize: 12, color: AppColors.textSecondary, fontStyle: FontStyle.italic,
+              child: Text(comment!, style: TextStyle(
+                fontSize: 12, color: context.palette.textSecondary, fontStyle: FontStyle.italic,
               )),
             ),
         ],
@@ -2044,8 +2188,8 @@ class _PriceRow extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: const TextStyle(fontSize: 14, color: AppColors.textSecondary)),
-          Text(value, style: TextStyle(fontSize: 14, color: color ?? AppColors.textPrimary)),
+          Text(label, style: TextStyle(fontSize: 14, color: context.palette.textSecondary)),
+          Text(value, style: TextStyle(fontSize: 14, color: color ?? context.palette.textPrimary)),
         ],
       ),
     );
@@ -2074,9 +2218,113 @@ class _AttachOption extends StatelessWidget {
             ),
             child: Icon(icon, color: color, size: 26),
           ),
-          const SizedBox(height: 8),
-          Text(label, style: const TextStyle(fontSize: 13, color: AppColors.textPrimary)),
+          SizedBox(height: 8),
+          Text(label, style: TextStyle(fontSize: 13, color: context.palette.textPrimary)),
         ],
+      ),
+    );
+  }
+}
+
+/// Круглый аватар текущего пользователя в ленте чата (фото профиля с Bearer).
+class _ClientOwnChatAvatar extends ConsumerWidget {
+  const _ClientOwnChatAvatar();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final user = ref.watch(authProvider).user;
+    final raw = user?.avatarUrl?.trim() ?? '';
+    final resolved = raw.isNotEmpty ? AppConfig.resolveProfileAvatarUrl(raw) : '';
+    final token = ref.watch(authProvider).accessToken;
+    final initials = user?.initials ?? '?';
+    return SizedBox(
+      width: 32,
+      height: 32,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: context.palette.nestedBg,
+          border: Border.all(color: context.palette.primary.withValues(alpha: 0.35)),
+        ),
+        child: ClipOval(
+          child: resolved.isNotEmpty
+              ? CachedNetworkImage(
+                  imageUrl: resolved,
+                  cacheKey: resolved,
+                  fit: BoxFit.cover,
+                  httpHeaders: token != null ? {'Authorization': 'Bearer $token'} : null,
+                  placeholder: (_, __) => Center(
+                    child: SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: context.palette.primary),
+                    ),
+                  ),
+                  errorWidget: (_, __, ___) => Center(
+                    child: Text(
+                      initials,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: context.palette.primary,
+                      ),
+                    ),
+                  ),
+                )
+              : Center(
+                  child: Text(
+                    initials,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: context.palette.primary,
+                    ),
+                  ),
+                ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatOrgAvatar extends StatelessWidget {
+  const _ChatOrgAvatar({required this.logoUrl, required this.name});
+
+  final String? logoUrl;
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    final u = logoUrl?.trim();
+    if (u != null && u.isNotEmpty) {
+      final resolved = AppConfig.resolveOrganizationPhotoUrl(u);
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Image.network(
+          resolved,
+          width: 40,
+          height: 40,
+          fit: BoxFit.cover,
+          errorBuilder: (ctx, __, ___) => _fallbackLetter(ctx),
+        ),
+      );
+    }
+    return _fallbackLetter(context);
+  }
+
+  Widget _fallbackLetter(BuildContext context) {
+    final p = context.palette;
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: p.nestedBg,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        name.isNotEmpty ? name[0].toUpperCase() : '?',
+        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: p.primary),
       ),
     );
   }

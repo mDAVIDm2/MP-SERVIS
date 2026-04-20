@@ -2,9 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/api/internal_data_providers.dart';
-import '../../../core/constants/labels_ru.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/utils/media_url_resolver.dart';
 import '../sections/section_scaffold.dart';
+
+Widget _orgPlaceholderAvatar() {
+  return Container(
+    width: 48,
+    height: 48,
+    decoration: BoxDecoration(
+      color: AppColors.primary.withValues(alpha: 0.12),
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: const Icon(Icons.business_rounded, color: AppColors.primary),
+  );
+}
 
 class OrganizationsScreen extends ConsumerStatefulWidget {
   const OrganizationsScreen({super.key});
@@ -75,6 +87,11 @@ class _OrganizationsScreenState extends ConsumerState<OrganizationsScreen> {
               final timezone = e['timezone'] as String?;
               final sub = e['subscription'];
               final isActive = sub is Map && sub['is_active'] == true;
+              final photosRaw = e['photo_urls'];
+              String? firstPhoto;
+              if (photosRaw is List && photosRaw.isNotEmpty) {
+                firstPhoto = resolvePublicMediaUrl(photosRaw.first?.toString());
+              }
               return Material(
                 color: Colors.transparent,
                 child: InkWell(
@@ -96,9 +113,17 @@ class _OrganizationsScreenState extends ConsumerState<OrganizationsScreen> {
                     ),
                     child: Row(
                       children: [
-                        CircleAvatar(
-                          backgroundColor: AppColors.primary.withValues(alpha: 0.12),
-                          child: Icon(Icons.business_rounded, color: AppColors.primary),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: firstPhoto != null && firstPhoto.isNotEmpty
+                              ? Image.network(
+                                  firstPhoto,
+                                  width: 48,
+                                  height: 48,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => _orgPlaceholderAvatar(),
+                                )
+                              : _orgPlaceholderAvatar(),
                         ),
                         const SizedBox(width: 16),
                         Expanded(

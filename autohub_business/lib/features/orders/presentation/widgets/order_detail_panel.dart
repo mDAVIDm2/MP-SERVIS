@@ -7,12 +7,12 @@ import '../../../../core/pdf/order_worksheet_pdf.dart';
 import '../../../../core/theme/app_colors_desktop.dart';
 import '../../../../core/theme/desktop_design_system.dart';
 import '../../../../shared/models/order_model.dart';
-import '../../../../shared/models/organization_business_kind.dart';
 import '../../../../shared/models/chat_model.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../core/auth/auth_provider.dart';
-import '../../../../core/repositories/order_repository.dart';
 import '../../../../core/repositories/chat_repository.dart';
+import '../../../../core/repositories/order_repository.dart';
+import '../../../../core/utils/client_avatar_from_chats.dart';
 import '../../../../core/repositories/settings_repository.dart';
 import '../../../../shared/models/settings_models.dart';
 import '../../../../core/api/services/api_services_providers.dart';
@@ -20,9 +20,36 @@ import '../screens/master_picker_screen.dart';
 import '../screens/order_payment_screen.dart';
 import '../screens/confirm_correct_order_screen.dart';
 import '../../../chats/presentation/screens/chat_detail_screen.dart';
+import '../../../chats/presentation/widgets/authenticated_profile_avatar.dart';
+import '../../../../shared/widgets/authenticated_api_image.dart';
 
 /// Ширина правой панели деталей заказа (desktop).
 const double kOrderDetailPanelWidth = 465.0; // ~7% уже 500
+
+/// Индикатор услуги: пустой круг → выполнено: зелёный круг с галочкой (центрируется в [Row] с `CrossAxisAlignment.center`).
+Widget _orderServiceCompletionLeading(bool completed, {double size = 22}) {
+  if (completed) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: AppColorsDesktop.success.withValues(alpha: 0.16),
+        border: Border.all(color: AppColorsDesktop.success.withValues(alpha: 0.48)),
+      ),
+      alignment: Alignment.center,
+      child: Icon(Icons.check_rounded, size: size * 0.64, color: AppColorsDesktop.success),
+    );
+  }
+  return Container(
+    width: size,
+    height: size,
+    decoration: BoxDecoration(
+      shape: BoxShape.circle,
+      border: Border.all(color: AppColorsDesktop.border, width: 1.5),
+    ),
+  );
+}
 
 /// Состав заказа из сообщения согласования (для fallback при пустом order).
 List<ApprovalItem> _itemsFromApprovalMessage(ChatMessage m) {
@@ -205,30 +232,29 @@ class OrderDetailHeader extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  'Создан: ${formatDateTimeOrNull(order.createdAt)}',
+                  'Запись: ${order.appointmentRangeLabel}',
                   style: DesktopDesignSystem.meta,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 Text(
-                  'Запись: ${formatDateTimeOrNull(order.dateTime)}',
+                  'Мастер: ${order.masterName != null && order.masterName!.trim().isNotEmpty ? order.masterName!.trim() : '—'}',
                   style: DesktopDesignSystem.meta,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                if (OrganizationBusinessKindCodes.labelForOrderSnapshot(order.organizationBusinessKind).isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    'Вид: ${OrganizationBusinessKindCodes.labelForOrderSnapshot(order.organizationBusinessKind)}',
-                    style: DesktopDesignSystem.meta,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-                if (OrganizationBusinessKindCodes.schedulingModeShortLabel(order.organizationSchedulingMode).isNotEmpty) ...[
-                  Text(
-                    'Запись: ${OrganizationBusinessKindCodes.schedulingModeShortLabel(order.organizationSchedulingMode)}',
-                    style: DesktopDesignSystem.meta,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
+                Text(
+                  'Автомобиль: ${order.carInfo.trim().isNotEmpty ? order.carInfo.trim() : '—'}',
+                  style: DesktopDesignSystem.meta,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  'Гос. номер: ${order.licensePlate != null && order.licensePlate!.trim().isNotEmpty ? order.licensePlate!.trim() : '—'}',
+                  style: DesktopDesignSystem.meta,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ],
             ),
           ),
@@ -276,131 +302,47 @@ class OrderDetailHeader extends StatelessWidget {
   }
 }
 
-/// Строка «Клиент» в сводке: при наведении — оранжевый, по клику — прокрутка к блоку «Клиент».
-class _ClientSummaryRow extends StatefulWidget {
-  const _ClientSummaryRow({
-    required this.clientName,
-    required this.onTap,
-    this.isHighlighted = false,
-  });
-
-  final String clientName;
-  final VoidCallback onTap;
-  final bool isHighlighted;
-
-  @override
-  State<_ClientSummaryRow> createState() => _ClientSummaryRowState();
-}
-
-class _ClientSummaryRowState extends State<_ClientSummaryRow> {
-  bool _hover = false;
-
-  static const Color _highlightColor = Color(0xFFE85C0A);
-
-  @override
-  Widget build(BuildContext context) {
-    final useOrange = widget.isHighlighted || _hover;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        behavior: HitTestBehavior.opaque,
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 2),
-          decoration: useOrange
-              ? BoxDecoration(
-                  color: _highlightColor.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(6),
-                )
-              : null,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(
-                width: 100,
-                child: Text(
-                  'Клиент:',
-                  style: DesktopDesignSystem.meta.copyWith(
-                    fontSize: 12,
-                    color: useOrange ? _highlightColor : null,
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Text(
-                  widget.clientName,
-                  style: DesktopDesignSystem.body.copyWith(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: useOrange ? _highlightColor : null,
-                  ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// Блок 2: Summary — клиент, авто, мастер, длительность, итог.
 class OrderSummaryCard extends StatelessWidget {
   const OrderSummaryCard({
     super.key,
     required this.order,
     required this.canSeePrices,
-    this.onClientTap,
     this.fallbackTotalKopecks,
     this.fallbackDurationMin,
-    this.clientRowHighlighted = false,
+    this.clientSectionHighlighted = false,
+    this.clientAvatarUrl,
+    this.onClientCall,
+    this.onClientChat,
+    this.onClientCopyPhone,
   });
 
   final Order order;
   final bool canSeePrices;
-  final VoidCallback? onClientTap;
+  final String? clientAvatarUrl;
   /// При пустом order.items (заказ из запроса согласования) — итог из сообщения.
   final int? fallbackTotalKopecks;
   final int? fallbackDurationMin;
-  /// Подсветить строку «Клиент» оранжевым (после клика по клиенту в списке заказов).
-  final bool clientRowHighlighted;
+  /// Подсветить блок клиента (например после открытия с акцентом на клиента).
+  final bool clientSectionHighlighted;
+  final VoidCallback? onClientCall;
+  final VoidCallback? onClientChat;
+  final VoidCallback? onClientCopyPhone;
 
-  /// Длительность: из окна (plannedEnd − plannedStart), иначе сумма по услугам.
-  static int _effectiveDurationMin(Order order) {
-    if (order.plannedStartTime != null && order.plannedEndTime != null) {
-      final diff = order.plannedEndTime!.difference(order.plannedStartTime!);
-      if (diff.inMinutes > 0) return diff.inMinutes;
-    }
-    return order.estimatedMinutesForDisplay;
-  }
-
-  /// Строка «окно»: время брони (начало – конец) или дата/время.
-  static String windowSummary(Order order) {
-    if (order.plannedStartTime != null && order.plannedEndTime != null) {
-      return '${formatTime(order.plannedStartTime!)} – ${formatTime(order.plannedEndTime!)}';
-    }
-    if (order.plannedStartTime != null) {
-      return formatDateTime(order.plannedStartTime!);
-    }
-    if (order.dateTime != null) {
-      return formatDateTimeOrNull(order.dateTime);
-    }
-    return '—';
-  }
+  /// Строка «окно»: дата + интервал «10:00–12:20» (как в шапке заказа).
+  static String windowSummary(Order order) => order.appointmentRangeLabel;
 
   @override
   Widget build(BuildContext context) {
     final useFallback = order.items.isEmpty && (fallbackTotalKopecks != null || fallbackDurationMin != null);
     final durationMin = useFallback && fallbackDurationMin != null
         ? fallbackDurationMin!
-        : _effectiveDurationMin(order);
+        : order.effectiveDurationMinutes;
     final totalKopecks = useFallback && fallbackTotalKopecks != null
         ? fallbackTotalKopecks!
         : order.totalKopecksForDisplay;
+    final dmForTotals = durationMin > 0 ? durationMin : 60;
+    final hourlyRateLabel = formatEquivalentHourlyRateLine(totalKopecks, dmForTotals);
     final disp = order.itemsForDisplay;
     final mainKopecks = disp
         .where((i) => !i.isAdditional && i.priceKopecks != null)
@@ -412,6 +354,9 @@ class OrderSummaryCard extends StatelessWidget {
         !order.hasApprovalPreview &&
         fallbackTotalKopecks != null &&
         fallbackTotalKopecks! > 0;
+
+    final name = order.clientName ?? '—';
+    final letter = name.isNotEmpty && name != '—' ? name[0] : '?';
 
     return _SectionCard(
       title: 'Сводка',
@@ -426,19 +371,119 @@ class OrderSummaryCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    onClientTap != null
-                        ? _ClientSummaryRow(
-                            clientName: order.clientName ?? '—',
-                            onTap: onClientTap!,
-                            isHighlighted: clientRowHighlighted,
-                          )
-                        : _summaryRow('Клиент', order.clientName ?? '—'),
+                    Container(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      decoration: clientSectionHighlighted
+                          ? BoxDecoration(
+                              color: const Color(0xFFE85C0A).withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(6),
+                            )
+                          : null,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.only(right: 8, top: 2),
+                                child: AuthenticatedProfileAvatar(
+                                  imageUrl: clientAvatarUrl,
+                                  fallbackLetter: letter,
+                                  size: 32,
+                                ),
+                              ),
+                              Expanded(child: _summaryRow('Клиент', name)),
+                            ],
+                          ),
+                          if (order.clientPhone != null && order.clientPhone!.trim().isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                const SizedBox(width: 100),
+                                Expanded(
+                                  child: SelectableText(
+                                    order.clientPhone!.trim(),
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      color: AppColorsDesktop.primary,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                                if (onClientCall != null)
+                                  IconButton(
+                                    icon: const Icon(Icons.phone_rounded, size: 18),
+                                    onPressed: onClientCall,
+                                    tooltip: 'Позвонить',
+                                    style: IconButton.styleFrom(
+                                      foregroundColor: AppColorsDesktop.primary,
+                                      minimumSize: const Size(36, 36),
+                                    ),
+                                  ),
+                                if (onClientChat != null)
+                                  IconButton(
+                                    icon: const Icon(Icons.chat_bubble_outline_rounded, size: 18),
+                                    onPressed: onClientChat,
+                                    tooltip: 'Написать',
+                                    style: IconButton.styleFrom(
+                                      foregroundColor: AppColorsDesktop.primary,
+                                      minimumSize: const Size(36, 36),
+                                    ),
+                                  ),
+                                if (onClientCopyPhone != null)
+                                  IconButton(
+                                    icon: const Icon(Icons.copy_rounded, size: 18),
+                                    onPressed: onClientCopyPhone,
+                                    tooltip: 'Копировать номер',
+                                    style: IconButton.styleFrom(
+                                      foregroundColor: AppColorsDesktop.textSecondary,
+                                      minimumSize: const Size(36, 36),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ],
+                          if (order.comment != null && order.comment!.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              order.comment!,
+                              style: DesktopDesignSystem.bodySecondary.copyWith(fontSize: 13),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
                     const SizedBox(height: 4),
                     _summaryRow('Автомобиль', order.carInfo),
                     const SizedBox(height: 4),
-                    _summaryRow('Окно', OrderSummaryCard.windowSummary(order)),
-                    const SizedBox(height: 4),
-                    _summaryRow('Мастер', order.masterName ?? 'Не назначен'),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          width: 100,
+                          child: Text(
+                            'Окно:',
+                            style: DesktopDesignSystem.meta.copyWith(fontSize: 12),
+                          ),
+                        ),
+                        Expanded(
+                          child: Text(
+                            OrderSummaryCard.windowSummary(order),
+                            style: DesktopDesignSystem.body.copyWith(fontSize: 13, fontWeight: FontWeight.w500),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Text(
+                          'длительность ${formatDurationMinutes(dmForTotals)}',
+                          style: DesktopDesignSystem.meta.copyWith(fontSize: 12),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
                     if ((order.bayName != null && order.bayName!.trim().isNotEmpty) ||
                         (order.bayId != null && order.bayId!.trim().isNotEmpty)) ...[
                       const SizedBox(height: 4),
@@ -449,22 +494,6 @@ class OrderSummaryCard extends StatelessWidget {
                             : order.bayId!.trim(),
                       ),
                     ],
-                    if (OrganizationBusinessKindCodes.labelForOrderSnapshot(order.organizationBusinessKind).isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      _summaryRow(
-                        'Вид точки',
-                        OrganizationBusinessKindCodes.labelForOrderSnapshot(order.organizationBusinessKind),
-                      ),
-                    ],
-                    if (OrganizationBusinessKindCodes.schedulingModeShortLabel(order.organizationSchedulingMode).isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      _summaryRow(
-                        'Запись',
-                        OrganizationBusinessKindCodes.schedulingModeShortLabel(order.organizationSchedulingMode),
-                      ),
-                    ],
-                    const SizedBox(height: 4),
-                    _summaryRow('Длительность', formatDurationMinutes(durationMin > 0 ? durationMin : 60)),
                   ],
                 ),
               ),
@@ -483,21 +512,34 @@ class OrderSummaryCard extends StatelessWidget {
             const SizedBox(height: 8),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   'Итого',
                   style: DesktopDesignSystem.sectionTitle.copyWith(fontSize: 13),
                 ),
-                Text(
-                  formatMoney(totalKopecks),
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: AppColorsDesktop.accentMoney,
-                    letterSpacing: -0.2,
-                  ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      formatMoney(totalKopecks),
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: AppColorsDesktop.accentMoney,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+                    Text(
+                      'на ${formatDurationMinutes(dmForTotals)}',
+                      style: DesktopDesignSystem.meta.copyWith(fontSize: 11),
+                    ),
+                    if (hourlyRateLabel != null)
+                      Text(
+                        hourlyRateLabel,
+                        style: DesktopDesignSystem.meta.copyWith(fontSize: 11, color: AppColorsDesktop.textTertiary),
+                      ),
+                  ],
                 ),
               ],
             ),
@@ -560,102 +602,22 @@ class OrderSummaryCard extends StatelessWidget {
       ],
     );
   }
+
 }
 
-/// Блок 3: Клиент — имя, телефон, комментарий, действия.
-class OrderClientCard extends StatelessWidget {
-  const OrderClientCard({
-    super.key,
-    required this.order,
-    required this.onCall,
-    required this.onChat,
-    required this.onCopyPhone,
-  });
-
-  final Order order;
-  final VoidCallback? onCall;
-  final VoidCallback? onChat;
-  final VoidCallback? onCopyPhone;
-
-  @override
-  Widget build(BuildContext context) {
-    return _SectionCard(
-      title: 'Клиент',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            order.clientName ?? '—',
-            style: DesktopDesignSystem.body,
-          ),
-          if (order.clientPhone != null && order.clientPhone!.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: SelectableText(
-                    order.clientPhone!,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      color: AppColorsDesktop.primary,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.phone_rounded, size: 18),
-                  onPressed: onCall,
-                  tooltip: 'Позвонить',
-                  style: IconButton.styleFrom(
-                    foregroundColor: AppColorsDesktop.primary,
-                    minimumSize: const Size(36, 36),
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.chat_bubble_outline_rounded, size: 18),
-                  onPressed: onChat,
-                  tooltip: 'Чат',
-                  style: IconButton.styleFrom(
-                    foregroundColor: AppColorsDesktop.primary,
-                    minimumSize: const Size(36, 36),
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.copy_rounded, size: 18),
-                  onPressed: onCopyPhone,
-                  tooltip: 'Копировать номер',
-                  style: IconButton.styleFrom(
-                    foregroundColor: AppColorsDesktop.textSecondary,
-                    minimumSize: const Size(36, 36),
-                  ),
-                ),
-              ],
-            ),
-          ],
-          if (order.comment != null && order.comment!.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(
-              order.comment!,
-              style: DesktopDesignSystem.bodySecondary.copyWith(fontSize: 13),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-/// Блок 4: Автомобиль — марка/модель и детали (VIN, гос. номер, кузов, цвет, пробег, двигатель).
-class OrderVehicleCard extends StatelessWidget {
+/// Блок 3: Автомобиль — марка/модель и детали (VIN, гос. номер, кузов, цвет, пробег, двигатель).
+class OrderVehicleCard extends ConsumerWidget {
   const OrderVehicleCard({super.key, required this.order});
 
   final Order order;
 
   @override
-  Widget build(BuildContext context) {
-    final hasDetails = (order.vin != null && order.vin!.isNotEmpty) ||
-        (order.licensePlate != null && order.licensePlate!.isNotEmpty) ||
-        (order.bodyType != null && order.bodyType!.isNotEmpty) ||
+  Widget build(BuildContext context, WidgetRef ref) {
+    final plate = order.licensePlate?.trim();
+    final vin = order.vin?.trim();
+    final hasPrimaryIds =
+        (plate != null && plate.isNotEmpty) || (vin != null && vin.isNotEmpty);
+    final hasOtherDetails = (order.bodyType != null && order.bodyType!.isNotEmpty) ||
         (order.color != null && order.color!.isNotEmpty) ||
         (order.mileage != null) ||
         (order.engineType != null && order.engineType!.isNotEmpty);
@@ -664,18 +626,33 @@ class OrderVehicleCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (order.carPhotoUrl != null && order.carPhotoUrl!.trim().isNotEmpty) ...[
+            AuthenticatedApiImage(
+              imageUrl: order.carPhotoUrl,
+              width: kOrderDetailPanelWidth - 32,
+              height: 120,
+              borderRadius: 12,
+              fit: BoxFit.cover,
+            ),
+            const SizedBox(height: 12),
+          ],
           Text(
             order.carInfo,
             style: DesktopDesignSystem.body,
           ),
-          if (hasDetails) ...[
+          if (hasPrimaryIds) ...[
+            const SizedBox(height: 12),
+            if (plate != null && plate.isNotEmpty)
+              _vehiclePrimaryCopyTile(context, label: 'Госномер', value: plate),
+            if (plate != null && plate.isNotEmpty && vin != null && vin.isNotEmpty)
+              const SizedBox(height: 8),
+            if (vin != null && vin.isNotEmpty)
+              _vehiclePrimaryCopyTile(context, label: 'VIN', value: vin),
+          ],
+          if (hasOtherDetails) ...[
             const SizedBox(height: 12),
             const Divider(height: 1, color: AppColorsDesktop.borderLight),
             const SizedBox(height: 8),
-            if (order.vin != null && order.vin!.isNotEmpty)
-              _vehicleRowWithCopy(context, 'VIN', order.vin!),
-            if (order.licensePlate != null && order.licensePlate!.isNotEmpty)
-              _vehicleRowWithCopy(context, 'Гос. номер', order.licensePlate!),
             if (order.bodyType != null && order.bodyType!.isNotEmpty)
               _vehicleRow('Тип кузова', order.bodyType!),
             if (order.color != null && order.color!.isNotEmpty)
@@ -714,44 +691,61 @@ class OrderVehicleCard extends StatelessWidget {
     );
   }
 
-  static Widget _vehicleRowWithCopy(BuildContext context, String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          SizedBox(
-            width: 100,
-            child: Text(
-              '$label:',
-              style: DesktopDesignSystem.meta.copyWith(fontSize: 12),
+  /// Госномер / VIN: крупно, нажатие копирует значение.
+  static Widget _vehiclePrimaryCopyTile(
+    BuildContext context, {
+    required String label,
+    required String value,
+  }) {
+    return Material(
+      color: AppColorsDesktop.nestedBg,
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        onTap: () {
+          Clipboard.setData(ClipboardData(text: value));
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('$label скопирован в буфер'),
+              duration: const Duration(seconds: 1),
+              behavior: SnackBarBehavior.fixed,
             ),
-          ),
-          Expanded(
-            child: Text(
-              value,
-              style: DesktopDesignSystem.body.copyWith(fontSize: 13),
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.copy_rounded, size: 18),
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: value));
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('$label скопирован'),
-                  duration: const Duration(seconds: 1),
-                  behavior: SnackBarBehavior.fixed,
+          );
+        },
+        borderRadius: BorderRadius.circular(10),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: DesktopDesignSystem.meta.copyWith(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: AppColorsDesktop.textSecondary,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      value,
+                      style: DesktopDesignSystem.body.copyWith(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        fontFamily: label == 'VIN' ? 'monospace' : null,
+                        letterSpacing: label == 'Госномер' ? 0.8 : 0,
+                      ),
+                    ),
+                  ],
                 ),
-              );
-            },
-            tooltip: 'Копировать',
-            style: IconButton.styleFrom(
-              foregroundColor: AppColorsDesktop.textSecondary,
-              minimumSize: const Size(36, 36),
-            ),
+              ),
+              Icon(Icons.copy_rounded, size: 18, color: AppColorsDesktop.textTertiary),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -790,14 +784,24 @@ class OrderScheduleCard extends StatelessWidget {
             style: DesktopDesignSystem.body,
           ),
           const SizedBox(height: 4),
-          Text(
-            'Окно: ${formatTimeOrNull(start)} → ${formatTimeOrNull(endComputed)}',
-            style: DesktopDesignSystem.bodySecondary,
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Длительность: ${formatDurationMinutes(durationMin > 0 ? durationMin : 60)}',
-            style: DesktopDesignSystem.meta,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  'Окно: ${formatTimeOrNull(start)} – ${formatTimeOrNull(endComputed)}',
+                  style: DesktopDesignSystem.bodySecondary,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Text(
+                'длительность ${formatDurationMinutes(durationMin > 0 ? durationMin : 60)}',
+                style: DesktopDesignSystem.meta,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
           ),
           if (onEditTime != null && canAssignMaster) ...[
             const SizedBox(height: 12),
@@ -897,9 +901,15 @@ class OrderServicesCard extends ConsumerWidget {
   /// При пустом order.items — состав из запроса согласования (только отображение).
   final List<ApprovalItem>? fallbackItems;
 
-  /// Сопоставить позицию заказа с категорией по каталогу услуг (по имени).
+  /// Сопоставить позицию заказа с категорией по каталогу услуг (по `service_id`, иначе по имени).
   static String? _categoryIdForItem(OrderItem item, List<ServiceItem> services) {
-    final list = services.where((s) => s.name == item.name).toList();
+    final sid = item.serviceId?.trim();
+    if (sid != null && sid.isNotEmpty) {
+      final byId = services.where((s) => s.id == sid).toList();
+      if (byId.isNotEmpty) return byId.first.categoryId;
+    }
+    final firstLine = item.name.split('\n').first.trim();
+    final list = services.where((s) => s.name == firstLine).toList();
     return list.isEmpty ? null : list.first.categoryId;
   }
 
@@ -1056,17 +1066,14 @@ class OrderServicesCard extends ConsumerWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Icon(
-            Icons.radio_button_unchecked_rounded,
-            size: 18,
-            color: AppColorsDesktop.textTertiary,
-          ),
+          _orderServiceCompletionLeading(false, size: 22),
           const SizedBox(width: 8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
                   item.name,
@@ -1107,20 +1114,21 @@ class OrderServicesCard extends ConsumerWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(
-                item.isCompleted ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
-                size: 18,
-                color: item.isCompleted ? AppColorsDesktop.success : AppColorsDesktop.textTertiary,
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: _orderServiceCompletionLeading(item.isCompleted, size: 22),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
                       item.name,
                       style: TextStyle(
                         fontSize: 13,
+                        height: 1.35,
                         color: AppColorsDesktop.textPrimary,
                         decoration: item.isCompleted ? TextDecoration.lineThrough : null,
                       ),
@@ -1180,6 +1188,8 @@ class OrderPricingCard extends StatelessWidget {
         !order.hasApprovalPreview &&
         fallbackTotalKopecks != null &&
         fallbackTotalKopecks! > 0;
+    final dmPay = order.effectiveDurationMinutes > 0 ? order.effectiveDurationMinutes : 60;
+    final hourlyPay = formatEquivalentHourlyRateLine(totalK, dmPay);
 
     return _SectionCard(
       title: 'Итог к оплате',
@@ -1196,21 +1206,34 @@ class OrderPricingCard extends StatelessWidget {
           const SizedBox(height: 12),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            crossAxisAlignment: CrossAxisAlignment.baseline,
-            textBaseline: TextBaseline.alphabetic,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 'Итого',
                 style: DesktopDesignSystem.sectionTitle.copyWith(fontSize: 14),
               ),
-              Text(
-                formatMoney(totalK),
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: AppColorsDesktop.accentMoney,
-                  letterSpacing: -0.2,
-                ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    formatMoney(totalK),
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                      color: AppColorsDesktop.accentMoney,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                  Text(
+                    'на ${formatDurationMinutes(dmPay)}',
+                    style: DesktopDesignSystem.meta.copyWith(fontSize: 11),
+                  ),
+                  if (hourlyPay != null)
+                    Text(
+                      hourlyPay,
+                      style: DesktopDesignSystem.meta.copyWith(fontSize: 11, color: AppColorsDesktop.textTertiary),
+                    ),
+                ],
               ),
             ],
           ),
@@ -1434,25 +1457,27 @@ class OrderActionsBar extends ConsumerWidget {
       );
     }
 
-    if (order.status == OrderStatus.confirmed && canAssignMaster) {
+    if (order.status == OrderStatus.confirmed) {
       primaryButton = FilledButton(
         onPressed: () => setStatus(OrderStatus.inProgress, 'Статус: В работе'),
         style: _primaryBtnStyle,
         child: const Text('В работу'),
       );
-      final hasMaster = order.masterName != null && order.masterName!.isNotEmpty;
-      secondaryButtons.add(
-        OutlinedButton(
-          onPressed: () async {
-            await Navigator.push<bool>(
-              context,
-              MaterialPageRoute(builder: (_) => MasterPickerScreen(orderId: orderId)),
-            );
-          },
-          style: hasMaster ? _secondaryBtnStyle : _secondaryOrangeBtnStyle,
-          child: Text(hasMaster ? 'Сменить мастера' : 'Назначить мастера'),
-        ),
-      );
+      if (canAssignMaster) {
+        final hasMaster = order.masterName != null && order.masterName!.isNotEmpty;
+        secondaryButtons.add(
+          OutlinedButton(
+            onPressed: () async {
+              await Navigator.push<bool>(
+                context,
+                MaterialPageRoute(builder: (_) => MasterPickerScreen(orderId: orderId)),
+              );
+            },
+            style: hasMaster ? _secondaryBtnStyle : _secondaryOrangeBtnStyle,
+            child: Text(hasMaster ? 'Сменить мастера' : 'Назначить мастера'),
+          ),
+        );
+      }
     }
 
     if (order.status == OrderStatus.inProgress) {
@@ -1589,7 +1614,7 @@ class OrderDetailPanel extends ConsumerStatefulWidget {
 }
 
 class _OrderDetailPanelState extends ConsumerState<OrderDetailPanel> {
-  final GlobalKey _clientCardKey = GlobalKey();
+  final GlobalKey _summaryClientKey = GlobalKey();
   List<ApprovalItem>? _loadedFallbackItems;
   int? _loadedFallbackTotalKopecks;
   int? _loadedFallbackTotalMinutes;
@@ -1616,7 +1641,7 @@ class _OrderDetailPanelState extends ConsumerState<OrderDetailPanel> {
   void _scrollToClientAndHighlight() {
     if (!mounted) return;
     setState(() => _highlightClientRow = true);
-    final ctx = _clientCardKey.currentContext;
+    final ctx = _summaryClientKey.currentContext;
     if (ctx != null) {
       Scrollable.ensureVisible(
         ctx,
@@ -1862,6 +1887,11 @@ class _OrderDetailPanelState extends ConsumerState<OrderDetailPanel> {
     }
 
     final canChangeComposition = order.status != OrderStatus.done && order.status != OrderStatus.cancelled;
+    final clientAvatarUrl = resolvedClientAvatarUrl(
+      chats: ref.watch(chatRepositoryProvider).chats,
+      orderClientAvatarUrl: order.clientAvatarUrl,
+      clientPhone: order.clientPhone,
+    );
 
     return Container(
       width: kOrderDetailPanelWidth,
@@ -1905,36 +1935,26 @@ class _OrderDetailPanelState extends ConsumerState<OrderDetailPanel> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                      OrderSummaryCard(
-                    order: order,
-                    canSeePrices: canSeePrices,
-                    fallbackTotalKopecks: widget.fallbackTotalKopecks ?? _loadedFallbackTotalKopecks,
-                    fallbackDurationMin: widget.fallbackTotalMinutes ?? _loadedFallbackTotalMinutes,
-                    clientRowHighlighted: _highlightClientRow,
-                    onClientTap: () {
-                      setState(() => _highlightClientRow = true);
-                      final ctx = _clientCardKey.currentContext;
-                      if (ctx != null) {
-                        Scrollable.ensureVisible(
-                          ctx,
-                          duration: const Duration(milliseconds: 300),
-                          curve: Curves.easeInOut,
-                          alignment: 0.0,
-                        );
-                      }
-                      Future.delayed(const Duration(seconds: 3), () {
-                        if (mounted) setState(() => _highlightClientRow = false);
-                      });
-                    },
+                  RepaintBoundary(
+                    key: _summaryClientKey,
+                    child: OrderSummaryCard(
+                      order: order,
+                      canSeePrices: canSeePrices,
+                      clientAvatarUrl: clientAvatarUrl,
+                      fallbackTotalKopecks: widget.fallbackTotalKopecks ?? _loadedFallbackTotalKopecks,
+                      fallbackDurationMin: widget.fallbackTotalMinutes ?? _loadedFallbackTotalMinutes,
+                      clientSectionHighlighted: _highlightClientRow,
+                      onClientCall: order.clientPhone != null && order.clientPhone!.trim().isNotEmpty
+                          ? () => launchUrl(Uri(scheme: 'tel', path: order.clientPhone!.replaceAll(RegExp(r'[^\d+]'), '')))
+                          : null,
+                      onClientChat: () => _openChat(context),
+                      onClientCopyPhone: order.clientPhone != null && order.clientPhone!.trim().isNotEmpty
+                          ? () => _copyToClipboard(context, order.clientPhone!)
+                          : null,
+                    ),
                   ),
                   const SizedBox(height: DesktopDesignSystem.blockSpacing),
                   OrderVehicleCard(order: order),
-                  const SizedBox(height: DesktopDesignSystem.blockSpacing),
-                  OrderScheduleCard(
-                    order: order,
-                    onEditTime: canAssignMaster && order.status.isActive ? () => _showEditTimeDialog(context, order) : null,
-                    canAssignMaster: canAssignMaster,
-                  ),
                   const SizedBox(height: DesktopDesignSystem.blockSpacing),
                   OrderServicesCard(
                     order: order,
@@ -1956,18 +1976,10 @@ class _OrderDetailPanelState extends ConsumerState<OrderDetailPanel> {
                         : null,
                   ),
                   const SizedBox(height: DesktopDesignSystem.blockSpacing),
-                  RepaintBoundary(
-                    key: _clientCardKey,
-                    child: OrderClientCard(
-                      order: order,
-                      onCall: order.clientPhone != null
-                          ? () => launchUrl(Uri(scheme: 'tel', path: order.clientPhone!.replaceAll(RegExp(r'[^\d+]'), '')))
-                          : null,
-                      onChat: () => _openChat(context),
-                      onCopyPhone: order.clientPhone != null
-                          ? () => _copyToClipboard(context, order.clientPhone!)
-                          : null,
-                    ),
+                  OrderScheduleCard(
+                    order: order,
+                    onEditTime: canAssignMaster && order.status.isActive ? () => _showEditTimeDialog(context, order) : null,
+                    canAssignMaster: canAssignMaster,
                   ),
                   const SizedBox(height: DesktopDesignSystem.blockSpacing),
                   OrderMasterCard(

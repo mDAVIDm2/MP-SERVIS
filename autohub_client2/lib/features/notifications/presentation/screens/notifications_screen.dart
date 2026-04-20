@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/navigation/app_routes.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../core/utils/pending_car_notification_payload.dart';
 import '../../../../core/providers/app_providers.dart';
 import '../../../../shared/models/notification_model.dart';
 import '../../../orders/presentation/screens/order_detail_screen.dart';
 import '../../../chats/presentation/screens/chat_detail_screen.dart';
+import '../../../garage/presentation/screens/add_car_screen.dart';
 
 class NotificationsScreen extends ConsumerStatefulWidget {
   const NotificationsScreen({super.key, this.initialCarId});
@@ -85,7 +86,19 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
         break;
 
       case NotificationTarget.garage:
-        if (context.mounted) Navigator.pop(context);
+        final cid = item.carId?.trim();
+        if (item.type == NotificationType.pendingCarRejected &&
+            cid != null &&
+            cid.isNotEmpty &&
+            context.mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute<void>(
+              builder: (_) => AddCarScreen(editCarId: cid),
+            ),
+          );
+        } else if (context.mounted) {
+          Navigator.pop(context);
+        }
         break;
 
       case NotificationTarget.profile:
@@ -111,9 +124,9 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
     if (p == null || p.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('В уведомлении нет данных для обновления авто. Попробуйте обновить список уведомлений.'),
-            backgroundColor: AppColors.cardBg,
+          SnackBar(
+            content: const Text('В уведомлении нет данных для обновления авто. Попробуйте обновить список уведомлений.'),
+            backgroundColor: context.palette.cardBg,
           ),
         );
       }
@@ -124,9 +137,9 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
     if (parsed.brandId == null || parsed.modelId == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('В уведомлении нет id марки/модели — авто не обновлено. Обратитесь в поддержку.'),
-            backgroundColor: AppColors.error,
+          SnackBar(
+            content: const Text('В уведомлении нет id марки/модели — авто не обновлено. Обратитесь в поддержку.'),
+            backgroundColor: context.palette.error,
           ),
         );
       }
@@ -155,13 +168,13 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Данные авто обновлены: $brandName $modelName'),
-          backgroundColor: AppColors.success,
+          backgroundColor: context.palette.success,
         ),
       );
     } else {
       final err = res.errorOrNull?.message ?? 'Ошибка';
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Не удалось обновить авто: $err'), backgroundColor: AppColors.error),
+        SnackBar(content: Text('Не удалось обновить авто: $err'), backgroundColor: context.palette.error),
       );
     }
   }
@@ -176,17 +189,17 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
         : cars.where((c) => c.id == _filterCarId).map((c) => c.nickname ?? '${c.brand} ${c.model}').firstOrNull ?? 'Машина';
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       appBar: AppBar(
-        backgroundColor: AppColors.background,
-        title: const Text('Уведомления', style: TextStyle(
+        backgroundColor: context.palette.background,
+        title: Text('Уведомления', style: TextStyle(
           fontSize: 20, fontWeight: FontWeight.w600,
         )),
         actions: [
           TextButton(
             onPressed: async.isLoading ? null : _markAllRead,
-            child: const Text('Прочитать все', style: TextStyle(
-              fontSize: 13, color: AppColors.primary,
+            child: Text('Прочитать все', style: TextStyle(
+              fontSize: 13, color: context.palette.primary,
             )),
           ),
         ],
@@ -200,7 +213,7 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
               child: DropdownButton<String?>(
                 value: _filterCarId,
                 isExpanded: true,
-                hint: const Text('Все машины'),
+                hint: Text('Все машины'),
                 items: [
                   const DropdownMenuItem<String>(value: null, child: Text('Все машины')),
                   ...cars.map((c) => DropdownMenuItem<String>(
@@ -216,7 +229,7 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
             child: Text(
               'По машине: $carLabel',
-              style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
+              style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
             ),
           ),
           Expanded(
@@ -224,14 +237,14 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
               loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, _) => Center(child: Text('Ошибка: $e')),
               data: (_) => items.isEmpty
-                ? const Center(
+                ? Center(
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text('🔔', style: TextStyle(fontSize: 48)),
-                        SizedBox(height: 16),
+                        const Text('🔔', style: TextStyle(fontSize: 48)),
+                        const SizedBox(height: 16),
                         Text('Нет уведомлений', style: TextStyle(
-                          fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textSecondary,
+                          fontSize: 16, fontWeight: FontWeight.w600, color: context.palette.textSecondary,
                         )),
                       ],
                     ),
@@ -289,14 +302,14 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Удалить уведомление?'),
+        title: Text('Удалить уведомление?'),
         content: Text(n.title),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('Отмена')),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: AppColors.error),
-            child: const Text('Удалить'),
+            style: TextButton.styleFrom(foregroundColor: context.palette.error),
+            child: Text('Удалить'),
           ),
         ],
       ),
@@ -317,8 +330,8 @@ class _GroupLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      child: Text(text, style: const TextStyle(
-        fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textTertiary,
+      child: Text(text, style: TextStyle(
+        fontSize: 14, fontWeight: FontWeight.w600, color: context.palette.textTertiary,
       )),
     );
   }
@@ -346,14 +359,14 @@ class _NotificationCard extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
-          color: item.isRead ? AppColors.background : AppColors.cardBg,
-          border: const Border(bottom: BorderSide(color: AppColors.border, width: 0.5)),
+          color: item.isRead ? context.palette.background : context.palette.cardBg,
+          border: Border(bottom: BorderSide(color: context.palette.border, width: 0.5)),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(item.icon, style: const TextStyle(fontSize: 22)),
-            const SizedBox(width: 12),
+            Text(item.icon, style: TextStyle(fontSize: 22)),
+            SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -361,25 +374,25 @@ class _NotificationCard extends StatelessWidget {
                   Text(item.title, style: TextStyle(
                     fontSize: 15,
                     fontWeight: item.isRead ? FontWeight.w400 : FontWeight.w600,
-                    color: AppColors.textPrimary,
+                    color: context.palette.textPrimary,
                   )),
-                  const SizedBox(height: 2),
-                  Text(item.subtitle, style: const TextStyle(
-                    fontSize: 13, color: AppColors.textSecondary,
+                  SizedBox(height: 2),
+                  Text(item.subtitle, style: TextStyle(
+                    fontSize: 13, color: context.palette.textSecondary,
                   )),
                   if (!item.isRead && hasTarget) ...[
-                    const SizedBox(height: 6),
+                    SizedBox(height: 6),
                     Text(
                       item.targetType == NotificationTarget.chat
                           ? 'Нажмите, чтобы перейти к согласованию →'
                           : 'Нажмите, чтобы посмотреть →',
-                      style: const TextStyle(fontSize: 12, color: AppColors.primary),
+                      style: TextStyle(fontSize: 12, color: context.palette.primary),
                     ),
                   ],
                 ],
               ),
             ),
-            const SizedBox(width: 8),
+            SizedBox(width: 8),
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
@@ -388,14 +401,14 @@ class _NotificationCard extends StatelessWidget {
                   children: [
                     if (!item.isRead)
                       IconButton(
-                        icon: const Icon(Icons.done_outline, size: 20),
+                        icon: Icon(Icons.done_outline, size: 20),
                         tooltip: 'Прочитано',
                         onPressed: onMarkRead == null ? null : () => onMarkRead!(),
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                       ),
                     IconButton(
-                      icon: const Icon(Icons.delete_outline, size: 20, color: AppColors.error),
+                      icon: Icon(Icons.delete_outline, size: 20, color: context.palette.error),
                       tooltip: 'Удалить уведомление',
                       onPressed: onDelete,
                       padding: EdgeInsets.zero,
@@ -403,15 +416,15 @@ class _NotificationCard extends StatelessWidget {
                     ),
                   ],
                 ),
-                Text(Formatters.chatTime(item.time), style: const TextStyle(
-                  fontSize: 12, color: AppColors.textTertiary,
+                Text(Formatters.chatTime(item.time), style: TextStyle(
+                  fontSize: 12, color: context.palette.textTertiary,
                 )),
                 if (!item.isRead) ...[
-                  const SizedBox(height: 4),
+                  SizedBox(height: 4),
                   Container(
                     width: 8, height: 8,
-                    decoration: const BoxDecoration(
-                      color: AppColors.primary,
+                    decoration: BoxDecoration(
+                      color: context.palette.primary,
                       shape: BoxShape.circle,
                     ),
                   ),

@@ -22,6 +22,8 @@ const chat_message_entity_1 = require("../chats/chat-message.entity");
 const organizations_module_1 = require("../organizations/organizations.module");
 const subscriptions_module_1 = require("../subscriptions/subscriptions.module");
 const media_module_1 = require("../media/media.module");
+const users_module_1 = require("../users/users.module");
+const user_client_hidden_car_entity_1 = require("../users/user-client-hidden-car.entity");
 let OrdersModule = class OrdersModule {
 };
 exports.OrdersModule = OrdersModule;
@@ -29,8 +31,9 @@ exports.OrdersModule = OrdersModule = __decorate([
     (0, common_1.Module)({
         imports: [
             media_module_1.MediaModule,
+            users_module_1.UsersModule,
             subscriptions_module_1.SubscriptionsModule,
-            typeorm_1.TypeOrmModule.forFeature([order_entity_1.Order, order_item_entity_1.OrderItem, order_photo_entity_1.OrderPhoto, staff_member_entity_1.StaffMember, chat_entity_1.Chat, chat_message_entity_1.ChatMessage]),
+            typeorm_1.TypeOrmModule.forFeature([order_entity_1.Order, order_item_entity_1.OrderItem, order_photo_entity_1.OrderPhoto, staff_member_entity_1.StaffMember, chat_entity_1.Chat, chat_message_entity_1.ChatMessage, user_client_hidden_car_entity_1.UserClientHiddenCar]),
             chats_module_1.ChatsModule,
             notifications_module_1.NotificationsModule,
             organizations_module_1.OrganizationsModule,

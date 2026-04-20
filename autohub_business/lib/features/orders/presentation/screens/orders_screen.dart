@@ -3,15 +3,21 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/config/platform_utils.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_colors_desktop.dart';
+import '../../../../core/theme/desktop_design_system.dart';
 import '../../../../core/repositories/order_repository.dart';
 import '../../../../core/repositories/settings_repository.dart';
 import '../../../../shared/models/order_model.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../shared/widgets/api_failure_banner.dart';
 import '../../../../core/auth/auth_provider.dart';
+import '../../../../core/theme/desktop_light_theme.dart';
 import '../../../../shared/widgets/mobile_order_card.dart';
+import '../../application/order_creation_drafts_notifier.dart';
+import '../../domain/order_creation_draft.dart';
+import '../../../calendar/presentation/screens/create_order_screen.dart';
 import '../widgets/order_detail_panel.dart';
 import '../widgets/orders_desktop_components.dart';
+import 'quick_create_order_screen.dart';
 
 class OrderFilters {
   final Set<OrderStatus> statuses;
@@ -71,7 +77,7 @@ class OrdersScreen extends ConsumerStatefulWidget {
 /// Ориентировочная высота одной секции (день) — с запасом, чтобы секция «сегодня» точно отрисовалась; финальная позиция — через ensureVisible.
 const double _kEstimatedSectionHeight = 420;
 
-class _OrdersScreenState extends ConsumerState<OrdersScreen> {
+class _OrdersScreenState extends ConsumerState<OrdersScreen> with SingleTickerProviderStateMixin {
   OrderFilters _filters = const OrderFilters();
   String? _selectedOrderId;
 
@@ -95,9 +101,19 @@ class _OrdersScreenState extends ConsumerState<OrdersScreen> {
   final GlobalKey _mobileScrollToTodayKey = GlobalKey();
   bool _didScrollToTodayMobile = false;
 
+  TabController? _mobileTabController;
+
   @override
   void initState() {
     super.initState();
+    if (isDesktopPlatform) {
+      _compactDensity = true;
+    } else {
+      _mobileTabController = TabController(length: 3, vsync: this);
+      _mobileTabController!.addListener(() {
+        if (mounted) setState(() {});
+      });
+    }
     _searchController = TextEditingController();
     _searchController.addListener(() {
       if (!mounted || isDesktopPlatform) return;
@@ -182,6 +198,7 @@ class _OrdersScreenState extends ConsumerState<OrdersScreen> {
 
   @override
   void dispose() {
+    _mobileTabController?.dispose();
     _searchController.dispose();
     _scrollController.dispose();
     _mobileActiveOrdersScrollController.dispose();
@@ -276,6 +293,53 @@ class _OrdersScreenState extends ConsumerState<OrdersScreen> {
     });
   }
 
+  List<OrderCreationDraft> _filterDrafts(List<OrderCreationDraft> all) {
+    final q = _searchController.text.trim().toLowerCase();
+    if (q.isEmpty) return all;
+    return all.where((d) {
+      final sub = d.previewSubtitle.toLowerCase();
+      final meta = d.previewMeta.toLowerCase();
+      final src = d.sourceLabel.toLowerCase();
+      return sub.contains(q) || meta.contains(q) || src.contains(q) || d.id.toLowerCase().contains(q);
+    }).toList();
+  }
+
+  Future<void> _confirmDeleteDraft(BuildContext context, WidgetRef ref, String id) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Удалить черновик?'),
+        content: const Text('Восстановить его будет нельзя.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Удалить')),
+        ],
+      ),
+    );
+    if (ok == true && context.mounted) {
+      await ref.read(orderCreationDraftsProvider.notifier).remove(id);
+    }
+  }
+
+  void _openDraft(BuildContext context, WidgetRef ref, OrderCreationDraft d) {
+    if (d.source == OrderCreationDraft.kSourceQuick) {
+      Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          fullscreenDialog: isDesktopPlatform,
+          builder: (_) => isDesktopPlatform
+              ? themeDesktopLight(child: QuickCreateOrderScreen(resumeDraft: d))
+              : QuickCreateOrderScreen(resumeDraft: d),
+        ),
+      );
+    } else {
+      Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => CreateOrderScreen(resumeDraft: d),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final orders = ref.watch(orderRepositoryProvider);
@@ -286,15 +350,20 @@ class _OrdersScreenState extends ConsumerState<OrdersScreen> {
     final history = orders.where((o) => !o.status.isActive).toList()
       ..sort((a, b) => b.effectiveDateTime.compareTo(a.effectiveDateTime));
 
+    final draftsAll = ref.watch(orderCreationDraftsProvider);
+    final draftsFiltered = _filterDrafts(draftsAll);
+
     final useDesktopLayout = isDesktopPlatform;
 
     if (useDesktopLayout) {
-      final baseList = _tabIndex == 0 ? active : history;
-      final filtered = _applyDesktopFilters(baseList);
-      if (widget.isTabSelected && filtered.isNotEmpty && !_didScrollToToday) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToTodayIfNeeded(filtered));
-        });
+      if (_tabIndex != 2) {
+        final baseList = _tabIndex == 0 ? active : history;
+        final filtered = _applyDesktopFilters(baseList);
+        if (widget.isTabSelected && filtered.isNotEmpty && !_didScrollToToday) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToTodayIfNeeded(filtered));
+          });
+        }
       }
 
       return Scaffold(
@@ -309,7 +378,10 @@ class _OrdersScreenState extends ConsumerState<OrdersScreen> {
               ),
             OrdersFilterBar(
               activeTabIndex: _tabIndex,
-              onTabChanged: (i) => setState(() => _tabIndex = i),
+              onTabChanged: (i) => setState(() {
+                _tabIndex = i;
+                if (i == 2) _selectedOrderId = null;
+              }),
               period: _period,
               onPeriodChanged: (p) => setState(() => _period = p),
               selectedDateFrom: _dateFrom,
@@ -338,45 +410,64 @@ class _OrdersScreenState extends ConsumerState<OrdersScreen> {
               onResetFilters: _resetDesktopFilters,
               compactDensity: _compactDensity,
               onDensityChanged: (v) => setState(() => _compactDensity = v),
+              searchFieldHint: _tabIndex == 2 ? 'Клиент, авто, источник…' : null,
             ),
             Expanded(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(
-                    flex: 68,
-                    child: OrdersGroupedList(
-                      orders: filtered,
-                      selectedOrderId: _selectedOrderId,
-                      onSelectOrder: (id) => setState(() {
-                        _selectedOrderId = id;
-                        _scrollToClientWhenOpen = false;
-                      }),
-                      onSelectOrderScrollToClient: (id) => setState(() {
-                        _selectedOrderId = id;
-                        _scrollToClientWhenOpen = true;
-                      }),
-                      canSeePrices: canSeePrices,
-                      emptyMessage: 'Нет заказов по выбранным фильтрам',
-                      onResetFilters: _resetDesktopFilters,
-                      compactDensity: _compactDensity,
-                      scrollController: _scrollController,
-                      scrollToTodayKey: _scrollToTodayKey,
+              child: _tabIndex == 2
+                  ? Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(
+                          flex: 68,
+                          child: _OrderCreationDraftsListPane(
+                            drafts: draftsFiltered,
+                            onOpen: (d) => _openDraft(context, ref, d),
+                            onDelete: (id) => _confirmDeleteDraft(context, ref, id),
+                          ),
+                        ),
+                        const Expanded(
+                          flex: 32,
+                          child: _OrderDraftsRightPlaceholder(),
+                        ),
+                      ],
+                    )
+                  : Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(
+                          flex: 68,
+                          child: OrdersGroupedList(
+                            orders: _applyDesktopFilters(_tabIndex == 0 ? active : history),
+                            selectedOrderId: _selectedOrderId,
+                            onSelectOrder: (id) => setState(() {
+                              _selectedOrderId = id;
+                              _scrollToClientWhenOpen = false;
+                            }),
+                            onSelectOrderScrollToClient: (id) => setState(() {
+                              _selectedOrderId = id;
+                              _scrollToClientWhenOpen = true;
+                            }),
+                            canSeePrices: canSeePrices,
+                            emptyMessage: 'Нет заказов по выбранным фильтрам',
+                            onResetFilters: _resetDesktopFilters,
+                            compactDensity: _compactDensity,
+                            scrollController: _scrollController,
+                            scrollToTodayKey: _scrollToTodayKey,
+                          ),
+                        ),
+                        Expanded(
+                          flex: 32,
+                          child: _selectedOrderId != null
+                              ? OrderDetailPanel(
+                                  orderId: _selectedOrderId!,
+                                  onClose: () => setState(() => _selectedOrderId = null),
+                                  scrollToClientWhenOpen: _scrollToClientWhenOpen,
+                                  onScrollToClientDone: () => setState(() => _scrollToClientWhenOpen = false),
+                                )
+                              : const OrderDetailPlaceholder(),
+                        ),
+                      ],
                     ),
-                  ),
-                  Expanded(
-                    flex: 32,
-                    child: _selectedOrderId != null
-                        ? OrderDetailPanel(
-                            orderId: _selectedOrderId!,
-                            onClose: () => setState(() => _selectedOrderId = null),
-                            scrollToClientWhenOpen: _scrollToClientWhenOpen,
-                            onScrollToClientDone: () => setState(() => _scrollToClientWhenOpen = false),
-                          )
-                        : const OrderDetailPlaceholder(),
-                  ),
-                ],
-              ),
             ),
           ],
         ),
@@ -409,9 +500,7 @@ class _OrdersScreenState extends ConsumerState<OrdersScreen> {
           ),
         ],
       ),
-      body: DefaultTabController(
-        length: 2,
-        child: Column(
+      body: Column(
           children: [
             if (ordersLoadErr != null)
               ApiFailureBanner(
@@ -420,11 +509,13 @@ class _OrdersScreenState extends ConsumerState<OrdersScreen> {
                 onRetry: () => ref.read(orderRepositoryProvider.notifier).loadFromApi(),
               ),
             TabBar(
+              controller: _mobileTabController!,
               labelColor: AppColors.primary,
               unselectedLabelColor: AppColors.textSecondary,
               tabs: const [
                 Tab(text: 'Активные'),
                 Tab(text: 'История'),
+                Tab(text: 'Черновики'),
               ],
             ),
             Padding(
@@ -437,7 +528,9 @@ class _OrdersScreenState extends ConsumerState<OrdersScreen> {
                     textInputAction: TextInputAction.search,
                     decoration: InputDecoration(
                       isDense: true,
-                      hintText: 'Поиск по номеру заказа',
+                      hintText: _mobileTabController!.index == 2
+                          ? 'Клиент, авто, источник…'
+                          : 'Поиск по номеру заказа',
                       hintStyle: TextStyle(color: AppColors.textTertiary.withValues(alpha: 0.9)),
                       prefixIcon: const Icon(Icons.search_rounded, size: 22),
                       suffixIcon: value.text.isNotEmpty
@@ -489,6 +582,7 @@ class _OrdersScreenState extends ConsumerState<OrdersScreen> {
               ),
             Expanded(
               child: TabBarView(
+                controller: _mobileTabController!,
                 children: [
                   _MobileOrdersList(
                     orders: activeFiltered,
@@ -504,12 +598,16 @@ class _OrdersScreenState extends ConsumerState<OrdersScreen> {
                     historyMode: true,
                     searchQueryActive: _searchController.text.trim().isNotEmpty,
                   ),
+                  _OrderCreationDraftsListPane(
+                    drafts: draftsFiltered,
+                    onOpen: (d) => _openDraft(context, ref, d),
+                    onDelete: (id) => _confirmDeleteDraft(context, ref, id),
+                  ),
                 ],
               ),
             ),
           ],
         ),
-      ),
     );
   }
 
@@ -798,6 +896,131 @@ class _MobileOrdersListState extends State<_MobileOrdersList> with AutomaticKeep
           ...sections[s].value.map((o) => MobileOrderCard(order: o, canSeePrices: widget.canSeePrices)),
         ],
       ],
+    );
+  }
+}
+
+class _OrderCreationDraftsListPane extends StatelessWidget {
+  const _OrderCreationDraftsListPane({
+    required this.drafts,
+    required this.onOpen,
+    required this.onDelete,
+  });
+
+  final List<OrderCreationDraft> drafts;
+  final void Function(OrderCreationDraft d) onOpen;
+  final void Function(String id) onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final desk = isDesktopPlatform;
+    if (drafts.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            desk
+                ? 'Черновиков пока нет.\nСоздайте заказ (ключик или календарь) — если закроете форму без сохранения, она появится здесь (до 10 шт.).'
+                : 'Черновиков пока нет. Создайте заказ — при выходе без сохранения он появится здесь (до 10).',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: desk ? AppColorsDesktop.textSecondary : AppColors.textSecondary,
+              height: 1.4,
+              fontSize: desk ? 13 : 14,
+            ),
+          ),
+        ),
+      );
+    }
+    return ListView.separated(
+      padding: EdgeInsets.symmetric(horizontal: desk ? 12 : 16, vertical: 12),
+      itemCount: drafts.length,
+      separatorBuilder: (_, _) => SizedBox(height: desk ? 8 : 10),
+      itemBuilder: (ctx, i) {
+        final d = drafts[i];
+        final cardBg = desk ? AppColorsDesktop.surface : AppColors.surface;
+        final border = desk ? AppColorsDesktop.border : AppColors.border;
+        return Material(
+          color: cardBg,
+          borderRadius: BorderRadius.circular(desk ? 10 : 12),
+          child: InkWell(
+            onTap: () => onOpen(d),
+            borderRadius: BorderRadius.circular(desk ? 10 : 12),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(desk ? 10 : 12),
+                border: Border.all(color: border.withValues(alpha: 0.75)),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          d.previewSubtitle,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: desk ? 13 : 14,
+                            color: desk ? AppColorsDesktop.textPrimary : AppColors.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          d.previewMeta,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: desk ? AppColorsDesktop.textSecondary : AppColors.textSecondary,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          d.sourceLabel,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: desk ? AppColorsDesktop.textTertiary : AppColors.textTertiary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Удалить',
+                    icon: Icon(
+                      Icons.delete_outline_rounded,
+                      color: desk ? AppColorsDesktop.error : AppColors.error,
+                    ),
+                    onPressed: () => onDelete(d.id),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _OrderDraftsRightPlaceholder extends StatelessWidget {
+  const _OrderDraftsRightPlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: AppColorsDesktop.nestedBg,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Text(
+            'Откройте черновик слева, чтобы продолжить оформление заказа.',
+            textAlign: TextAlign.center,
+            style: DesktopDesignSystem.bodySecondary.copyWith(fontSize: 13),
+          ),
+        ),
+      ),
     );
   }
 }

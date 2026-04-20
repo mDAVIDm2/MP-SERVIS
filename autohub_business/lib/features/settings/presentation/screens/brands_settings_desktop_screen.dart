@@ -68,7 +68,7 @@ class _BrandsSettingsDesktopScreenState extends ConsumerState<BrandsSettingsDesk
                   Text('Марки автомобилей', style: DesktopDesignSystem.sectionTitle),
                   const SizedBox(height: 6),
                   Text(
-                    'Сначала выберите позиции из справочника AutoHub (те же названия, что в базе марок/моделей). '
+                    'Сначала выберите позиции из справочника MP-Servis (те же названия, что в базе марок/моделей). '
                     'Свободный ввод — только если в списке нет нужной строки.',
                     style: DesktopDesignSystem.bodySecondary.copyWith(height: 1.45),
                   ),

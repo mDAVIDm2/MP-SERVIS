@@ -12,11 +12,25 @@ class LoginScreen extends ConsumerStatefulWidget {
 }
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
+  static const _prefillEmail = String.fromEnvironment('MP_CONTROL_DEV_EMAIL', defaultValue: '');
+  static const _prefillPassword = String.fromEnvironment('MP_CONTROL_DEV_PASSWORD', defaultValue: '');
+
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
   bool _isLoading = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_prefillEmail.isNotEmpty) {
+      _emailController.text = _prefillEmail;
+    }
+    if (_prefillPassword.isNotEmpty) {
+      _passwordController.text = _prefillPassword;
+    }
+  }
 
   @override
   void dispose() {
@@ -74,7 +88,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    'AutoHub Control Center',
+                    'MP-Servis Control Center',
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                           fontWeight: FontWeight.w700,
                           color: AppColors.primary,

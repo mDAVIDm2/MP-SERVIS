@@ -1,9 +1,36 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors_desktop.dart';
 import '../../../../core/theme/desktop_design_system.dart';
 import '../../../../shared/models/order_model.dart';
 import '../../../../shared/models/organization_business_kind.dart';
 import '../../../../core/utils/formatters.dart';
+import '../../../../shared/widgets/authenticated_api_image.dart';
+
+/// Кружок услуги в мини-карточке списка: пустой контур → зелёный с галочкой.
+Widget _orderListPreviewServiceDot(bool completed, double diameter) {
+  if (completed) {
+    return Container(
+      width: diameter,
+      height: diameter,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: AppColorsDesktop.success.withValues(alpha: 0.16),
+        border: Border.all(color: AppColorsDesktop.success.withValues(alpha: 0.48)),
+      ),
+      alignment: Alignment.center,
+      child: Icon(Icons.check_rounded, size: diameter * 0.55, color: AppColorsDesktop.success),
+    );
+  }
+  return Container(
+    width: diameter,
+    height: diameter,
+    decoration: BoxDecoration(
+      shape: BoxShape.circle,
+      border: Border.all(color: AppColorsDesktop.border, width: 1.25),
+    ),
+  );
+}
 
 /// Период фильтра: Сегодня, Завтра, Неделя, Все.
 enum OrdersPeriodFilter {
@@ -83,6 +110,7 @@ class OrdersFilterBar extends StatelessWidget {
     this.organizationKindCode,
     this.organizationKindOptions = const [],
     this.onOrganizationKindChanged,
+    this.searchFieldHint,
   });
 
   final int activeTabIndex;
@@ -109,6 +137,8 @@ class OrdersFilterBar extends StatelessWidget {
   final String? organizationKindCode;
   final List<({String? code, String label})> organizationKindOptions;
   final ValueChanged<String?>? onOrganizationKindChanged;
+  /// Если задан — подсказка в поле поиска (например, для вкладки «Черновики»).
+  final String? searchFieldHint;
 
   @override
   Widget build(BuildContext context) {
@@ -137,6 +167,7 @@ class OrdersFilterBar extends StatelessWidget {
                     segments: const [
                       ButtonSegment(value: 0, label: Text('Активные'), icon: Icon(Icons.schedule_rounded, size: 16)),
                       ButtonSegment(value: 1, label: Text('История'), icon: Icon(Icons.history_rounded, size: 16)),
+                      ButtonSegment(value: 2, label: Text('Черновики'), icon: Icon(Icons.edit_note_rounded, size: 16)),
                     ],
                     selected: {activeTabIndex},
                     onSelectionChanged: (s) => onTabChanged(s.first),
@@ -145,7 +176,7 @@ class OrdersFilterBar extends StatelessWidget {
                       padding: WidgetStateProperty.all(const EdgeInsets.symmetric(horizontal: 14, vertical: 6)),
                     ),
                   ),
-                  if (onPeriodChanged != null) ...[
+                  if (onPeriodChanged != null && activeTabIndex != 2) ...[
                     const SizedBox(width: 8),
                     _periodChip('Сегодня', OrdersPeriodFilter.today),
                     const SizedBox(width: 4),
@@ -155,35 +186,37 @@ class OrdersFilterBar extends StatelessWidget {
                     const SizedBox(width: 4),
                     _periodChip('Все', OrdersPeriodFilter.all),
                   ],
-                  const SizedBox(width: 8),
-                  OutlinedButton.icon(
-                    onPressed: onDateRangeTap,
-                    icon: const Icon(Icons.calendar_today_rounded, size: 14),
-                    label: Text(
-                      selectedDateFrom != null && selectedDateTo != null
-                          ? '${formatDate(selectedDateFrom!)} – ${formatDate(selectedDateTo!)}'
-                          : 'Выбор даты',
-                      style: const TextStyle(fontSize: 12),
+                  if (activeTabIndex != 2) ...[
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      onPressed: onDateRangeTap,
+                      icon: const Icon(Icons.calendar_today_rounded, size: 14),
+                      label: Text(
+                        selectedDateFrom != null && selectedDateTo != null
+                            ? '${formatDate(selectedDateFrom!)} – ${formatDate(selectedDateTo!)}'
+                            : 'Выбор даты',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColorsDesktop.primary,
+                        side: const BorderSide(color: AppColorsDesktop.border),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      ),
                     ),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColorsDesktop.primary,
-                      side: const BorderSide(color: AppColorsDesktop.border),
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    const SizedBox(width: 8),
+                    DropdownButtonHideUnderline(
+                      child: DropdownButton<OrderStatus?>(
+                        value: statusFilter,
+                        hint: const Text('Статус', style: TextStyle(fontSize: 12)),
+                        isExpanded: false,
+                        items: [
+                          const DropdownMenuItem(value: null, child: Text('Все статусы')),
+                          ...OrderStatus.values.map((s) => DropdownMenuItem(value: s, child: Text(s.label))),
+                        ],
+                        onChanged: onStatusFilterChanged,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  DropdownButtonHideUnderline(
-                    child: DropdownButton<OrderStatus?>(
-                      value: statusFilter,
-                      hint: const Text('Статус', style: TextStyle(fontSize: 12)),
-                      isExpanded: false,
-                      items: [
-                        const DropdownMenuItem(value: null, child: Text('Все статусы')),
-                        ...OrderStatus.values.map((s) => DropdownMenuItem(value: s, child: Text(s.label))),
-                      ],
-                      onChanged: onStatusFilterChanged,
-                    ),
-                  ),
+                  ],
                 ],
                 ),
               ),
@@ -195,7 +228,7 @@ class OrdersFilterBar extends StatelessWidget {
                     controller: searchController,
                     onChanged: onSearchQueryChanged,
                     decoration: InputDecoration(
-                      hintText: 'Номер, клиент, авто…',
+                      hintText: searchFieldHint ?? 'Номер, клиент, авто…',
                       hintStyle: DesktopDesignSystem.bodySecondary.copyWith(fontSize: 12),
                       prefixIcon: const Icon(Icons.search_rounded, size: 16, color: AppColorsDesktop.textTertiary),
                       filled: true,
@@ -215,6 +248,7 @@ class OrdersFilterBar extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           // Второй ряд: мастера, сортировка, плотность, сброс
+          if (activeTabIndex != 2)
           Wrap(
             spacing: 10,
             runSpacing: 6,
@@ -283,7 +317,15 @@ class OrdersFilterBar extends StatelessWidget {
                   style: TextButton.styleFrom(foregroundColor: AppColorsDesktop.textSecondary, padding: const EdgeInsets.symmetric(horizontal: 8)),
                 ),
             ],
-          ),
+          )
+          else
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                'Несохранённые формы создания заказа (не более 10). Закрыли экран — черновик появится здесь.',
+                style: DesktopDesignSystem.bodySecondary.copyWith(fontSize: 12),
+              ),
+            ),
         ],
       ),
     );
@@ -428,6 +470,7 @@ class OrderServicesPreview extends StatelessWidget {
     final hasAdditional = addItems.isNotEmpty;
     final fs = compact ? 11.0 : 12.0;
     final iconSz = compact ? 12.0 : 14.0;
+    final dotD = iconSz + 3;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -436,13 +479,9 @@ class OrderServicesPreview extends StatelessWidget {
           Padding(
             padding: EdgeInsets.only(bottom: compact ? 2 : 4),
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Icon(
-                  item.isCompleted ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
-                  size: iconSz,
-                  color: item.isCompleted ? AppColorsDesktop.success : AppColorsDesktop.textTertiary,
-                ),
+                _orderListPreviewServiceDot(item.isCompleted, dotD),
                 SizedBox(width: compact ? 4 : 6),
                 Expanded(
                   child: Text(
@@ -452,7 +491,7 @@ class OrderServicesPreview extends StatelessWidget {
                       color: AppColorsDesktop.textPrimary,
                       decoration: item.isCompleted ? TextDecoration.lineThrough : null,
                     ),
-                    maxLines: 1,
+                    maxLines: 4,
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -493,7 +532,7 @@ class OrderServicesPreview extends StatelessWidget {
 // --- OrderListCardCompact ---
 
 /// Компактная карточка заказа: приоритет — авто, статус, время, мастер, итог (ТЗ п.2.1–2.5, 4).
-class OrderListCardCompact extends StatelessWidget {
+class OrderListCardCompact extends ConsumerWidget {
   const OrderListCardCompact({
     super.key,
     required this.order,
@@ -512,7 +551,7 @@ class OrderListCardCompact extends StatelessWidget {
   final bool compactDensity;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final accentBg = _cardAccentBg(order.status);
     final leftBorder = _cardLeftBorder(order.status);
     final start = order.plannedStartTime ?? order.dateTime;
@@ -536,6 +575,8 @@ class OrderListCardCompact extends StatelessWidget {
         .where((i) => i.isAdditional && i.priceKopecks != null)
         .fold<int>(0, (s, i) => s + (i.priceKopecks ?? 0));
     final total = order.totalKopecksForDisplay;
+    final dmList = order.effectiveDurationMinutes > 0 ? order.effectiveDurationMinutes : 60;
+    final hourlyList = formatEquivalentHourlyRateLine(total, dmList);
 
     final pad = compactDensity ? 10.0 : 16.0;
     final spacing = compactDensity ? 6.0 : 10.0;
@@ -629,6 +670,15 @@ class OrderListCardCompact extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
+                        if (order.carPhotoUrl != null && order.carPhotoUrl!.trim().isNotEmpty) ...[
+                          SizedBox(width: compactDensity ? 6 : 8),
+                          AuthenticatedApiImage(
+                            imageUrl: order.carPhotoUrl,
+                            width: compactDensity ? 40 : 48,
+                            height: compactDensity ? 40 : 48,
+                            borderRadius: 8,
+                          ),
+                        ],
                       ],
                     ),
                     if (order.vin != null && order.vin!.trim().isNotEmpty) ...[
@@ -763,22 +813,44 @@ class OrderListCardCompact extends StatelessWidget {
                   ),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Expanded(
                       child: Text('Итого', style: DesktopDesignSystem.sectionTitle.copyWith(fontSize: compactDensity ? 12 : 13), maxLines: 1, overflow: TextOverflow.ellipsis),
                     ),
-                    Text(
-                      formatMoney(total),
-                      style: TextStyle(
-                        fontSize: compactDensity ? 16 : 17,
-                        fontWeight: FontWeight.w700,
-                        color: AppColorsDesktop.accentMoney,
-                        letterSpacing: -0.2,
+                    Flexible(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            formatMoney(total),
+                            style: TextStyle(
+                              fontSize: compactDensity ? 16 : 17,
+                              fontWeight: FontWeight.w700,
+                              color: AppColorsDesktop.accentMoney,
+                              letterSpacing: -0.2,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            'на ${formatDurationMinutes(dmList)}',
+                            style: DesktopDesignSystem.meta.copyWith(fontSize: compactDensity ? 9 : 10),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          if (hourlyList != null)
+                            Text(
+                              hourlyList,
+                              style: DesktopDesignSystem.meta.copyWith(
+                                fontSize: compactDensity ? 9 : 10,
+                                color: AppColorsDesktop.textTertiary,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                        ],
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),

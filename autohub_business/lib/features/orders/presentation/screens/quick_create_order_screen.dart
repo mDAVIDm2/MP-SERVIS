@@ -13,13 +13,17 @@ import '../../../../shared/models/settings_models.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../core/utils/russian_plate_utils.dart';
 import '../../../../core/api/services/api_services_providers.dart';
+import '../../application/order_creation_drafts_notifier.dart';
+import '../../domain/order_creation_draft.dart';
 import 'order_detail_screen.dart';
 
 /// Экран быстрого создания заказа (кнопка-ключик): состав, авто, время, мастер, клиент.
 class QuickCreateOrderScreen extends ConsumerStatefulWidget {
   final DateTime? initialDate;
+  /// Восстановление из локального черновика (вкладка «Черновики»).
+  final OrderCreationDraft? resumeDraft;
 
-  const QuickCreateOrderScreen({super.key, this.initialDate});
+  const QuickCreateOrderScreen({super.key, this.initialDate, this.resumeDraft});
 
   @override
   ConsumerState<QuickCreateOrderScreen> createState() => _QuickCreateOrderScreenState();
@@ -90,6 +94,8 @@ class _QuickCreateOrderScreenState extends ConsumerState<QuickCreateOrderScreen>
   /// Пост при режиме «по постам»; null — сервер подберёт свободный пост.
   String? _selectedBayId;
   bool _saving = false;
+  String? _linkedDraftId;
+  bool _saveSucceeded = false;
   bool _newCarExpanded = false;
   final _newCarVinController = TextEditingController();
   final _newCarPlateController = TextEditingController();
@@ -121,6 +127,181 @@ class _QuickCreateOrderScreenState extends ConsumerState<QuickCreateOrderScreen>
     _clientPhoneFocusNode.addListener(_onClientFieldFocusChanged);
     _clientNameFocusNode.addListener(_onClientFieldFocusChanged);
     _carFocusNode.addListener(() => setState(() {}));
+    if (widget.resumeDraft != null) {
+      _linkedDraftId = widget.resumeDraft!.id;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final d = widget.resumeDraft;
+        if (d != null && d.source == OrderCreationDraft.kSourceQuick) {
+          _applyQuickDraftData(d.data);
+        }
+      });
+    }
+  }
+
+  void _applyQuickDraftData(Map<String, dynamic> m) {
+    final v = m['v'];
+    if (v is! num || v.toInt() != 1) return;
+    final settings = ref.read(settingsRepositoryProvider);
+    final byId = {for (final s in settings.services) s.id: s};
+    final ids = (m['selectedServiceIds'] as List?)?.map((e) => e.toString()).toList() ?? <String>[];
+    final selected = <ServiceItem>[];
+    for (final id in ids) {
+      final s = byId[id];
+      if (s != null) selected.add(s);
+    }
+    final customRaw = m['customItems'] as List?;
+    final customs = <OrderItem>[];
+    if (customRaw != null) {
+      for (var i = 0; i < customRaw.length; i++) {
+        final e = customRaw[i];
+        if (e is! Map) continue;
+        final map = Map<String, dynamic>.from(e);
+        customs.add(OrderItem(
+          id: 'draft_ci_${i}_${map['name']}',
+          name: map['name'] as String? ?? '',
+          priceKopecks: (map['priceKopecks'] as num?)?.toInt(),
+          estimatedMinutes: (map['estimatedMinutes'] as num?)?.toInt() ?? 60,
+        ));
+      }
+    }
+    final dtStr = m['dateTime'] as String?;
+    final dt = dtStr != null ? DateTime.tryParse(dtStr) : null;
+    final staff = ref.read(staffListProvider);
+    StaffMember? masterPick;
+    final mid = m['masterId'] as String?;
+    if (mid != null && mid.isNotEmpty) {
+      for (final x in staff) {
+        if (x.id == mid) {
+          masterPick = x;
+          break;
+        }
+      }
+    }
+    setState(() {
+      if (dt != null) {
+        _dateTime = dt;
+        _manualHourController.text = _dateTime.hour.toString();
+        _manualMinuteController.text = _dateTime.minute.toString().padLeft(2, '0');
+      }
+      _carFromList = m['carFromList'] as bool? ?? true;
+      _carInfoController.text = m['carInfoFree'] as String? ?? '';
+      _clientNameController.text = m['clientName'] as String? ?? '';
+      _clientPhoneController.text = m['clientPhone'] as String? ?? '';
+      _commentController.text = m['comment'] as String? ?? '';
+      _selectedServices.clear();
+      _selectedServices.addAll(selected);
+      _customItems.clear();
+      _customItems.addAll(customs);
+      _manualTime = m['manualTime'] as bool? ?? false;
+      _manualHourController.text = m['manualHour'] as String? ?? _manualHourController.text;
+      _manualMinuteController.text = m['manualMinute'] as String? ?? _manualMinuteController.text;
+      _carSearchController.text = m['carSearch'] as String? ?? '';
+      _newCarExpanded = m['newCarExpanded'] as bool? ?? false;
+      _newCarStructured = m['newCarStructured'] as bool? ?? false;
+      _newCarVinController.text = m['newVin'] as String? ?? '';
+      _newCarPlateController.text = m['newPlate'] as String? ?? '';
+      _newCarColorController.text = m['newColor'] as String? ?? '';
+      _newCarMileageController.text = m['newMileage'] as String? ?? '';
+      _newBrandController.text = m['newBrand'] as String? ?? '';
+      _newModelController.text = m['newModel'] as String? ?? '';
+      _newGenerationController.text = m['newGeneration'] as String? ?? '';
+      final sc = m['selectedClient'];
+      if (sc is Map) {
+        final sm = Map<String, dynamic>.from(sc);
+        _selectedClient = _ClientOption(
+          name: sm['name'] as String? ?? '',
+          phone: sm['phone'] as String?,
+        );
+      } else {
+        _selectedClient = null;
+      }
+      final selCar = m['selectedCar'];
+      if (selCar is Map) {
+        final cm = Map<String, dynamic>.from(selCar);
+        _selectedCar = _CarOption(
+          carId: cm['carId'] as String? ?? '',
+          carInfo: cm['carInfo'] as String? ?? '',
+          vin: cm['vin'] as String?,
+          licensePlate: cm['licensePlate'] as String?,
+        );
+      } else {
+        _selectedCar = null;
+      }
+      _selectedMaster = masterPick;
+      _selectedBayId = m['bayId'] as String?;
+    });
+  }
+
+  Map<String, dynamic> _quickDraftSnapshot() {
+    return {
+      'v': 1,
+      'dateTime': _dateTime.toIso8601String(),
+      'carFromList': _carFromList,
+      'selectedCar': _selectedCar == null
+          ? null
+          : {
+              'carId': _selectedCar!.carId,
+              'carInfo': _selectedCar!.carInfo,
+              'vin': _selectedCar!.vin,
+              'licensePlate': _selectedCar!.licensePlate,
+            },
+      'carInfoFree': _carInfoController.text,
+      'clientName': _clientNameController.text,
+      'clientPhone': _clientPhoneController.text,
+      'selectedClient': _selectedClient == null
+          ? null
+          : {'name': _selectedClient!.name, 'phone': _selectedClient!.phone},
+      'comment': _commentController.text,
+      'selectedServiceIds': _selectedServices.map((s) => s.id).toList(),
+      'customItems': _customItems
+          .map((i) => {
+                'name': i.name,
+                'priceKopecks': i.priceKopecks,
+                'estimatedMinutes': i.estimatedMinutes,
+              })
+          .toList(),
+      'masterId': _selectedMaster?.id,
+      'bayId': _selectedBayId,
+      'newCarExpanded': _newCarExpanded,
+      'newCarStructured': _newCarStructured,
+      'newVin': _newCarVinController.text,
+      'newPlate': _newCarPlateController.text,
+      'newColor': _newCarColorController.text,
+      'newMileage': _newCarMileageController.text,
+      'newBrand': _newBrandController.text,
+      'newModel': _newModelController.text,
+      'newGeneration': _newGenerationController.text,
+      'manualTime': _manualTime,
+      'manualHour': _manualHourController.text,
+      'manualMinute': _manualMinuteController.text,
+      'carSearch': _carSearchController.text,
+    };
+  }
+
+  bool _shouldSaveQuickDraft() {
+    if (_saveSucceeded) return false;
+    final n = _clientNameController.text.trim();
+    final p = _clientPhoneController.text.trim();
+    if (n.isNotEmpty || p.isNotEmpty) return true;
+    if (_commentController.text.trim().isNotEmpty) return true;
+    if (_selectedServices.isNotEmpty || _customItems.isNotEmpty) return true;
+    if (_selectedCar != null) return true;
+    if (_carInfoController.text.trim().isNotEmpty) return true;
+    if (_newCarVinController.text.trim().isNotEmpty ||
+        _newCarPlateController.text.trim().isNotEmpty ||
+        _newBrandController.text.trim().isNotEmpty ||
+        _newModelController.text.trim().isNotEmpty ||
+        _newGenerationController.text.trim().isNotEmpty ||
+        _newCarColorController.text.trim().isNotEmpty ||
+        _newCarMileageController.text.trim().isNotEmpty) {
+      return true;
+    }
+    if (_selectedClient != null) return true;
+    if (_selectedMaster != null || (_selectedBayId != null && _selectedBayId!.trim().isNotEmpty)) {
+      return true;
+    }
+    return false;
   }
 
   void _onClientFieldFocusChanged() {
@@ -149,6 +330,28 @@ class _QuickCreateOrderScreenState extends ConsumerState<QuickCreateOrderScreen>
 
   @override
   void dispose() {
+    if (!_saveSucceeded) {
+      if (_shouldSaveQuickDraft()) {
+        final snap = _quickDraftSnapshot();
+        final existing = _linkedDraftId;
+        Future(() async {
+          try {
+            await ref.read(orderCreationDraftsProvider.notifier).upsertFromSnapshot(
+                  existingId: existing,
+                  source: OrderCreationDraft.kSourceQuick,
+                  data: snap,
+                );
+          } catch (_) {}
+        });
+      } else if (_linkedDraftId != null) {
+        final rid = _linkedDraftId!;
+        Future(() async {
+          try {
+            await ref.read(orderCreationDraftsProvider.notifier).remove(rid);
+          } catch (_) {}
+        });
+      }
+    }
     _clientPhoneFocusNode.removeListener(_onClientFieldFocusChanged);
     _clientNameFocusNode.removeListener(_onClientFieldFocusChanged);
     _carInfoController.dispose();
@@ -398,6 +601,8 @@ class _QuickCreateOrderScreenState extends ConsumerState<QuickCreateOrderScreen>
               name: s.name,
               priceKopecks: s.priceKopecks,
               estimatedMinutes: s.durationMinutes,
+              serviceId: s.id,
+              catalogItemId: s.catalogItemId,
             ))
         .toList();
     items.addAll(_customItems);
@@ -508,6 +713,11 @@ class _QuickCreateOrderScreenState extends ConsumerState<QuickCreateOrderScreen>
 
     if (!mounted) return;
     setState(() => _saving = false);
+    _saveSucceeded = true;
+    final draftId = _linkedDraftId;
+    if (draftId != null) {
+      await ref.read(orderCreationDraftsProvider.notifier).remove(draftId);
+    }
     Navigator.of(context).pop();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Заказ ${addedOrder.orderNumber} создан'), backgroundColor: _success),
@@ -526,6 +736,8 @@ class _QuickCreateOrderScreenState extends ConsumerState<QuickCreateOrderScreen>
               name: s.name,
               priceKopecks: s.priceKopecks,
               estimatedMinutes: s.durationMinutes,
+              serviceId: s.id,
+              catalogItemId: s.catalogItemId,
             ))
         .toList();
     list.addAll(_customItems);

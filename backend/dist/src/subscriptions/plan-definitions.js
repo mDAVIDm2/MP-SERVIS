@@ -9,7 +9,7 @@ exports.listPublicSubscriptionPlans = listPublicSubscriptionPlans;
 exports.SUBSCRIPTION_PLAN_KEYS = ['solo', 'team', 'business', 'pro', 'network'];
 exports.SUBSCRIPTION_PLANS = {
     solo: {
-        maxActiveStaff: 0,
+        maxActiveStaff: 1,
         maxConfirmedOrdersPerMonth: 50,
         maxOrderMediaAttachments: 2,
         maxChatImagesPerMessage: 2,

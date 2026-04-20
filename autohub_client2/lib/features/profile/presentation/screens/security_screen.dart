@@ -6,7 +6,7 @@ import '../../../../core/api/api_endpoints.dart';
 import '../../../../core/auth/app_lock_provider.dart';
 import '../../../../core/auth/auth_provider.dart';
 import '../../../../core/auth/security_settings.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/client_palette.dart';
 import 'active_sessions_screen.dart';
 
 class SecurityScreen extends ConsumerStatefulWidget {
@@ -39,56 +39,18 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
   Future<String?> _askPin({required String title, int minLen = 4}) async {
     if (!mounted || _pinDialogOpen) return null;
     _pinDialogOpen = true;
-    final c = TextEditingController();
     try {
-      final pin = await showDialog<String>(
+      // Контроллер только внутри State диалога: нельзя dispose() в finally сразу после
+      // showDialog — маршрут ещё снимает TextField, иначе assert в framework (InheritedElement / _dependents).
+      return await showDialog<String>(
         context: context,
         useRootNavigator: true,
         barrierDismissible: false,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: AppColors.cardBg,
-          title: Text(title, style: const TextStyle(color: AppColors.textPrimary)),
-          content: TextField(
-            controller: c,
-            keyboardType: TextInputType.number,
-            obscureText: true,
-            maxLength: 8,
-            autofocus: true,
-            style: const TextStyle(color: AppColors.textPrimary),
-            decoration: const InputDecoration(
-              counterText: '',
-              hintText: 'Только цифры',
-              hintStyle: TextStyle(color: AppColors.textTertiary),
-            ),
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () async {
-                if (!ctx.mounted) return;
-                await Navigator.of(ctx, rootNavigator: true).maybePop();
-              },
-              child: const Text('Отмена'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                final t = c.text.trim();
-                if (t.length >= minLen) {
-                  if (!ctx.mounted) return;
-                  await Navigator.of(ctx, rootNavigator: true).maybePop(t);
-                }
-              },
-              style: FilledButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: const Color(0xFF0D0D0D)),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
+        builder: (ctx) => _PinPromptDialog(title: title, minLen: minLen),
       );
-      return pin;
     } catch (_) {
       return null;
     } finally {
-      c.dispose();
       _pinDialogOpen = false;
     }
   }
@@ -100,7 +62,7 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
     if (b == null || !mounted) return;
     if (a != b) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('PIN не совпадают'), backgroundColor: AppColors.error),
+        SnackBar(content: Text('PIN не совпадают'), backgroundColor: context.palette.error),
       );
       return;
     }
@@ -109,7 +71,7 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$e'), backgroundColor: AppColors.error),
+          SnackBar(content: Text('$e'), backgroundColor: context.palette.error),
         );
       }
       return;
@@ -118,7 +80,7 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
     if (mounted) {
       setState(() => _pinEnabled = true);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('PIN сохранён'), backgroundColor: AppColors.success),
+        SnackBar(content: Text('PIN сохранён'), backgroundColor: context.palette.success),
       );
     }
   }
@@ -144,18 +106,24 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
     if (!mounted) return;
     if (!verified) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Неверный PIN'), backgroundColor: AppColors.error),
+        SnackBar(content: Text('Неверный PIN'), backgroundColor: context.palette.error),
       );
       return;
     }
-    await vault.clear();
+    // Не вызываем vault.clear(): иначе hasPin() == false и при следующем запуске снова показывается
+    // обязательный экран «Придумайте PIN». Отключение — только выключение блокировки; PIN в secure storage
+    // остаётся, чтобы при повторном включении не просить придумать новый.
     await settings.setPinEnabled(false);
     await settings.setBiometricEnabled(false);
     ref.read(appLockProvider.notifier).unlock();
+    // После закрытия диалога — обновление UI на следующем кадре (избегаем setState в фазе размонтирования overlay).
     if (mounted) {
-      setState(() {
-        _pinEnabled = false;
-        _biometric = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() {
+          _pinEnabled = false;
+          _biometric = false;
+        });
       });
     }
   }
@@ -166,9 +134,9 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
     if (v && (!_pinEnabled || !await vault.hasPin())) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Сначала включите PIN-код'),
-          backgroundColor: AppColors.info,
+        SnackBar(
+          content: const Text('Сначала включите PIN-код'),
+          backgroundColor: context.palette.info,
         ),
       );
       return;
@@ -181,9 +149,9 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
       if (!supported || !can) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Биометрия недоступна на этом устройстве'),
-              backgroundColor: AppColors.error,
+            SnackBar(
+              content: const Text('Биометрия недоступна на этом устройстве'),
+              backgroundColor: context.palette.error,
             ),
           );
         }
@@ -207,7 +175,7 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
       if (!mounted) return;
       if (!oldVerified) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Неверный PIN'), backgroundColor: AppColors.error),
+          SnackBar(content: Text('Неверный PIN'), backgroundColor: context.palette.error),
         );
         return;
       }
@@ -217,20 +185,20 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
       if (b == null || !mounted) return;
       if (a != b) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('PIN не совпадают'), backgroundColor: AppColors.error),
+          SnackBar(content: Text('PIN не совпадают'), backgroundColor: context.palette.error),
         );
         return;
       }
       await vault.setPin(a);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('PIN обновлён'), backgroundColor: AppColors.success),
+          SnackBar(content: Text('PIN обновлён'), backgroundColor: context.palette.success),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка смены PIN: $e'), backgroundColor: AppColors.error),
+          SnackBar(content: Text('Ошибка смены PIN: $e'), backgroundColor: context.palette.error),
         );
       }
     }
@@ -249,29 +217,29 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
     const opts = [LockRequestMode.appOpen, LockRequestMode.authorization];
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: AppColors.cardBg,
-      shape: const RoundedRectangleBorder(
+      backgroundColor: context.palette.cardBg,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (ctx) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Padding(
+            Padding(
               padding: EdgeInsets.all(16),
               child: Text(
                 'Когда запрашивать PIN',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: context.palette.textPrimary),
               ),
             ),
             ...opts.map((mode) {
               return RadioListTile<LockRequestMode>(
                 value: mode,
                 groupValue: _lockRequestMode,
-                activeColor: AppColors.primary,
+                activeColor: context.palette.primary,
                 title: Text(
                   _lockModeLabel(mode),
-                  style: const TextStyle(color: AppColors.textPrimary),
+                  style: TextStyle(color: context.palette.textPrimary),
                 ),
                 onChanged: (v) async {
                   if (v == null) return;
@@ -304,13 +272,13 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
         msg = data['message'] as String;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(msg), backgroundColor: AppColors.error, behavior: SnackBarBehavior.floating),
+        SnackBar(content: Text(msg), backgroundColor: context.palette.error, behavior: SnackBarBehavior.floating),
       );
       return;
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$e'), backgroundColor: AppColors.error, behavior: SnackBarBehavior.floating),
+        SnackBar(content: Text('$e'), backgroundColor: context.palette.error, behavior: SnackBarBehavior.floating),
       );
       return;
     }
@@ -321,18 +289,18 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.cardBg,
+        backgroundColor: context.palette.cardBg,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Удалить аккаунт?', style: TextStyle(color: AppColors.textPrimary)),
-        content: const Text(
+        title: Text('Удалить аккаунт?', style: TextStyle(color: context.palette.textPrimary)),
+        content: Text(
           'Аккаунт и данные на сервере будут удалены. Заказы в сервисах могут сохраниться у организаций. Это действие нельзя отменить.',
-          style: TextStyle(color: AppColors.textSecondary),
+          style: TextStyle(color: context.palette.textSecondary),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Отмена')),
           TextButton(
             onPressed: _deleteAccountConfirmed,
-            child: const Text('Удалить', style: TextStyle(color: AppColors.error)),
+            child: Text('Удалить', style: TextStyle(color: context.palette.error)),
           ),
         ],
       ),
@@ -342,10 +310,10 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       appBar: AppBar(
-        backgroundColor: AppColors.background,
-        title: const Text('Безопасность', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+        backgroundColor: context.palette.background,
+        title: Text('Безопасность', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
       ),
       body: ListView(
         physics: const BouncingScrollPhysics(),
@@ -353,9 +321,9 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
         children: [
           Container(
             decoration: BoxDecoration(
-              color: AppColors.cardBg,
+              color: context.palette.cardBg,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppColors.border),
+              border: Border.all(color: context.palette.border),
             ),
             child: Column(
               children: [
@@ -405,6 +373,71 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
   }
 }
 
+/// Диалог ввода PIN: [TextEditingController] живёт в [State] и dispose только после снятия [TextField] с дерева.
+class _PinPromptDialog extends StatefulWidget {
+  const _PinPromptDialog({required this.title, required this.minLen});
+
+  final String title;
+  final int minLen;
+
+  @override
+  State<_PinPromptDialog> createState() => _PinPromptDialogState();
+}
+
+class _PinPromptDialogState extends State<_PinPromptDialog> {
+  late final TextEditingController _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: context.palette.cardBg,
+      title: Text(widget.title, style: TextStyle(color: context.palette.textPrimary)),
+      content: TextField(
+        controller: _controller,
+        keyboardType: TextInputType.number,
+        obscureText: true,
+        maxLength: 8,
+        autofocus: true,
+        style: TextStyle(color: context.palette.textPrimary),
+        decoration: InputDecoration(
+          counterText: '',
+          hintText: 'Только цифры',
+          hintStyle: TextStyle(color: context.palette.textTertiary),
+        ),
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            if (!context.mounted) return;
+            Navigator.of(context, rootNavigator: true).pop();
+          },
+          child: Text('Отмена'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final t = _controller.text.trim();
+            if (t.length < widget.minLen) return;
+            if (!context.mounted) return;
+            Navigator.of(context, rootNavigator: true).pop(t);
+          },
+          style: FilledButton.styleFrom(
+            backgroundColor: context.palette.primary,
+            foregroundColor: context.palette.onAccent,
+          ),
+          child: Text('OK'),
+        ),
+      ],
+    );
+  }
+}
+
 class _SwitchRow extends StatelessWidget {
   final String label;
   final String? subtitle;
@@ -422,8 +455,8 @@ class _SwitchRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: AppColors.border, width: 0.5)),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: context.palette.border, width: 0.5)),
       ),
       child: Row(
         children: [
@@ -431,9 +464,9 @@ class _SwitchRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(label, style: const TextStyle(fontSize: 16, color: AppColors.textPrimary)),
+                Text(label, style: TextStyle(fontSize: 16, color: context.palette.textPrimary)),
                 if (subtitle != null)
-                  Text(subtitle!, style: const TextStyle(fontSize: 12, color: AppColors.textTertiary)),
+                  Text(subtitle!, style: TextStyle(fontSize: 12, color: context.palette.textTertiary)),
               ],
             ),
           ),
@@ -443,8 +476,8 @@ class _SwitchRow extends StatelessWidget {
               HapticFeedback.lightImpact();
               onChanged(v);
             },
-            activeColor: AppColors.primary,
-            activeTrackColor: AppColors.primary.withValues(alpha: 0.3),
+            activeColor: context.palette.primary,
+            activeTrackColor: context.palette.primary.withValues(alpha: 0.3),
           ),
         ],
       ),
@@ -474,13 +507,13 @@ class _ActionRow extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        decoration: const BoxDecoration(
-          border: Border(bottom: BorderSide(color: AppColors.border, width: 0.5)),
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: context.palette.border, width: 0.5)),
         ),
         child: Row(
           children: [
-            Icon(icon, size: 22, color: isDestructive ? AppColors.error : AppColors.textSecondary),
-            const SizedBox(width: 14),
+            Icon(icon, size: 22, color: isDestructive ? context.palette.error : context.palette.textSecondary),
+            SizedBox(width: 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -489,24 +522,24 @@ class _ActionRow extends StatelessWidget {
                     label,
                     style: TextStyle(
                       fontSize: 16,
-                      color: isDestructive ? AppColors.error : AppColors.textPrimary,
+                      color: isDestructive ? context.palette.error : context.palette.textPrimary,
                     ),
                   ),
                   if (subtitle != null) ...[
-                    const SizedBox(height: 2),
+                    SizedBox(height: 2),
                     Text(
                       subtitle!,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
-                        color: AppColors.textTertiary,
+                        color: context.palette.textTertiary,
                       ),
                     ),
                   ],
                 ],
               ),
             ),
-            const SizedBox(width: 8),
-            const Icon(Icons.chevron_right_rounded, size: 20, color: AppColors.textTertiary),
+            SizedBox(width: 8),
+            Icon(Icons.chevron_right_rounded, size: 20, color: context.palette.textTertiary),
           ],
         ),
       ),

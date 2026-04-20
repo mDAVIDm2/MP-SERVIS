@@ -11,6 +11,7 @@ import { ReferenceService } from './reference.service';
 import { ServiceCatalogService } from './service-catalog.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { Organization } from '../organizations/organization.entity';
+import { ClientCar } from '../users/client-car.entity';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { Organization } from '../organizations/organization.entity';
       ServiceCatalogItem,
       ServiceCatalogSuggestion,
       Organization,
+      ClientCar,
     ]),
     forwardRef(() => NotificationsModule),
   ],

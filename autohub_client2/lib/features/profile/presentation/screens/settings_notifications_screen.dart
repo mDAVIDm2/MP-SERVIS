@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/settings/client_notification_prefs_provider.dart';
 
 class SettingsNotificationsScreen extends ConsumerStatefulWidget {
@@ -16,19 +16,19 @@ class _SettingsNotificationsScreenState extends ConsumerState<SettingsNotificati
   Widget build(BuildContext context) {
     final async = ref.watch(clientNotificationPrefsProvider);
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       appBar: AppBar(
-        backgroundColor: AppColors.background,
-        title: const Text('Уведомления', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+        backgroundColor: context.palette.background,
+        title: Text('Уведомления', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
       ),
       body: async.when(
-        loading: () => const Center(child: CircularProgressIndicator(color: AppColors.primary)),
+        loading: () => Center(child: CircularProgressIndicator(color: context.palette.primary)),
         error: (_, _) => Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
             child: Text(
               'Не удалось загрузить настройки',
-              style: TextStyle(color: AppColors.textSecondary),
+              style: TextStyle(color: context.palette.textSecondary),
               textAlign: TextAlign.center,
             ),
           ),
@@ -45,7 +45,7 @@ class _SettingsNotificationsScreenState extends ConsumerState<SettingsNotificati
                 onChanged: (v) => ref.read(clientNotificationPrefsProvider.notifier).setServerFields(p.copyWith(pushEnabled: v)),
               ),
             ]),
-            const SizedBox(height: 16),
+            SizedBox(height: 16),
             _buildSection('Типы уведомлений', [
               _SwitchRow(
                 label: 'Обновления заказов',
@@ -71,7 +71,7 @@ class _SettingsNotificationsScreenState extends ConsumerState<SettingsNotificati
                 onChanged: (v) => ref.read(clientNotificationPrefsProvider.notifier).setServerFields(p.copyWith(promotions: v)),
               ),
             ]),
-            const SizedBox(height: 16),
+            SizedBox(height: 16),
             _buildSection('Звук и вибрация', [
               _SwitchRow(
                 label: 'Звук',
@@ -84,10 +84,10 @@ class _SettingsNotificationsScreenState extends ConsumerState<SettingsNotificati
                 onChanged: (v) => ref.read(clientNotificationPrefsProvider.notifier).setVibration(v),
               ),
             ]),
-            const SizedBox(height: 16),
+            SizedBox(height: 16),
             Text(
               'Типы и push синхронизируются с сервером и влияют на список уведомлений в приложении. Звук и вибрация применяются локально к push.',
-              style: TextStyle(fontSize: 12, color: AppColors.textTertiary, height: 1.35),
+              style: TextStyle(fontSize: 12, color: context.palette.textTertiary, height: 1.35),
             ),
           ],
         ),
@@ -99,13 +99,13 @@ class _SettingsNotificationsScreenState extends ConsumerState<SettingsNotificati
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
-        const SizedBox(height: 8),
+        Text(title, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: context.palette.textSecondary)),
+        SizedBox(height: 8),
         Container(
           decoration: BoxDecoration(
-            color: AppColors.cardBg,
+            color: context.palette.cardBg,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.border),
+            border: Border.all(color: context.palette.border),
           ),
           child: Column(children: children),
         ),
@@ -125,8 +125,8 @@ class _SwitchRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: AppColors.border, width: 0.5)),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: context.palette.border, width: 0.5)),
       ),
       child: Row(
         children: [
@@ -134,11 +134,11 @@ class _SwitchRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(label, style: const TextStyle(fontSize: 16, color: AppColors.textPrimary)),
+                Text(label, style: TextStyle(fontSize: 16, color: context.palette.textPrimary)),
                 if (subtitle != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 2),
-                    child: Text(subtitle!, style: const TextStyle(fontSize: 12, color: AppColors.textTertiary)),
+                    child: Text(subtitle!, style: TextStyle(fontSize: 12, color: context.palette.textTertiary)),
                   ),
               ],
             ),
@@ -151,8 +151,8 @@ class _SwitchRow extends StatelessWidget {
                     HapticFeedback.lightImpact();
                     onChanged!(v);
                   },
-            activeTrackColor: AppColors.primary.withValues(alpha: 0.45),
-            activeThumbColor: AppColors.primary,
+            activeTrackColor: context.palette.primary.withValues(alpha: 0.45),
+            activeThumbColor: context.palette.primary,
           ),
         ],
       ),

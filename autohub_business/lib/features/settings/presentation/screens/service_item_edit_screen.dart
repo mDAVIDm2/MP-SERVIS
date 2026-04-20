@@ -7,6 +7,8 @@ import '../../../../core/theme/desktop_light_theme.dart';
 import '../../../../core/repositories/settings_repository.dart';
 import '../../../../shared/models/settings_models.dart';
 import '../../../../shared/models/staff_model.dart';
+import '../../../../shared/models/service_catalog_models.dart';
+import 'service_catalog_pick_screen.dart';
 
 class ServiceItemEditScreen extends ConsumerStatefulWidget {
   final String categoryId;
@@ -30,6 +32,8 @@ class _ServiceItemEditScreenState extends ConsumerState<ServiceItemEditScreen> {
   late TextEditingController _priceController;
   late TextEditingController _durationController;
   String? _requiredSkill;
+  ServiceCatalogCategoryRef? _catalogCat;
+  ServiceCatalogItemRef? _catalogItem;
   bool _useBodyTypePricing = false;
   final List<_BodyPricingDraft> _bodyPricing = [];
   static const List<String> _bodyTypeOptions = [
@@ -87,10 +91,29 @@ class _ServiceItemEditScreenState extends ConsumerState<ServiceItemEditScreen> {
     super.dispose();
   }
 
+  Future<void> _openCatalogPicker() async {
+    final r = await Navigator.push<(ServiceCatalogCategoryRef, ServiceCatalogItemRef)>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const ServiceCatalogPickScreen(),
+      ),
+    );
+    if (r == null || !mounted) return;
+    final (cat, item) = r;
+    setState(() {
+      _catalogCat = cat;
+      _catalogItem = item;
+      _nameController.text = item.name;
+      _durationController.text = '${item.defaultDurationMinutes}';
+      _requiredSkill = item.requiredSkill ?? _requiredSkill;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final isNew = widget.existing == null;
     final desk = isDesktopPlatform;
+    final mobileNew = isNew && !desk;
 
     final scaffold = Scaffold(
       backgroundColor: desk
@@ -127,7 +150,7 @@ class _ServiceItemEditScreenState extends ConsumerState<ServiceItemEditScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          if (widget.existing?.isFromCatalog == true) ...[
+          if (widget.existing?.isFromCatalog == true || (mobileNew && _catalogItem != null)) ...[
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(12),
@@ -142,7 +165,9 @@ class _ServiceItemEditScreenState extends ConsumerState<ServiceItemEditScreen> {
                 ),
               ),
               child: Text(
-                'Название из единого справочника AutoHub. Чтобы изменить формулировку для всех организаций — отправьте заявку через «Запросить в справочник» в разделе «Услуги и цены».',
+                mobileNew
+                    ? 'Название из единого справочника MP-Servis. Цену и длительность можно задать ниже.'
+                    : 'Название из единого справочника MP-Servis. Чтобы изменить формулировку для всех организаций — отправьте заявку через «Запросить в справочник» в разделе «Услуги и цены».',
                 style: TextStyle(
                   fontSize: 12,
                   height: 1.35,
@@ -153,18 +178,74 @@ class _ServiceItemEditScreenState extends ConsumerState<ServiceItemEditScreen> {
               ),
             ),
           ],
-          TextField(
-            controller: _nameController,
-            readOnly: widget.existing?.isFromCatalog == true,
-            decoration: InputDecoration(
-              labelText: 'Название услуги',
-              hintText: 'Например: Замена масла',
-              filled: widget.existing?.isFromCatalog == true,
-              fillColor: widget.existing?.isFromCatalog == true
-                  ? (desk ? AppColorsDesktop.nestedBg : AppColors.nestedBg)
-                  : null,
+          if (mobileNew) ...[
+            if (_catalogItem == null)
+              Material(
+                color: AppColors.nestedBg,
+                borderRadius: BorderRadius.circular(12),
+                child: InkWell(
+                  onTap: _openCatalogPicker,
+                  borderRadius: BorderRadius.circular(12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      children: [
+                        Icon(Icons.library_books_outlined, color: AppColors.primary.withValues(alpha: 0.9)),
+                        const SizedBox(width: 14),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Название услуги',
+                                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                'Выберите позицию из справочника (поиск и разделы)',
+                                style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(Icons.chevron_right_rounded, color: AppColors.textSecondary),
+                      ],
+                    ),
+                  ),
+                ),
+              )
+            else ...[
+              TextField(
+                controller: _nameController,
+                readOnly: true,
+                decoration: InputDecoration(
+                  labelText: 'Название услуги',
+                  filled: true,
+                  fillColor: AppColors.nestedBg,
+                ),
+              ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  onPressed: _openCatalogPicker,
+                  child: const Text('Сменить услугу из справочника'),
+                ),
+              ),
+            ],
+          ] else ...[
+            TextField(
+              controller: _nameController,
+              readOnly: widget.existing?.isFromCatalog == true,
+              decoration: InputDecoration(
+                labelText: 'Название услуги',
+                hintText: 'Например: Замена масла',
+                filled: widget.existing?.isFromCatalog == true,
+                fillColor: widget.existing?.isFromCatalog == true
+                    ? (desk ? AppColorsDesktop.nestedBg : AppColors.nestedBg)
+                    : null,
+              ),
             ),
-          ),
+          ],
           const SizedBox(height: 16),
           TextField(
             controller: _priceController,
@@ -338,6 +419,19 @@ class _ServiceItemEditScreenState extends ConsumerState<ServiceItemEditScreen> {
   }
 
   void _save() {
+    final isNew = widget.existing == null;
+    final desk = isDesktopPlatform;
+    final mobileNew = isNew && !desk;
+
+    if (mobileNew) {
+      if (_catalogItem == null || _catalogCat == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Выберите услугу из справочника')),
+        );
+        return;
+      }
+    }
+
     final name = _nameController.text.trim();
     if (name.isEmpty) return;
     final priceRub =
@@ -375,6 +469,16 @@ class _ServiceItemEditScreenState extends ConsumerState<ServiceItemEditScreen> {
           useBodyTypePricing: _useBodyTypePricing,
           bodyTypePricing: bodyPricing,
         ),
+      );
+    } else if (mobileNew && _catalogCat != null && _catalogItem != null) {
+      final catId = repo.categoryIdForCatalogCategory(_catalogCat!);
+      repo.addServiceFromCatalog(
+        categoryId: catId,
+        catalogItemId: _catalogItem!.id,
+        name: _catalogItem!.name,
+        priceKopecks: priceKopecks,
+        durationMinutes: duration,
+        requiredSkill: _requiredSkill ?? _catalogItem!.requiredSkill,
       );
     } else {
       final id = 's_${DateTime.now().millisecondsSinceEpoch}';

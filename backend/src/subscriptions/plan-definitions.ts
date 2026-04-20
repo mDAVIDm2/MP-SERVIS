@@ -5,7 +5,7 @@
 export type SubscriptionPlanKey = 'solo' | 'team' | 'business' | 'pro' | 'network';
 
 export interface SubscriptionPlanLimits {
-  /** Максимум активных сотрудников (staff_members.is_active). Solo = 0. null = без лимита. */
+  /** Максимум активных сотрудников (staff_members.is_active). Solo = 1 (сам владелец как мастер в расписании). null = без лимита. */
   maxActiveStaff: number | null;
   /** Макс. заказов с first_confirmed_at в биллинговом месяце организации. null = без лимита. */
   maxConfirmedOrdersPerMonth: number | null;
@@ -22,7 +22,7 @@ export const SUBSCRIPTION_PLAN_KEYS: SubscriptionPlanKey[] = ['solo', 'team', 'b
 
 export const SUBSCRIPTION_PLANS: Record<SubscriptionPlanKey, SubscriptionPlanLimits> = {
   solo: {
-    maxActiveStaff: 0,
+    maxActiveStaff: 1,
     maxConfirmedOrdersPerMonth: 50,
     maxOrderMediaAttachments: 2,
     maxChatImagesPerMessage: 2,

@@ -7,12 +7,27 @@ import '../chat_repository.dart';
 /// Мок-реализация ChatRepository
 class MockChatRepository implements ChatRepository {
   @override
+  Future<Result<Chat>> openOrganizationChat(String organizationId) async {
+    await _delay();
+    return Result.success(Chat(
+      id: 'mock_org_$organizationId',
+      stoId: organizationId,
+      stoName: 'Сервис',
+      orderId: '',
+      orderNumber: '',
+      carBrand: '—',
+      carModel: '',
+      orderStatus: OrderStatus.pendingConfirmation,
+    ));
+  }
+
+  @override
   Future<Result<Chat>> openSupportChat() async {
     await _delay();
     return Result.success(const Chat(
       id: 'mock_support',
       stoId: '',
-      stoName: 'Поддержка AutoHub',
+      stoName: 'Поддержка MP-Servis',
       orderId: '',
       orderNumber: '',
       carBrand: 'Поддержка',

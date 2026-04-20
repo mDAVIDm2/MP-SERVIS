@@ -43,6 +43,17 @@ export class StaffMember {
   @Column({ type: 'jsonb', default: [] })
   skills: string[];
 
+  /** Вкладка «Чаты» в Business (для мастера/админа по записи персонала). */
+  @Column({ name: 'can_see_chats', default: false })
+  canSeeChats: boolean;
+
+  @Column({ name: 'can_write_chats', default: false })
+  canWriteChats: boolean;
+
+  /** Рабочее время, услуги, комплексы и пр. в настройках организации. */
+  @Column({ name: 'can_manage_org_settings', default: false })
+  canManageOrgSettings: boolean;
+
   @ManyToOne(() => Organization, (o) => o.staff, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'organization_id' })
   organization: Organization;

@@ -22,6 +22,14 @@ export class OrderItem {
   @Column({ name: 'is_additional', default: false })
   isAdditional: boolean;
 
+  /** Id строки услуги в прайсе организации (как в каталоге точки). Цена/время в заказе могут отличаться. */
+  @Column({ name: 'organization_service_id', type: 'varchar', length: 64, nullable: true })
+  organizationServiceId: string | null;
+
+  /** Id позиции общего справочника (`svc_*`). Опционально, дублирует связь через прайс. */
+  @Column({ name: 'catalog_item_id', type: 'varchar', length: 128, nullable: true })
+  catalogItemId: string | null;
+
   @Column({ name: 'order_id' })
   orderId: string;
 

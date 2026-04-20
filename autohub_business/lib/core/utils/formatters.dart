@@ -38,3 +38,11 @@ String formatDurationMinutes(int minutes) {
   if (m == 0) return '$h ч';
   return '$h ч $m мин';
 }
+
+/// Строка под итогом: эквивалентная ставка «руб/ч» по сумме и длительности записи.
+String? formatEquivalentHourlyRateLine(int totalKopecks, int durationMinutes) {
+  if (durationMinutes <= 0) return null;
+  final koph = (totalKopecks * 60 + durationMinutes ~/ 2) ~/ durationMinutes;
+  if (koph <= 0) return null;
+  return '≈ ${formatMoney(koph)}/ч';
+}

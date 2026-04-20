@@ -80,6 +80,18 @@ let InternalOrganizationsController = class InternalOrganizationsController {
             subscription_usage,
         };
     }
+    async deletePhotos(id, all, url) {
+        if (all === '1' || all === 'true') {
+            await this.org.clearAllOrganizationPhotos(id);
+            return { ok: true };
+        }
+        const u = String(url || '').trim();
+        if (u.length > 0) {
+            const ok = await this.org.removePhoto(id, u);
+            return { ok };
+        }
+        throw new common_1.BadRequestException('Укажите query all=1 или url=<полный URL фото>');
+    }
     async update(id, body) {
         const updated = await this.org.update(id, {
             name: body.name,
@@ -110,6 +122,15 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", Promise)
 ], InternalOrganizationsController.prototype, "getOne", null);
+__decorate([
+    (0, common_1.Delete)(':id/photos'),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Query)('all')),
+    __param(2, (0, common_1.Query)('url')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String]),
+    __metadata("design:returntype", Promise)
+], InternalOrganizationsController.prototype, "deletePhotos", null);
 __decorate([
     (0, common_1.Patch)(':id'),
     __param(0, (0, common_1.Param)('id')),

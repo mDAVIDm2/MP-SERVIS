@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/api/internal_data_providers.dart';
 import '../../../core/constants/labels_ru.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/utils/media_url_resolver.dart';
+import '../../../shared/widgets/cc_auth_network_image.dart';
 import '../sections/section_scaffold.dart';
 
 class UsersScreen extends ConsumerStatefulWidget {
@@ -110,11 +113,18 @@ class _UserList extends StatelessWidget {
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (context, index) {
         final e = items[index];
+        final id = e['id'] as String? ?? '';
         final name = e['name'] as String? ?? '—';
         final phone = e['phone'] as String? ?? '—';
         final roleLabel = e['role_label'] as String? ?? LabelsRu.userRole(e['role'] as String?);
         final orgName = e['organization_name'] as String? ?? '';
-        return Container(
+        final avatarUrl = internalAvatarImageUrl(e['avatar_url'] as String?);
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: id.isEmpty ? null : () => context.go('/app/users/$id'),
+            child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             color: AppColors.surface,
@@ -130,18 +140,39 @@ class _UserList extends StatelessWidget {
           ),
           child: Row(
             children: [
-              CircleAvatar(
-                backgroundColor: typeLabel == 'Бизнес'
-                    ? AppColors.primary.withValues(alpha: 0.12)
-                    : AppColors.textSecondary.withValues(alpha: 0.12),
-                child: Text(
-                  name.isNotEmpty ? name[0].toUpperCase() : '?',
-                  style: TextStyle(
-                    color: typeLabel == 'Бизнес' ? AppColors.primary : AppColors.textSecondary,
-                    fontWeight: FontWeight.w600,
+              if (avatarUrl != null)
+                CcAuthNetworkImage(
+                  url: avatarUrl,
+                  width: 48,
+                  height: 48,
+                  borderRadius: BorderRadius.circular(24),
+                  fit: BoxFit.cover,
+                  placeholder: CircleAvatar(
+                    backgroundColor: typeLabel == 'Бизнес'
+                        ? AppColors.primary.withValues(alpha: 0.12)
+                        : AppColors.textSecondary.withValues(alpha: 0.12),
+                    child: Text(
+                      name.isNotEmpty ? name[0].toUpperCase() : '?',
+                      style: TextStyle(
+                        color: typeLabel == 'Бизнес' ? AppColors.primary : AppColors.textSecondary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                )
+              else
+                CircleAvatar(
+                  backgroundColor: typeLabel == 'Бизнес'
+                      ? AppColors.primary.withValues(alpha: 0.12)
+                      : AppColors.textSecondary.withValues(alpha: 0.12),
+                  child: Text(
+                    name.isNotEmpty ? name[0].toUpperCase() : '?',
+                    style: TextStyle(
+                      color: typeLabel == 'Бизнес' ? AppColors.primary : AppColors.textSecondary,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
-              ),
               const SizedBox(width: 16),
               Expanded(
                 child: Column(
@@ -179,6 +210,8 @@ class _UserList extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+            ),
           ),
         );
       },

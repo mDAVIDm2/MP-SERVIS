@@ -18,13 +18,15 @@ const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const push_device_entity_1 = require("./push-device.entity");
 const notification_entity_1 = require("./notification.entity");
+const staff_member_entity_1 = require("../organizations/staff-member.entity");
 const fcm_push_service_1 = require("./fcm-push.service");
 const users_service_1 = require("../users/users.service");
 const client_notification_preferences_1 = require("./client-notification-preferences");
 let NotificationsService = class NotificationsService {
-    constructor(pushRepo, notificationRepo, fcm, users) {
+    constructor(pushRepo, notificationRepo, staffRepo, fcm, users) {
         this.pushRepo = pushRepo;
         this.notificationRepo = notificationRepo;
+        this.staffRepo = staffRepo;
         this.fcm = fcm;
         this.users = users;
     }
@@ -58,7 +60,7 @@ let NotificationsService = class NotificationsService {
             userId: params.userId,
             type: 'organization_invite',
             title: `Приглашение в «${params.organizationName}»`,
-            body: `Роль: ${params.role}. Откройте AutoHub Business → Профиль → Входящие приглашения.`,
+            body: `Роль: ${params.role}. Откройте MP-Servis Business → Профиль → Входящие приглашения.`,
             payload: {
                 invitation_id: params.invitationId,
                 organization_id: params.organizationId,
@@ -94,6 +96,30 @@ let NotificationsService = class NotificationsService {
         if (!userId)
             return null;
         return this.create({ userId, ...data });
+    }
+    async notifyOrganizationStaffOrderEvent(organizationId, data) {
+        const oid = (organizationId || '').trim();
+        if (!oid)
+            return;
+        const staff = await this.staffRepo.find({
+            where: { organizationId: oid, isActive: true },
+            select: ['userId'],
+        });
+        const userIds = [
+            ...new Set(staff
+                .map((s) => (s.userId ?? '').trim())
+                .filter((id) => id.length > 0)),
+        ];
+        const basePayload = { ...data.payload, organization_id: oid };
+        for (const userId of userIds) {
+            await this.create({
+                userId,
+                type: 'order',
+                title: data.title,
+                body: data.body,
+                payload: basePayload,
+            });
+        }
     }
     async createOrRefreshChatMessageForClientPhone(phoneDigits, data) {
         const userId = await this.users.findIdByNormalizedPhone(phoneDigits);
@@ -293,8 +319,10 @@ exports.NotificationsService = NotificationsService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(push_device_entity_1.PushDevice)),
     __param(1, (0, typeorm_1.InjectRepository)(notification_entity_1.Notification)),
-    __param(3, (0, common_1.Inject)((0, common_1.forwardRef)(() => users_service_1.UsersService))),
+    __param(2, (0, typeorm_1.InjectRepository)(staff_member_entity_1.StaffMember)),
+    __param(4, (0, common_1.Inject)((0, common_1.forwardRef)(() => users_service_1.UsersService))),
     __metadata("design:paramtypes", [typeorm_2.Repository,
+        typeorm_2.Repository,
         typeorm_2.Repository,
         fcm_push_service_1.FcmPushService,
         users_service_1.UsersService])

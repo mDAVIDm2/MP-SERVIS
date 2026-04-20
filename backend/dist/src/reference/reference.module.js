@@ -20,6 +20,7 @@ const reference_service_1 = require("./reference.service");
 const service_catalog_service_1 = require("./service-catalog.service");
 const notifications_module_1 = require("../notifications/notifications.module");
 const organization_entity_1 = require("../organizations/organization.entity");
+const client_car_entity_1 = require("../users/client-car.entity");
 let ReferenceModule = class ReferenceModule {
 };
 exports.ReferenceModule = ReferenceModule;
@@ -34,6 +35,7 @@ exports.ReferenceModule = ReferenceModule = __decorate([
                 service_catalog_item_entity_1.ServiceCatalogItem,
                 service_catalog_suggestion_entity_1.ServiceCatalogSuggestion,
                 organization_entity_1.Organization,
+                client_car_entity_1.ClientCar,
             ]),
             (0, common_1.forwardRef)(() => notifications_module_1.NotificationsModule),
         ],

@@ -35,7 +35,11 @@ exports.AppModule = AppModule = __decorate([
                 envFilePath: (0, path_1.join)(process.cwd(), '.env'),
             }),
             schedule_1.ScheduleModule.forRoot(),
-            typeorm_1.TypeOrmModule.forRoot(typeorm_config_1.typeOrmConfig),
+            typeorm_1.TypeOrmModule.forRootAsync({
+                imports: [config_1.ConfigModule],
+                useFactory: (config) => (0, typeorm_config_1.getTypeOrmModuleOptions)(config.get('DATABASE_URL') ?? undefined),
+                inject: [config_1.ConfigService],
+            }),
             throttler_1.ThrottlerModule.forRoot({
                 throttlers: [{ name: 'default', ttl: 60000, limit: 120 }],
             }),

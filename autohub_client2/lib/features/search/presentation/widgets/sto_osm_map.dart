@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/map/in_app_map_tiles.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../shared/models/external_poi.dart';
 import '../../../../shared/models/sto_model.dart';
@@ -38,6 +40,9 @@ class STOOSMMap extends StatefulWidget {
   final void Function(LatLng center, double zoom)? onCameraChanged;
   final void Function(MapController controller)? onControllerReady;
   final VisibleBoundsCallback? onVisibleBoundsChanged;
+  /// Шаблон тайлов (по умолчанию Carto Voyager).
+  final String tileUrlTemplate;
+  final List<String> tileSubdomains;
 
   const STOOSMMap({
     super.key,
@@ -53,6 +58,8 @@ class STOOSMMap extends StatefulWidget {
     this.onCameraChanged,
     this.onControllerReady,
     this.onVisibleBoundsChanged,
+    this.tileUrlTemplate = InAppMapTiles.voyagerTemplate,
+    this.tileSubdomains = InAppMapTiles.voyagerSubdomains,
   });
 
   @override
@@ -68,8 +75,19 @@ class _STOOSMMapState extends State<STOOSMMap> {
   static const Duration _boundsDebounceDuration = Duration(milliseconds: 900);
   static const double _labelZoomThreshold = 15.0;
   static const int _maxLabels = 12;
-  /// Ограничение числа маркеров на карте, чтобы не подвисать при сотнях POI.
-  static const int _maxVisibleMarkers = 120;
+  /// Ограничение числа маркеров на карте (точки при отдалении дешёвые в отрисовке).
+  static const int _maxVisibleMarkers = 220;
+
+  /// При отдалении маркеры остаются маленькими точками (экранный размер), иначе «закрывают» карту.
+  static double _markerSizeFactor(double zoom) {
+    const zLo = 9.0;
+    const zHi = 15.0;
+    const minF = 0.26;
+    const maxF = 1.0;
+    if (zoom >= zHi) return maxF;
+    if (zoom <= zLo) return minF;
+    return minF + (zoom - zLo) / (zHi - zLo) * (maxF - minF);
+  }
 
   List<Marker>? _cachedMarkers;
   int _cachedPartnersLength = -1;
@@ -187,25 +205,35 @@ class _STOOSMMapState extends State<STOOSMMap> {
         final dB = _distanceKm(centerLat, centerLng, b.lat, b.lng);
         return dA.compareTo(dB);
       });
-      final maxExternal = _maxVisibleMarkers - partnerEntries.length;
-      final visibleExternal = maxExternal <= 0 ? <_MapEntry>[] : (externalEntries.length > maxExternal ? externalEntries.sublist(0, maxExternal) : externalEntries);
-      final visiblePartners = partnerEntries;
+      // Партнёры не должны съедать весь лимит маркеров, иначе слой «непартнёрские» пустой при 120+ точках API.
+      const minExternalSlots = 64;
+      final partnerLimit = widget.externals.isEmpty
+          ? partnerEntries.length
+          : math.min(partnerEntries.length, _maxVisibleMarkers - minExternalSlots);
+      final visiblePartners =
+          partnerEntries.length > partnerLimit ? partnerEntries.sublist(0, partnerLimit) : partnerEntries;
+      final maxExternal = _maxVisibleMarkers - visiblePartners.length;
+      final visibleExternal = maxExternal <= 0
+          ? <_MapEntry>[]
+          : (externalEntries.length > maxExternal ? externalEntries.sublist(0, maxExternal) : externalEntries);
       final withLabelIds = showLabels
           ? [...visiblePartners.take(_maxLabels), ...visibleExternal.take(_maxLabels)].take(_maxLabels).map((e) => e.id).toSet()
           : <String>{};
 
+      final zf = _markerSizeFactor(_currentZoom);
       final List<Marker> markers = [];
       for (final entry in visibleExternal) {
         final poi = entry.data as ExternalPOI;
         final showLabel = withLabelIds.contains(poi.id);
+        final ext = _TeardropPinWidget.layoutExtent(showLabel: showLabel, name: poi.name, sizeFactor: zf);
         markers.add(Marker(
           point: LatLng(poi.lat, poi.lng),
-          width: showLabel ? 72 : 24,
-          height: 24,
-          alignment: Alignment.center,
+          width: ext.width,
+          height: ext.height,
+          alignment: Alignment.bottomCenter,
           child: GestureDetector(
             onTap: () => widget.onExternalTap(poi),
-            child: _RedPinWidget(showLabel: showLabel, name: poi.name, types: poi.types, fixedSize: true),
+            child: _TeardropPinWidget(showLabel: showLabel, name: poi.name, types: poi.types, sizeFactor: zf),
           ),
         ));
       }
@@ -213,19 +241,29 @@ class _STOOSMMapState extends State<STOOSMMap> {
           final sto = entry.data as STO;
           final showLabel = withLabelIds.contains(sto.id);
           final showBadge = sto.totalSelectedPriceKopecks != null && sto.totalSelectedPriceKopecks! > 0;
+          final imageUrl = (sto.logoUrl != null && sto.logoUrl!.isNotEmpty)
+              ? sto.logoUrl
+              : (sto.photoUrls.isNotEmpty ? sto.photoUrls.first : null);
+          final part = _PartnerMarkerWidget.layoutExtent(
+            showLabel: showLabel,
+            name: sto.name,
+            showBadge: showBadge,
+            sizeFactor: zf,
+          );
           markers.add(Marker(
             point: LatLng(sto.latitude!, sto.longitude!),
-            width: showLabel ? 116 : (showBadge ? 84 : 44),
-            height: showBadge ? 72 : 44,
+            width: part.width,
+            height: part.height,
             alignment: Alignment.topCenter,
             child: GestureDetector(
               onTap: () => widget.onPartnerTap(sto),
               child: _PartnerMarkerWidget(
-                imageUrl: (sto.logoUrl != null && sto.logoUrl!.isNotEmpty) ? sto.logoUrl : (sto.photoUrls.isNotEmpty ? sto.photoUrls.first : null),
+                imageUrl: imageUrl,
                 showLabel: showLabel,
                 name: sto.name,
                 totalSelectedPriceKopecks: sto.totalSelectedPriceKopecks,
                 totalSelectedDurationMinutes: sto.totalSelectedDurationMinutes,
+                sizeFactor: zf,
               ),
             ),
           ));
@@ -273,16 +311,15 @@ class _STOOSMMapState extends State<STOOSMMap> {
         ),
         children: [
           TileLayer(
-            urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-            userAgentPackageName: 'com.autohub.client',
+            urlTemplate: widget.tileUrlTemplate,
+            subdomains: widget.tileSubdomains,
+            userAgentPackageName: 'ru.mpservis.client',
           ),
           MarkerLayer(markers: _buildMarkers()),
           RichAttributionWidget(
             animationConfig: const ScaleRAWA(),
             showFlutterMapAttribution: false,
-            attributions: [
-              TextSourceAttribution('© OpenStreetMap'),
-            ],
+            attributions: InAppMapTiles.attributions(),
           ),
         ],
       ),
@@ -300,61 +337,183 @@ class _MapEntry {
   _MapEntry(this.lat, this.lng, {required this.id, required this.name, required this.isPartner, required this.data});
 }
 
-class _RedPinWidget extends StatelessWidget {
+class _LayoutExtent {
+  final double width;
+  final double height;
+  const _LayoutExtent(this.width, this.height);
+}
+
+/// Стиль заливки и контраста иконки для непартнёрской точки.
+class _ExternalMarkerPalette {
+  const _ExternalMarkerPalette({required this.fill, required this.darkIcon});
+  final Color fill;
+  /// true — тёмная иконка (на жёлтом фоне).
+  final bool darkIcon;
+}
+
+/// СТО — красный, мойки — синий, шиномонтаж — зелёный, остальные категории — жёлтый.
+_ExternalMarkerPalette _paletteForExternalTypes(List<String> types) {
+  if (types.any((t) => t.contains('Мойка'))) {
+    return const _ExternalMarkerPalette(fill: Color(0xFF1565C0), darkIcon: false);
+  }
+  if (types.any((t) => t == 'Шиномонтаж')) {
+    return const _ExternalMarkerPalette(fill: Color(0xFF2E7D32), darkIcon: false);
+  }
+  if (types.any((t) => t == 'Автосервис')) {
+    return const _ExternalMarkerPalette(fill: Color(0xFFC62828), darkIcon: false);
+  }
+  return const _ExternalMarkerPalette(fill: Color(0xFFF9A825), darkIcon: true);
+}
+
+/// Непартнёрские точки: округлая «шапка» + сужение к острию (не «глаз»), остриё на координате ([Marker.alignment] = bottomCenter).
+class _TeardropPinWidget extends StatelessWidget {
   final bool showLabel;
   final String name;
   final List<String> types;
-  final bool fixedSize;
+  final double sizeFactor;
 
-  const _RedPinWidget({required this.showLabel, required this.name, this.types = const [], this.fixedSize = true});
+  const _TeardropPinWidget({
+    required this.showLabel,
+    required this.name,
+    this.types = const [],
+    this.sizeFactor = 1.0,
+  });
+
+  static const double _baseW = 19.0;
+  static const double _baseH = 26.0;
+  static const double _baseLabelW = 44.0;
+
+  static _LayoutExtent layoutExtent({required bool showLabel, required String name, required double sizeFactor}) {
+    final wDrop = (_baseW * sizeFactor).clamp(10.0, _baseW);
+    final hDrop = (_baseH * sizeFactor).clamp(14.0, _baseH);
+    final labelW = (_baseLabelW * sizeFactor).clamp(24.0, _baseLabelW);
+    final gap = 3 * sizeFactor;
+    final labelLine = (11 * sizeFactor).clamp(8.0, 11.0);
+    final labelBlock = showLabel && name.isNotEmpty ? labelLine + gap : 0.0;
+    final totalW = showLabel && name.isNotEmpty ? math.max(wDrop, labelW) : wDrop;
+    final totalH = hDrop + labelBlock;
+    return _LayoutExtent(totalW, totalH);
+  }
 
   static IconData _iconForTypes(List<String> types) {
-    if (types.contains('Мойка')) return Icons.water_drop_rounded;
+    if (types.any((t) => t.contains('Мойка'))) return Icons.water_drop_rounded;
     if (types.contains('Шиномонтаж')) return Icons.tire_repair_rounded;
     return Icons.build_rounded;
   }
 
-  static const double _pinSize = 22.0;
-  static const double _labelWidth = 44.0;
-
   @override
   Widget build(BuildContext context) {
+    final palette = _paletteForExternalTypes(types);
     final icon = _iconForTypes(types);
-    return SizedBox(
-      width: showLabel ? (_pinSize + 2 + _labelWidth) : _pinSize,
-      height: _pinSize,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: _pinSize,
-            height: _pinSize,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: AppColors.error,
-              border: Border.all(color: Colors.white, width: 1),
-              boxShadow: [
-                BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 2, offset: const Offset(0, 1)),
-              ],
-            ),
-            child: Icon(icon, color: Colors.white, size: 12),
-          ),
-          if (showLabel && name.isNotEmpty) ...[
-            const SizedBox(width: 2),
-            SizedBox(
-              width: _labelWidth,
-              child: Text(
-                name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 8, color: AppColors.textPrimary, fontWeight: FontWeight.w500),
-              ),
-            ),
-          ],
-        ],
+    final wDrop = (_baseW * sizeFactor).clamp(10.0, _baseW);
+    final hDrop = (_baseH * sizeFactor).clamp(14.0, _baseH);
+    final labelW = (_baseLabelW * sizeFactor).clamp(24.0, _baseLabelW);
+    final gap = 3 * sizeFactor;
+    final iconSize = (11 * sizeFactor).clamp(6.0, 11.0);
+    final fontSize = (8 * sizeFactor).clamp(6.0, 8.0);
+    final iconColor = palette.darkIcon ? const Color(0xFF263238) : Colors.white;
+
+    final drop = SizedBox(
+      width: wDrop,
+      height: hDrop,
+      child: CustomPaint(
+        painter: _BulbTaperPinPainter(
+          fill: palette.fill,
+          border: Colors.white,
+          borderWidth: math.max(0.85, 1.05 * sizeFactor),
+        ),
+        child: Align(
+          alignment: const Alignment(0, -0.74),
+          child: Icon(icon, color: iconColor, size: iconSize),
+        ),
       ),
     );
+
+    if (!showLabel || name.isEmpty) {
+      return drop;
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        SizedBox(
+          width: math.max(wDrop, labelW),
+          child: Text(
+            name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: fontSize, color: context.palette.textPrimary, fontWeight: FontWeight.w600),
+          ),
+        ),
+        SizedBox(height: gap),
+        drop,
+      ],
+    );
   }
+}
+
+/// Круглая верхняя часть (дуга) + плавное сужение к нижнему острию.
+class _BulbTaperPinPainter extends CustomPainter {
+  final Color fill;
+  final Color border;
+  final double borderWidth;
+
+  _BulbTaperPinPainter({
+    required this.fill,
+    required this.border,
+    required this.borderWidth,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    final cx = w * 0.5;
+    final headR = w * 0.46;
+    final headCy = headR;
+
+    final path = ui.Path();
+    path.moveTo(cx, h);
+    path.cubicTo(
+      cx + headR * 1.06,
+      h * 0.42,
+      cx + headR * 0.98,
+      headCy + headR * 0.06,
+      cx + headR,
+      headCy,
+    );
+    path.arcTo(
+      Rect.fromCircle(center: Offset(cx, headCy), radius: headR),
+      0,
+      -math.pi,
+      false,
+    );
+    path.cubicTo(
+      cx - headR * 0.98,
+      headCy + headR * 0.06,
+      cx - headR * 1.06,
+      h * 0.42,
+      cx,
+      h,
+    );
+    path.close();
+
+    canvas.drawShadow(path, Colors.black.withValues(alpha: 0.26), 2.0, false);
+    canvas.drawPath(path, Paint()..color = fill);
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = border
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = borderWidth,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _BulbTaperPinPainter oldDelegate) =>
+      oldDelegate.fill != fill || oldDelegate.border != border || oldDelegate.borderWidth != borderWidth;
 }
 
 class _PartnerMarkerWidget extends StatelessWidget {
@@ -363,6 +522,7 @@ class _PartnerMarkerWidget extends StatelessWidget {
   final String name;
   final int? totalSelectedPriceKopecks;
   final int? totalSelectedDurationMinutes;
+  final double sizeFactor;
 
   const _PartnerMarkerWidget({
     this.imageUrl,
@@ -370,7 +530,29 @@ class _PartnerMarkerWidget extends StatelessWidget {
     required this.name,
     this.totalSelectedPriceKopecks,
     this.totalSelectedDurationMinutes,
+    this.sizeFactor = 1.0,
   });
+
+  static const double _basePin = 40.0;
+  static const double _baseLabelW = 66.0;
+
+  static _LayoutExtent layoutExtent({
+    required bool showLabel,
+    required String name,
+    required bool showBadge,
+    required double sizeFactor,
+  }) {
+    final pin = (_basePin * sizeFactor).clamp(10.0, _basePin);
+    final labelW = (_baseLabelW * sizeFactor).clamp(36.0, _baseLabelW);
+    final gap = 4 * sizeFactor;
+    final rowW = showLabel && name.isNotEmpty ? pin + gap + labelW : pin;
+    final badgeVisible = showBadge && sizeFactor >= 0.72;
+    // Отступ под бейдж + вертикальные отступы контейнера + строка текста (~9–11 sp).
+    final badgeH = badgeVisible ? (2 * sizeFactor + 4 * sizeFactor + 12 * sizeFactor) : 0.0;
+    final h = pin + badgeH;
+    final w = badgeVisible ? math.max(rowW, 80 * sizeFactor) : rowW;
+    return _LayoutExtent(w, h);
+  }
 
   static String _money(int kopecks) {
     if (kopecks >= 100) return '${(kopecks / 100).toStringAsFixed(0)} ₽';
@@ -379,80 +561,101 @@ class _PartnerMarkerWidget extends StatelessWidget {
 
   static String _duration(int minutes) => Formatters.durationMinutes(minutes);
 
-  static const double _pinSize = 40.0;
-
   @override
   Widget build(BuildContext context) {
     final showBadge = totalSelectedPriceKopecks != null && totalSelectedPriceKopecks! > 0;
+    final pin = (_basePin * sizeFactor).clamp(10.0, _basePin);
+    final labelW = (_baseLabelW * sizeFactor).clamp(36.0, _baseLabelW);
+    final gap = 4 * sizeFactor;
+    final borderW = math.max(1.0, 2 * sizeFactor);
+    final innerPad = math.max(1.0, 2 * sizeFactor);
+    final iconSize = (20 * sizeFactor).clamp(10.0, 20.0);
+    final labelFont = (11 * sizeFactor).clamp(7.0, 11.0);
+    final loadImage = sizeFactor >= 0.5 && imageUrl != null && imageUrl!.isNotEmpty;
+    final badgeVisible = showBadge && sizeFactor >= 0.72;
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       mainAxisAlignment: MainAxisAlignment.start,
       children: [
         SizedBox(
-          width: showLabel ? 110 : _pinSize,
-          height: _pinSize,
+          width: showLabel && name.isNotEmpty ? pin + gap + labelW : pin,
+          height: pin,
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: _pinSize,
-                height: _pinSize,
+                width: pin,
+                height: pin,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  border: Border.all(color: AppColors.success, width: 2),
+                  border: Border.all(color: context.palette.success, width: borderW),
                   boxShadow: [
-                    BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 4, offset: const Offset(0, 1)),
+                    BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 4 * sizeFactor, offset: Offset(0, sizeFactor)),
                   ],
                 ),
-                padding: const EdgeInsets.all(2),
+                padding: EdgeInsets.all(innerPad),
                 child: ClipOval(
-                  child: imageUrl != null && imageUrl!.isNotEmpty
+                  child: loadImage
                       ? CachedNetworkImage(
                           imageUrl: imageUrl!,
                           fit: BoxFit.cover,
-                          width: _pinSize - 4,
-                          height: _pinSize - 4,
-                          placeholder: (context, url) => const Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))),
-                          errorWidget: (context, error, stackTrace) => _iconContent(),
+                          width: pin - 2 * innerPad,
+                          height: pin - 2 * innerPad,
+                          placeholder: (context, url) => Center(
+                            child: SizedBox(
+                              width: 18 * sizeFactor,
+                              height: 18 * sizeFactor,
+                              child: const CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          ),
+                          errorWidget: (ctx, error, stackTrace) => _iconContent(ctx, iconSize),
                         )
-                      : _iconContent(),
+                      : _iconContent(context, iconSize),
                 ),
               ),
               if (showLabel && name.isNotEmpty) ...[
-                const SizedBox(width: 4),
-                Flexible(
+                SizedBox(width: gap),
+                SizedBox(
+                  width: labelW,
                   child: Text(
                     name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 11, color: Colors.black, fontWeight: FontWeight.w700),
+                    style: TextStyle(fontSize: labelFont, color: Colors.black, fontWeight: FontWeight.w700),
                   ),
                 ),
               ],
             ],
           ),
         ),
-        if (showBadge) ...[
-          const SizedBox(height: 2),
+        if (badgeVisible) ...[
+          SizedBox(height: 2 * sizeFactor),
           Container(
-            constraints: const BoxConstraints(maxWidth: 80),
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            constraints: BoxConstraints(maxWidth: 80 * sizeFactor),
+            padding: EdgeInsets.symmetric(horizontal: 4 * sizeFactor, vertical: 2 * sizeFactor),
             decoration: BoxDecoration(
               color: const Color(0xFFE65100),
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(10 * sizeFactor),
               boxShadow: [
-                BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 2, offset: const Offset(0, 1)),
+                BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 2, offset: Offset(0, sizeFactor)),
               ],
             ),
             child: Wrap(
-              spacing: 2,
+              spacing: 2 * sizeFactor,
               runSpacing: 0,
               alignment: WrapAlignment.center,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                Text(_money(totalSelectedPriceKopecks!), style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: Colors.white)),
-                const Text('·', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: Colors.white)),
-                Text(_duration(totalSelectedDurationMinutes ?? 0), style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: Colors.white)),
+                Text(
+                  _money(totalSelectedPriceKopecks!),
+                  style: TextStyle(fontSize: (9 * sizeFactor).clamp(7.0, 9.0), fontWeight: FontWeight.w600, color: Colors.white),
+                ),
+                Text('·', style: TextStyle(fontSize: (9 * sizeFactor).clamp(7.0, 9.0), fontWeight: FontWeight.w600, color: Colors.white)),
+                Text(
+                  _duration(totalSelectedDurationMinutes ?? 0),
+                  style: TextStyle(fontSize: (9 * sizeFactor).clamp(7.0, 9.0), fontWeight: FontWeight.w600, color: Colors.white),
+                ),
               ],
             ),
           ),
@@ -461,11 +664,12 @@ class _PartnerMarkerWidget extends StatelessWidget {
     );
   }
 
-  Widget _iconContent() {
+  Widget _iconContent(BuildContext context, double iconSize) {
+    final p = context.palette;
     return Container(
-      color: AppColors.surface,
-      child: const Center(
-        child: Icon(Icons.key_rounded, size: 20, color: AppColors.success),
+      color: p.surface,
+      child: Center(
+        child: Icon(Icons.key_rounded, size: iconSize, color: p.success),
       ),
     );
   }

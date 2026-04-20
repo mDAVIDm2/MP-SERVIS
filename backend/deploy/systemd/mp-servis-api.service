@@ -1,0 +1,21 @@
+[Unit]
+Description=MP-Servis API (NestJS)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=mpservis
+Group=mpservis
+WorkingDirectory=/opt/mp-servis/api
+Environment=NODE_ENV=production
+EnvironmentFile=-/opt/mp-servis/api/.env
+ExecStart=/usr/bin/node dist/src/main.js
+Restart=always
+RestartSec=5
+# Логи: journalctl -u mp-servis-api -f
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

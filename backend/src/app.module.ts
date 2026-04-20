@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -14,7 +14,7 @@ import { BookingModule } from './booking/booking.module';
 import { DatabaseModule } from './database/database.module';
 import { ReferenceModule } from './reference/reference.module';
 import { InternalModule } from './internal/internal.module';
-import { typeOrmConfig } from './database/typeorm.config';
+import { getTypeOrmModuleOptions } from './database/typeorm.config';
 
 @Module({
   imports: [
@@ -23,7 +23,12 @@ import { typeOrmConfig } from './database/typeorm.config';
       envFilePath: join(process.cwd(), '.env'),
     }),
     ScheduleModule.forRoot(),
-    TypeOrmModule.forRoot(typeOrmConfig as any),
+    TypeOrmModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: (config: ConfigService) =>
+        getTypeOrmModuleOptions(config.get<string>('DATABASE_URL') ?? undefined),
+      inject: [ConfigService],
+    }),
     ThrottlerModule.forRoot({
       throttlers: [{ name: 'default', ttl: 60000, limit: 120 }],
     }),

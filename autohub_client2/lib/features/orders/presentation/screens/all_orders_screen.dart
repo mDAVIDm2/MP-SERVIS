@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/providers/app_providers.dart';
 import '../../../../core/settings/filter_by_car_setting.dart';
 import '../../../../shared/models/car_model.dart';
@@ -56,10 +56,10 @@ class _AllOrdersScreenState extends ConsumerState<AllOrdersScreen> {
     final orders = _filtered..sort((a, b) => b.dateTime.compareTo(a.dateTime));
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       appBar: AppBar(
-        backgroundColor: AppColors.background,
-        title: const Text('Все заказы', style: TextStyle(
+        backgroundColor: context.palette.background,
+        title: Text('Все заказы', style: TextStyle(
           fontSize: 18, fontWeight: FontWeight.w600,
         )),
       ),
@@ -72,7 +72,7 @@ class _AllOrdersScreenState extends ConsumerState<AllOrdersScreen> {
               height: 40,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppColors.border),
+                border: Border.all(color: context.palette.border),
               ),
               child: Row(
                 children: [
@@ -90,7 +90,7 @@ class _AllOrdersScreenState extends ConsumerState<AllOrdersScreen> {
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
               itemCount: _orgKindChips.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              separatorBuilder: (_, __) => SizedBox(width: 8),
               itemBuilder: (_, i) {
                 final active = i == _orgKindChipIndex.clamp(0, _orgKindChips.length - 1);
                 return GestureDetector(
@@ -99,16 +99,16 @@ class _AllOrdersScreenState extends ConsumerState<AllOrdersScreen> {
                     padding: const EdgeInsets.symmetric(horizontal: 14),
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: active ? AppColors.primary : Colors.transparent,
+                      color: active ? context.palette.primary : Colors.transparent,
                       borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: active ? AppColors.primary : AppColors.border),
+                      border: Border.all(color: active ? context.palette.primary : context.palette.border),
                     ),
                     child: Text(
                       _orgKindChips[i].label,
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
-                        color: active ? const Color(0xFF0D0D0D) : AppColors.textSecondary,
+                        color: active ? context.palette.onAccent : context.palette.textSecondary,
                       ),
                     ),
                   ),
@@ -118,19 +118,19 @@ class _AllOrdersScreenState extends ConsumerState<AllOrdersScreen> {
           ),
           Expanded(
             child: orders.isEmpty
-                ? const Center(
+                ? Center(
                     child: Text('Нет заказов', style: TextStyle(
-                      fontSize: 16, color: AppColors.textSecondary,
+                      fontSize: 16, color: context.palette.textSecondary,
                     )),
                   )
                 : RefreshIndicator(
                     onRefresh: () => ref.read(ordersProvider.notifier).loadOrders(),
-                    color: AppColors.primary,
+                    color: context.palette.primary,
                     child: ListView.separated(
                       physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
                       itemCount: orders.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 8),
+                      separatorBuilder: (_, __) => SizedBox(height: 8),
                       itemBuilder: (_, i) {
                         final order = orders[i];
                         final cars = ref.watch(carsProvider).valueOrNull ?? [];
@@ -169,12 +169,12 @@ class _TabBtn extends StatelessWidget {
         child: Container(
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: active ? AppColors.primary : Colors.transparent,
+            color: active ? context.palette.primary : Colors.transparent,
             borderRadius: BorderRadius.circular(9),
           ),
           child: Text(label, style: TextStyle(
             fontSize: 14, fontWeight: FontWeight.w600,
-            color: active ? const Color(0xFF0D0D0D) : AppColors.textSecondary,
+            color: active ? context.palette.onAccent : context.palette.textSecondary,
           )),
         ),
       ),

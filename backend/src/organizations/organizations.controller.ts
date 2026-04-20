@@ -2,21 +2,21 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
+  NotFoundException,
   Query,
   Param,
   Patch,
   Post,
   Req,
-  Res,
   UseGuards,
   UseInterceptors,
   UploadedFile,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { Response } from 'express';
 import { User } from '../users/user.entity';
 import { OrganizationsService } from './organizations.service';
 
@@ -48,6 +48,7 @@ export class OrganizationsController {
     @Body() body: { plan_key?: string; keep_active_staff_ids?: string[] },
   ) {
     this.assertActiveOrganizationAccess(req.user, id);
+    this.org.ensureCallerCanManageOrganizationStaff(req.user);
     const pk = body?.plan_key?.trim();
     if (!pk) throw new BadRequestException('Укажите plan_key');
     return this.org.applySubscriptionPlanWithActiveStaff(id, {
@@ -88,12 +89,18 @@ export class OrganizationsController {
     return result;
   }
 
-  @Get(':id/photos/:filename')
-  async getPhotoFile(@Param('id') id: string, @Param('filename') filename: string, @Req() req: { user: User }, @Res() res: Response) {
+  @Delete(':id/photos')
+  async deletePhoto(
+    @Param('id') id: string,
+    @Req() req: { user: User },
+    @Body() body: { url?: string },
+  ) {
     this.assertActiveOrganizationAccess(req.user, id);
-    const filePath = await this.org.getPhotoPath(id, filename);
-    if (!filePath) return res.status(404).send('Not found');
-    return res.sendFile(filePath);
+    const url = typeof body?.url === 'string' ? body.url.trim() : '';
+    if (!url) throw new BadRequestException('Укажите url фото');
+    const ok = await this.org.removePhoto(id, url);
+    if (!ok) throw new NotFoundException('Фото не найдено или уже удалено');
+    return { ok: true };
   }
 
   @Patch(':id')
@@ -115,6 +122,7 @@ export class OrganizationsController {
     this.assertActiveOrganizationAccess(req.user, id);
     const o = await this.org.update(id, body);
     if (!o) throw new Error('Not found');
+    const subscription_usage = await this.org.getSubscriptionUsageSummary(id);
     return {
       name: o.name,
       address: o.address,
@@ -125,13 +133,14 @@ export class OrganizationsController {
       longitude: (o as any).longitude ?? null,
       business_kind: (o as any).businessKind ?? 'sto',
       scheduling_mode: (o as any).schedulingMode ?? 'staff_based',
+      subscription_usage,
     };
   }
 
   @Get(':id/staff')
   async getStaff(@Param('id') id: string, @Req() req: { user: User }) {
     this.assertActiveOrganizationAccess(req.user, id);
-    return this.org.getStaff(id);
+    return this.org.getStaffForCaller(id, req.user);
   }
 
   @Post(':id/staff/add-me-as-master')
@@ -143,6 +152,7 @@ export class OrganizationsController {
       name: user.name,
       phone: user.phone,
       organizationId: user.organizationId,
+      role: user.role,
     });
   }
 
@@ -153,7 +163,7 @@ export class OrganizationsController {
     @Body() body: { name?: string; phone?: string; email?: string; role: string; message?: string; expires_in_days?: number },
   ) {
     this.assertActiveOrganizationAccess(req.user, id);
-    return this.org.createInvitation(id, req.user.id, body);
+    return this.org.createInvitation(id, req.user, body);
   }
 
   @Patch(':id/staff/:staffId')
@@ -164,7 +174,7 @@ export class OrganizationsController {
     @Body() body: Record<string, unknown>,
   ) {
     this.assertActiveOrganizationAccess(req.user, id);
-    return this.org.updateStaffMember(id, staffId, body as any);
+    return this.org.updateStaffMember(id, staffId, body as any, req.user);
   }
 
   @Get(':id/invitations')
@@ -174,7 +184,7 @@ export class OrganizationsController {
     @Query('status') status?: 'pending' | 'accepted' | 'declined' | 'cancelled' | 'expired',
   ) {
     this.assertActiveOrganizationAccess(req.user, id);
-    return this.org.listInvitations(id, status);
+    return this.org.listInvitations(id, req.user, status);
   }
 
   @Post(':id/invitations/:invitationId/cancel')
@@ -184,7 +194,7 @@ export class OrganizationsController {
     @Req() req: { user: User },
   ) {
     this.assertActiveOrganizationAccess(req.user, id);
-    return this.org.cancelInvitation(id, invitationId);
+    return this.org.cancelInvitation(id, invitationId, req.user);
   }
 
   @Get(':id/settings')

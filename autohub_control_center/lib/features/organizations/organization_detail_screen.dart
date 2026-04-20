@@ -5,6 +5,7 @@ import '../../../core/api/internal_data_providers.dart';
 import '../../../core/auth/auth_provider.dart';
 import '../../../core/constants/labels_ru.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/utils/media_url_resolver.dart';
 
 class OrganizationDetailScreen extends ConsumerStatefulWidget {
   const OrganizationDetailScreen({super.key, required this.organizationId});
@@ -131,7 +132,7 @@ class _OrganizationDetailScreenState extends ConsumerState<OrganizationDetailScr
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _InfoCard(org: org),
+                _InfoCard(org: org, organizationId: widget.organizationId),
                 const SizedBox(height: 20),
                 _SubscriptionCard(org: org, organizationId: widget.organizationId),
                 const SizedBox(height: 20),
@@ -266,13 +267,14 @@ class _EditForm extends StatelessWidget {
   }
 }
 
-class _InfoCard extends StatelessWidget {
-  const _InfoCard({required this.org});
+class _InfoCard extends ConsumerWidget {
+  const _InfoCard({required this.org, required this.organizationId});
 
   final Map<String, dynamic> org;
+  final String organizationId;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final name = org['name'] as String? ?? '—';
     final address = org['address'] as String? ?? '—';
     final phone = org['phone'] as String? ?? '—';
@@ -280,6 +282,16 @@ class _InfoCard extends StatelessWidget {
     final timezone = org['timezone'] as String? ?? '—';
     final lat = org['latitude'];
     final lon = org['longitude'];
+    final photosRaw = org['photo_urls'];
+    final storedUrls = photosRaw is List
+        ? photosRaw.map((e) => e?.toString().trim() ?? '').where((s) => s.isNotEmpty).toList()
+        : <String>[];
+
+    Future<void> afterPhotoMutation() async {
+      ref.invalidate(organizationDetailProvider(organizationId));
+      ref.invalidate(organizationsProvider);
+    }
+
     return Card(
       elevation: 0,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: AppColors.border)),
@@ -290,11 +302,27 @@ class _InfoCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                CircleAvatar(
-                  radius: 28,
-                  backgroundColor: AppColors.primary.withValues(alpha: 0.12),
-                  child: Icon(Icons.business_rounded, size: 32, color: AppColors.primary),
-                ),
+                if (storedUrls.isNotEmpty)
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Image.network(
+                      resolvePublicMediaUrl(storedUrls.first) ?? storedUrls.first,
+                      width: 56,
+                      height: 56,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => CircleAvatar(
+                        radius: 28,
+                        backgroundColor: AppColors.primary.withValues(alpha: 0.12),
+                        child: const Icon(Icons.business_rounded, size: 32, color: AppColors.primary),
+                      ),
+                    ),
+                  )
+                else
+                  CircleAvatar(
+                    radius: 28,
+                    backgroundColor: AppColors.primary.withValues(alpha: 0.12),
+                    child: const Icon(Icons.business_rounded, size: 32, color: AppColors.primary),
+                  ),
                 const SizedBox(width: 16),
                 Expanded(
                   child: Text(
@@ -305,6 +333,76 @@ class _InfoCard extends StatelessWidget {
                 ),
               ],
             ),
+            if (storedUrls.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              const Text('Фото точки', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final u in storedUrls)
+                    Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.network(
+                            resolvePublicMediaUrl(u) ?? u,
+                            width: 88,
+                            height: 88,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Container(
+                              width: 88,
+                              height: 88,
+                              color: Colors.black12,
+                              alignment: Alignment.center,
+                              child: const Icon(Icons.broken_image_outlined),
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          top: -4,
+                          right: -4,
+                          child: Material(
+                            color: Colors.white,
+                            shape: const CircleBorder(),
+                            child: IconButton(
+                              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                              padding: EdgeInsets.zero,
+                              icon: const Icon(Icons.close, size: 18, color: AppColors.danger),
+                              onPressed: () async {
+                                final ok = await ref.read(internalApiProvider).deleteOrganizationPhotos(organizationId, url: u);
+                                await afterPhotoMutation();
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text(ok ? 'Фото удалено' : 'Не удалось удалить')),
+                                  );
+                                }
+                              },
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: () async {
+                  final ok = await ref.read(internalApiProvider).deleteOrganizationPhotos(organizationId, all: true);
+                  await afterPhotoMutation();
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(ok ? 'Все фото удалены' : 'Ошибка')),
+                    );
+                  }
+                },
+                icon: const Icon(Icons.delete_outline, size: 18),
+                label: const Text('Удалить все фото'),
+                style: OutlinedButton.styleFrom(foregroundColor: AppColors.danger),
+              ),
+            ],
             const Divider(height: 24),
             _RowLabel(label: 'Адрес', value: address),
             _RowLabel(label: 'Телефон', value: phone),

@@ -1,8 +1,12 @@
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/theme/app_colors.dart';
+import 'package:image_picker/image_picker.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/auth/auth_provider.dart';
+import '../../../../core/config/app_config.dart';
 import '../../../../shared/widgets/common_widgets.dart';
 
 class EditProfileScreen extends ConsumerStatefulWidget {
@@ -18,6 +22,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
   late final TextEditingController _emailController;
   late final TextEditingController _phoneController;
   bool _initializedFromUser = false;
+  bool _uploadingAvatar = false;
 
   @override
   void initState() {
@@ -37,6 +42,38 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
     super.dispose();
   }
 
+  Future<void> _pickAndUploadAvatar() async {
+    if (_uploadingAvatar) return;
+    final picked = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 2048,
+      imageQuality: 88,
+    );
+    if (picked == null) return;
+    setState(() => _uploadingAvatar = true);
+    final notifier = ref.read(authProvider.notifier);
+    final result = kIsWeb
+        ? await notifier.uploadAvatar(
+            bytes: await picked.readAsBytes(),
+            filename: picked.name,
+          )
+        : await notifier.uploadAvatar(filePath: picked.path);
+    if (!mounted) return;
+    setState(() => _uploadingAvatar = false);
+    result.when(
+      success: (_) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Фото обновлено'), backgroundColor: context.palette.success),
+        );
+      },
+      failure: (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message), backgroundColor: context.palette.error),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(authProvider).user;
@@ -49,65 +86,124 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       _emailController.text = user.email ?? '';
     }
     final initials = user?.initials ?? '?';
+    final rawAvatar = user?.avatarUrl?.trim() ?? '';
+    final avatarResolved = rawAvatar.isNotEmpty ? AppConfig.resolveProfileAvatarUrl(rawAvatar) : '';
+
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       appBar: AppBar(
-        backgroundColor: AppColors.background,
-        title: const Text('Редактировать профиль', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+        backgroundColor: context.palette.background,
+        title: Text('Редактировать профиль', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
       ),
       body: ListView(
         physics: const BouncingScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
         children: [
-          // Аватар
           Center(
             child: Stack(
               children: [
                 Container(
-                  width: 100, height: 100,
+                  width: 100,
+                  height: 100,
                   decoration: BoxDecoration(
-                    shape: BoxShape.circle, color: AppColors.nestedBg,
-                    border: Border.all(color: AppColors.primary, width: 2),
+                    shape: BoxShape.circle,
+                    color: context.palette.nestedBg,
+                    border: Border.all(color: context.palette.primary, width: 2),
                   ),
-                  child: Center(child: Text(initials, style: const TextStyle(
-                    fontSize: 32, fontWeight: FontWeight.w700, color: AppColors.primary,
-                  ))),
+                  clipBehavior: Clip.antiAlias,
+                  child: _uploadingAvatar
+                      ? Center(
+                          child: SizedBox(
+                            width: 32,
+                            height: 32,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: context.palette.primary),
+                          ),
+                        )
+                      : avatarResolved.isNotEmpty
+                          ? CachedNetworkImage(
+                              imageUrl: avatarResolved,
+                              cacheKey: avatarResolved,
+                              fit: BoxFit.cover,
+                              httpHeaders: ref.read(authProvider).accessToken != null
+                                  ? {'Authorization': 'Bearer ${ref.read(authProvider).accessToken}'}
+                                  : null,
+                              placeholder: (_, __) => Center(
+                                child: SizedBox(
+                                  width: 28,
+                                  height: 28,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: context.palette.primary),
+                                ),
+                              ),
+                              errorWidget: (_, __, ___) => Center(
+                                child: Text(
+                                  initials,
+                                  style: TextStyle(
+                                    fontSize: 32,
+                                    fontWeight: FontWeight.w700,
+                                    color: context.palette.primary,
+                                  ),
+                                ),
+                              ),
+                            )
+                          : Center(
+                              child: Text(
+                                initials,
+                                style: TextStyle(
+                                  fontSize: 32,
+                                  fontWeight: FontWeight.w700,
+                                  color: context.palette.primary,
+                                ),
+                              ),
+                            ),
                 ),
                 Positioned(
-                  right: 0, bottom: 0,
+                  right: 0,
+                  bottom: 0,
                   child: GestureDetector(
-                    onTap: () {},
+                    onTap: _uploadingAvatar ? null : _pickAndUploadAvatar,
                     child: Container(
-                      width: 36, height: 36,
+                      width: 36,
+                      height: 36,
                       decoration: BoxDecoration(
-                        color: AppColors.primary, shape: BoxShape.circle,
-                        border: Border.all(color: AppColors.background, width: 3),
+                        color: context.palette.primary,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: context.palette.background, width: 3),
                       ),
-                      child: const Icon(Icons.camera_alt_rounded, size: 18, color: Color(0xFF0D0D0D)),
+                      child: Icon(Icons.camera_alt_rounded, size: 18, color: context.palette.onAccent),
                     ),
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 32),
+          SizedBox(height: 8),
+          Center(
+            child: Text(
+              'Нажмите на значок камеры, чтобы выбрать фото',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
+            ),
+          ),
+          SizedBox(height: 24),
           _buildField('Имя', _nameController),
-          const SizedBox(height: 16),
+          SizedBox(height: 16),
           _buildField('Фамилия', _surnameController),
-          const SizedBox(height: 16),
+          SizedBox(height: 16),
           _buildField('Email', _emailController, keyboardType: TextInputType.emailAddress),
-          const SizedBox(height: 16),
+          SizedBox(height: 16),
           _buildField('Телефон', _phoneController, keyboardType: TextInputType.phone, enabled: false),
-          const SizedBox(height: 8),
-          const Text('Для смены номера обратитесь в поддержку',
-            style: TextStyle(fontSize: 12, color: AppColors.textTertiary)),
+          SizedBox(height: 8),
+          Text(
+            'Для смены номера обратитесь в поддержку',
+            style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
+          ),
         ],
       ),
       bottomNavigationBar: Container(
         padding: EdgeInsets.fromLTRB(16, 12, 16, MediaQuery.of(context).padding.bottom + 12),
-        decoration: const BoxDecoration(
-          color: AppColors.cardBg,
-          border: Border(top: BorderSide(color: AppColors.border)),
+        decoration: BoxDecoration(
+          color: context.palette.cardBg,
+          border: Border(top: BorderSide(color: context.palette.border)),
         ),
         child: GoldButton(
           text: 'Сохранить',
@@ -116,13 +212,13 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
             final name = _nameController.text.trim();
             final surname = _surnameController.text.trim();
             await ref.read(authProvider.notifier).updateProfile(
-              name: name.isEmpty ? null : name,
-              surname: surname.isEmpty ? null : surname,
-            );
+                  name: name.isEmpty ? null : name,
+                  surname: surname.isEmpty ? null : surname,
+                );
             if (!context.mounted) return;
             Navigator.pop(context);
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Профиль обновлён'), backgroundColor: AppColors.success),
+              SnackBar(content: Text('Профиль обновлён'), backgroundColor: context.palette.success),
             );
           },
         ),
@@ -130,26 +226,29 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
     );
   }
 
-  Widget _buildField(String label, TextEditingController controller, {
-    TextInputType? keyboardType, bool enabled = true,
+  Widget _buildField(
+    String label,
+    TextEditingController controller, {
+    TextInputType? keyboardType,
+    bool enabled = true,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: const TextStyle(fontSize: 14, color: AppColors.textSecondary)),
-        const SizedBox(height: 8),
+        Text(label, style: TextStyle(fontSize: 14, color: context.palette.textSecondary)),
+        SizedBox(height: 8),
         Container(
           decoration: BoxDecoration(
-            color: enabled ? AppColors.cardBg : AppColors.nestedBg,
+            color: enabled ? context.palette.cardBg : context.palette.nestedBg,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.border),
+            border: Border.all(color: context.palette.border),
           ),
           child: TextField(
             controller: controller,
             enabled: enabled,
             keyboardType: keyboardType,
-            style: TextStyle(fontSize: 16, color: enabled ? AppColors.textPrimary : AppColors.textTertiary),
-            decoration: const InputDecoration(
+            style: TextStyle(fontSize: 16, color: enabled ? context.palette.textPrimary : context.palette.textTertiary),
+            decoration: InputDecoration(
               border: InputBorder.none,
               contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             ),

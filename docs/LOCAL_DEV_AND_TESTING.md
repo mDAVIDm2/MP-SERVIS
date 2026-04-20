@@ -1,6 +1,6 @@
-# Запуск и тестирование экосистемы AutoHub
+# Запуск и тестирование экосистемы MP-Servis
 
-Один бэкенд (NestJS + PostgreSQL), два приложения: **AutoHub Business** (СТО/мастера) и **AutoHub Client** (клиенты). Оба подключаются к одному API и одной БД.
+Один бэкенд (NestJS + PostgreSQL), два приложения: **MP-Servis Business** (СТО/мастера) и клиент **MP-Servis**. Оба подключаются к одному API и одной БД.
 
 ---
 
@@ -19,20 +19,20 @@
 
 1. Установите PostgreSQL и создайте БД:
    ```bash
-   createdb autohub
+   createdb mp_servis
    ```
 2. Либо через psql:
    ```sql
-   CREATE DATABASE autohub;
+   CREATE DATABASE mp_servis;
    ```
 
 ### Вариант B: Docker
 
 ```bash
-docker run -d --name autohub-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=autohub -p 5432:5432 postgres:16-alpine
+docker run -d --name mp-servis-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=mp_servis -p 5432:5432 postgres:16-alpine
 ```
 
-Подключение: `postgresql://postgres:postgres@localhost:5432/autohub`
+Подключение: `postgresql://postgres:postgres@localhost:5432/mp_servis`
 
 ---
 
@@ -49,7 +49,7 @@ npm run start:dev
 
 - API: **http://localhost:3000/api/v1**
 - При первом запуске TypeORM создаст таблицы (synchronize в dev).
-- В логах должно быть: `AutoHub API: http://localhost:3000/api/v1`
+- В логах должно быть: `MP-Servis API: http://localhost:3000/api/v1`
 
 ---
 
@@ -59,7 +59,7 @@ npm run start:dev
 - **Business:** `autohub_business/lib/core/api/api_endpoints.dart`
 - **Client:** `autohub_client2/lib/core/api/api_endpoints.dart`
 
-### AutoHub Business (СТО)
+### MP-Servis Business (СТО)
 
 ```bash
 cd autohub_business
@@ -70,7 +70,7 @@ flutter run
 - Вход: реальный API (send-code → verify-code). При ошибке сети — демо-коды: `1111` (мастер), `2222` (владелец), `3333` (самозанятый), любой другой 4-значный — администратор.
 - У владельца/админа: заказы, чаты, календарь, организация, персонал, настройки — с API.
 
-### AutoHub Client (клиент)
+### MP-Servis (клиент)
 
 ```bash
 cd autohub_client2

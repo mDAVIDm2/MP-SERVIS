@@ -1,3 +1,5 @@
+import '../../core/config/app_config.dart';
+
 enum ReminderType {
   oil,
   brakes,
@@ -81,6 +83,9 @@ class Car {
   final String? photoUrl;
   final List<CarReminder> reminders;
 
+  /// Собрано из истории заказов при пустом локальном гараже (нет id справочника в данных заказа).
+  final bool mergedFromOrders;
+
   const Car({
     required this.id,
     required this.brand,
@@ -101,6 +106,7 @@ class Car {
     this.color,
     this.photoUrl,
     this.reminders = const [],
+    this.mergedFromOrders = false,
   });
 
   /// Только подтверждённые (из БД) данные — для отправки при записи в сервис.
@@ -120,6 +126,10 @@ class Car {
   bool get hasPendingGeneration =>
       generationId == null && generation != null && generation!.isNotEmpty;
 
+  /// Чипы «ожидает разработчиков» — только для ручного ввода марки/модели, не для авто из заказов.
+  bool get hasManualReferencePending =>
+      !mergedFromOrders && (hasPendingBrand || hasPendingModel || hasPendingGeneration);
+
   String get displayName {
     final m = model.trim().isEmpty ? '(модель не указана)' : model;
     return generation != null && generation!.trim().isNotEmpty
@@ -127,8 +137,16 @@ class Car {
         : '$brand $m';
   }
 
-  String get shortDisplayName =>
-      "'${year.toString().substring(2)} $brand $model";
+  String get shortDisplayName {
+    final y = year.toString();
+    final yy = y.length < 2 ? y : y.substring(y.length - 2);
+    return "'$yy $brand $model";
+  }
+
+  static String? _normalizePhotoUrl(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return null;
+    return AppConfig.resolveCarOrOrderPhotoUrl(raw.trim());
+  }
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -149,6 +167,7 @@ class Car {
     'bodyType': bodyType,
     'color': color,
     'photoUrl': photoUrl,
+    'mergedFromOrders': mergedFromOrders,
   };
 
   static Car fromJson(Map<String, dynamic> m) => Car(
@@ -169,6 +188,30 @@ class Car {
     drivetrain: m['drivetrain'] as String?,
     bodyType: m['bodyType'] as String? ?? m['body_type'] as String?,
     color: m['color'] as String?,
-    photoUrl: m['photoUrl'] as String?,
+    photoUrl: _normalizePhotoUrl(m['photoUrl'] as String?),
+    mergedFromOrders: m['mergedFromOrders'] == true,
+  );
+
+  /// Ответ GET/POST/PATCH `/profile/cars` (snake_case).
+  static Car fromProfileApiJson(Map<String, dynamic> m) => Car(
+    id: m['id'] as String? ?? '',
+    brand: m['brand'] as String? ?? '',
+    model: m['model'] as String? ?? '',
+    generation: m['generation'] as String?,
+    brandId: (m['brand_id'] as num?)?.toInt(),
+    modelId: (m['model_id'] as num?)?.toInt(),
+    generationId: (m['generation_id'] as num?)?.toInt(),
+    year: (m['year'] as num?)?.toInt() ?? 0,
+    nickname: m['nickname'] as String?,
+    plateNumber: m['plate_number'] as String?,
+    vin: m['vin'] as String?,
+    mileage: (m['mileage'] as num?)?.toInt() ?? 0,
+    engineType: m['engine_type'] as String?,
+    transmission: m['transmission'] as String?,
+    drivetrain: m['drivetrain'] as String?,
+    bodyType: m['body_type'] as String?,
+    color: m['color'] as String?,
+    photoUrl: _normalizePhotoUrl(m['photo_url'] as String?),
+    mergedFromOrders: m['merged_from_orders'] == true,
   );
 }

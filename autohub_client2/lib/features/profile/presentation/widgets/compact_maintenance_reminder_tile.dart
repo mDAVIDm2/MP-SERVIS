@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/l10n/app_l10n.dart';
+import '../../../../core/l10n/l10n_scope.dart';
+import '../../../../core/l10n/maintenance_type_l10n.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/settings/maintenance_reminders_provider.dart';
 import '../../../../shared/models/car_model.dart';
 
@@ -43,8 +46,9 @@ class CompactMaintenanceReminderTile extends ConsumerWidget {
     final notifier = ref.read(maintenanceRemindersProvider.notifier);
     final config = notifier.getConfig(car.id, type.name);
     final snap = notifier.computeDue(car.id, type.name, car.mileage);
+    final l10n = L10nScope.of(context);
 
-    final subtitle = _buildSubtitle(config, snap);
+    final subtitle = _buildSubtitle(config, snap, l10n);
     final progress = snap.remindEnabled ? snap.progress01 : 0.0;
 
     return Material(
@@ -54,10 +58,10 @@ class CompactMaintenanceReminderTile extends ConsumerWidget {
         borderRadius: BorderRadius.circular(14),
         child: Ink(
           decoration: BoxDecoration(
-            color: AppColors.cardBg,
+            color: context.palette.cardBg,
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
-              color: snap.overdue ? AppColors.error.withValues(alpha: 0.35) : AppColors.border,
+              color: snap.overdue ? context.palette.error.withValues(alpha: 0.35) : context.palette.border,
             ),
             boxShadow: [
               BoxShadow(
@@ -78,29 +82,29 @@ class CompactMaintenanceReminderTile extends ConsumerWidget {
                       width: 40,
                       height: 40,
                       decoration: BoxDecoration(
-                        color: AppColors.primary.withValues(alpha: 0.1),
+                        color: context.palette.primary.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(11),
                       ),
                       alignment: Alignment.center,
-                      child: Text(emojiFor(type), style: const TextStyle(fontSize: 20)),
+                      child: Text(emojiFor(type), style: TextStyle(fontSize: 20)),
                     ),
-                    const SizedBox(width: 10),
+                    SizedBox(width: 10),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            type.title,
+                            type.localizedTitle(l10n),
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w700,
-                              color: AppColors.textPrimary,
+                              color: context.palette.textPrimary,
                               height: 1.2,
                             ),
                           ),
-                          const SizedBox(height: 3),
+                          SizedBox(height: 3),
                           Text(
                             subtitle,
                             maxLines: 2,
@@ -108,14 +112,14 @@ class CompactMaintenanceReminderTile extends ConsumerWidget {
                             style: TextStyle(
                               fontSize: 12,
                               height: 1.25,
-                              color: snap.overdue ? AppColors.error : AppColors.textSecondary,
+                              color: snap.overdue ? context.palette.error : context.palette.textSecondary,
                               fontWeight: FontWeight.w500,
                             ),
                           ),
                         ],
                       ),
                     ),
-                    Icon(Icons.chevron_right_rounded, color: AppColors.textSecondary.withValues(alpha: 0.7)),
+                    Icon(Icons.chevron_right_rounded, color: context.palette.textSecondary.withValues(alpha: 0.7)),
                   ],
                 ),
               ),
@@ -124,9 +128,9 @@ class CompactMaintenanceReminderTile extends ConsumerWidget {
                 child: LinearProgressIndicator(
                   value: progress.clamp(0.0, 1.0),
                   minHeight: 4,
-                  backgroundColor: AppColors.border.withValues(alpha: 0.45),
+                  backgroundColor: context.palette.border.withValues(alpha: 0.45),
                   valueColor: AlwaysStoppedAnimation<Color>(
-                    snap.overdue ? AppColors.error : AppColors.primary,
+                    snap.overdue ? context.palette.error : context.palette.primary,
                   ),
                 ),
               ),
@@ -137,28 +141,28 @@ class CompactMaintenanceReminderTile extends ConsumerWidget {
     );
   }
 
-  static String _buildSubtitle(MaintenanceConfig? config, MaintenanceDueSnapshot snap) {
-    if (config == null) return 'Настройте интервалы';
-    if (!config.remindEnabled) return 'Напоминание выключено';
-    if (snap.lastRecord == null) return 'Добавьте дату замены — появится счётчик';
+  static String _buildSubtitle(MaintenanceConfig? config, MaintenanceDueSnapshot snap, AppL10n l) {
+    if (config == null) return l.configureIntervals;
+    if (!config.remindEnabled) return l.reminderDisabled;
+    if (snap.lastRecord == null) return l.addReplacementDate;
 
     final parts = <String>[];
     if (config.useKmInterval && snap.kmRemaining != null) {
       if (snap.overdueByKm) {
-        parts.add('Пробег: просрочено');
+        parts.add(l.mileageOverdue);
       } else {
-        final sep = NumberFormat.decimalPattern('ru_RU');
-        parts.add('≈ ${sep.format(snap.kmRemaining)} км');
+        final sep = NumberFormat.decimalPattern(l.intlLocale);
+        parts.add('≈ ${sep.format(snap.kmRemaining)} ${l.kmUnit}');
       }
     }
     if (config.useMonthsInterval && snap.daysRemaining != null) {
       if (snap.overdueByDate) {
-        parts.add('Срок: просрочено');
+        parts.add(l.dateOverdue);
       } else {
-        parts.add('≈ ${snap.daysRemaining} дн.');
+        parts.add(l.approxDays(snap.daysRemaining!));
       }
     }
-    if (parts.isEmpty) return 'Откройте карточку';
+    if (parts.isEmpty) return l.openCard;
     return parts.join(' · ');
   }
 }

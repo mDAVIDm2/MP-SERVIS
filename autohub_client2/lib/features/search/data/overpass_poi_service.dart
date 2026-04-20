@@ -4,11 +4,26 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import '../../../shared/models/external_poi.dart';
 
-/// Публичный Overpass API (OpenStreetMap). Бесплатно, без ключа.
-const _overpassUrl = 'https://overpass-api.de/api/interpreter';
+/// Публичные зеркала Overpass (при 429/перегрузке пробуем следующее).
+const _overpassUrls = <String>[
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+];
 
 /// Сервис поиска организаций (автосервис, мойки, шиномонтаж) по видимой области через Overpass API (OSM).
 /// Используется как бесплатный запасной вариант, когда Yandex API недоступен или без лицензии.
+String _carWashSubtypeLabel(Map<String, dynamic> tags, String name) {
+  final n = name.toLowerCase();
+  final self = tags['self_service'] == 'yes';
+  final automated =
+      tags['automated'] == 'yes' || tags['car_wash'] == 'automatic' || tags['car_wash'] == 'portal';
+  if (self || n.contains('само') || n.contains('self')) return 'Мойка (самообслуживание)';
+  if (automated || n.contains('робот') || n.contains('портал') || n.contains('tunnel')) {
+    return 'Мойка (робот)';
+  }
+  return 'Мойка (классическая)';
+}
+
 class OverpassPoiService {
   OverpassPoiService([Dio? dio]) : _dio = dio ?? Dio();
 
@@ -31,7 +46,7 @@ class OverpassPoiService {
     // bbox: (south, west, north, east)
     final bbox = '($south,$west,$north,$east)';
     final body = '''
-[out:json][timeout:25];
+[out:json][timeout:50];
 (
   node["amenity"="car_wash"]$bbox;
   node["shop"="car_repair"]$bbox;
@@ -43,28 +58,54 @@ class OverpassPoiService {
 out center;
 ''';
 
-    try {
-      final response = await _dio.post<String>(
-        _overpassUrl,
-        data: body,
-        options: Options(
-          contentType: 'text/plain; charset=utf-8',
-          sendTimeout: const Duration(seconds: 30),
-          receiveTimeout: const Duration(seconds: 30),
-        ),
-      );
-      if (response.statusCode != 200 || response.data == null) return [];
-      final list = _parseResponse(response.data!);
-      if (kDebugMode && list.isNotEmpty) {
-        debugPrint('[Overpass POI] Найдено организаций в области: ${list.length}');
+    const connectTimeout = Duration(seconds: 45);
+    for (var urlIdx = 0; urlIdx < _overpassUrls.length; urlIdx++) {
+      final url = _overpassUrls[urlIdx];
+      for (var attempt = 0; attempt < 3; attempt++) {
+        try {
+          final response = await _dio.post<String>(
+            url,
+            data: body,
+            options: Options(
+              contentType: 'text/plain; charset=utf-8',
+              sendTimeout: connectTimeout,
+              receiveTimeout: connectTimeout,
+            ),
+          );
+          if (response.statusCode == 200 && response.data != null) {
+            final list = _parseResponse(response.data!);
+            if (kDebugMode && list.isNotEmpty) {
+              debugPrint('[Overpass POI] $url — найдено: ${list.length}');
+            }
+            return list;
+          }
+          if (response.statusCode == 429 || (response.statusCode ?? 500) >= 500) {
+            await Future<void>.delayed(Duration(seconds: 2 + attempt * 2));
+            continue;
+          }
+          return [];
+        } on DioException catch (e) {
+          if (kDebugMode) {
+            debugPrint('[Overpass POI] $url попытка ${attempt + 1}: ${e.type} ${e.message}');
+          }
+          final code = e.response?.statusCode;
+          final retry = code == 429 ||
+              code == 502 ||
+              code == 503 ||
+              code == 504 ||
+              e.type == DioExceptionType.receiveTimeout ||
+              e.type == DioExceptionType.sendTimeout ||
+              e.type == DioExceptionType.connectionTimeout;
+          if (retry && attempt < 2) {
+            await Future<void>.delayed(Duration(seconds: 2 + attempt * 2));
+            continue;
+          }
+          if (urlIdx < _overpassUrls.length - 1) break;
+          return [];
+        }
       }
-      return list;
-    } on DioException catch (e) {
-      if (kDebugMode) {
-        debugPrint('[Overpass POI] Ошибка: ${e.type} ${e.message}');
-      }
-      return [];
     }
+    return [];
   }
 
   List<ExternalPOI> _parseResponse(String jsonStr) {
@@ -99,7 +140,7 @@ out center;
         String? address;
         if (tags != null) {
           address = (tags['addr:full'] as String?)?.trim();
-          if (address == null || address!.isEmpty) {
+          if (address == null || address.isEmpty) {
             final street = (tags['addr:street'] as String?)?.trim();
             final house = (tags['addr:housenumber'] as String?)?.trim();
             if (street != null && street.isNotEmpty) {
@@ -110,7 +151,9 @@ out center;
 
         final types = <String>[];
         if (tags != null) {
-          if (tags['amenity'] == 'car_wash') types.add('Мойка');
+          if (tags['amenity'] == 'car_wash') {
+            types.add(_carWashSubtypeLabel(tags, name));
+          }
           if (tags['shop'] == 'car_repair') types.add('Автосервис');
           if (tags['shop'] == 'tyres') types.add('Шиномонтаж');
         }

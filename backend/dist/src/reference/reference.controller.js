@@ -11,13 +11,14 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
+var ReferenceController_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ReferenceController = void 0;
 const common_1 = require("@nestjs/common");
 const passport_1 = require("@nestjs/passport");
 const reference_service_1 = require("./reference.service");
 const service_catalog_service_1 = require("./service-catalog.service");
-let ReferenceController = class ReferenceController {
+let ReferenceController = ReferenceController_1 = class ReferenceController {
     constructor(reference, serviceCatalog) {
         this.reference = reference;
         this.serviceCatalog = serviceCatalog;
@@ -32,15 +33,31 @@ let ReferenceController = class ReferenceController {
         return this.reference.getCarGenerations(modelId);
     }
     async createPending(req, body) {
-        const carId = String(body?.carId ?? '');
+        const carId = String(body?.carId ?? '').trim();
         const pendingBrand = typeof body?.pendingBrand === 'string' ? body.pendingBrand : (typeof body?.pending_brand === 'string' ? body.pending_brand : undefined);
         const pendingModel = typeof body?.pendingModel === 'string' ? body.pendingModel : (typeof body?.pending_model === 'string' ? body.pending_model : undefined);
         const pendingGeneration = typeof body?.pendingGeneration === 'string' ? body.pendingGeneration : (typeof body?.pending_generation === 'string' ? body.pending_generation : undefined);
+        const referenceBrandId = ReferenceController_1.optPositiveInt(body?.referenceBrandId ?? body?.reference_brand_id ?? body?.brandId);
+        const referenceModelId = ReferenceController_1.optPositiveInt(body?.referenceModelId ?? body?.reference_model_id ?? body?.modelId);
         return this.reference.createPending(req.user.id, carId, {
             pendingBrand: pendingBrand?.trim() || undefined,
             pendingModel: pendingModel?.trim() || undefined,
             pendingGeneration: pendingGeneration?.trim() || undefined,
+            referenceBrandId,
+            referenceModelId,
         });
+    }
+    static optPositiveInt(v) {
+        if (v === null || v === undefined)
+            return undefined;
+        if (typeof v === 'number' && Number.isFinite(v))
+            return Math.trunc(v);
+        if (typeof v === 'string' && v.trim() !== '') {
+            const n = parseInt(v.trim(), 10);
+            if (!Number.isNaN(n) && n > 0)
+                return n;
+        }
+        return undefined;
     }
     async listPending() {
         return this.reference.listPending();
@@ -120,7 +137,7 @@ __decorate([
     __metadata("design:paramtypes", [Object, Object]),
     __metadata("design:returntype", Promise)
 ], ReferenceController.prototype, "suggestServiceCatalog", null);
-exports.ReferenceController = ReferenceController = __decorate([
+exports.ReferenceController = ReferenceController = ReferenceController_1 = __decorate([
     (0, common_1.Controller)('reference'),
     __metadata("design:paramtypes", [reference_service_1.ReferenceService,
         service_catalog_service_1.ServiceCatalogService])

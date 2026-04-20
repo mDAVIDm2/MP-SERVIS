@@ -5,7 +5,7 @@ import '../../shared/models/sto_model.dart';
 import '../../shared/models/notification_model.dart';
 import '../../shared/models/car_document_model.dart';
 import '../../shared/models/profile_note_model.dart';
-import '../theme/app_colors.dart';
+import '../theme/client_palette.dart' show SemanticColors;
 export '../../shared/models/notification_model.dart';
 export '../../shared/models/sto_model.dart' show STOService;
 
@@ -73,15 +73,15 @@ class MockData {
   static final List<CarDocument> carDocuments = [
     // car_1 — BMW X5 M
     CarDocument(carId: 'car_1', type: 'ОСАГО', detail: 'ХХХ 1234567890', status: 'Активен',
-      statusColor: AppColors.success, expiry: 'до 15 марта 2026'),
+      statusColor: SemanticColors.success, expiry: 'до 15 марта 2026'),
     CarDocument(carId: 'car_1', type: 'Техосмотр', detail: 'Пройден: 01 июня 2025', status: 'Активен',
-      statusColor: AppColors.success, expiry: 'до 01 июня 2026'),
+      statusColor: SemanticColors.success, expiry: 'до 01 июня 2026'),
     CarDocument(carId: 'car_1', type: 'СТС', detail: '99 АА 123456'),
     // car_2 — Audi A4
     CarDocument(carId: 'car_2', type: 'ОСАГО', detail: 'УУУ 9876543210', status: 'Активен',
-      statusColor: AppColors.success, expiry: 'до 20 августа 2026'),
+      statusColor: SemanticColors.success, expiry: 'до 20 августа 2026'),
     CarDocument(carId: 'car_2', type: 'Техосмотр', detail: 'Пройден: 12 сентября 2025', status: 'Активен',
-      statusColor: AppColors.success, expiry: 'до 12 сентября 2026'),
+      statusColor: SemanticColors.success, expiry: 'до 12 сентября 2026'),
     CarDocument(carId: 'car_2', type: 'СТС', detail: '77 ВВ 654321'),
   ];
 
@@ -129,11 +129,14 @@ class MockData {
       dateTime: DateTime(2025, 12, 23, 9, 0),
       items: [
         OrderItem(id: 'i1', name: 'Замена масла двигателя',
-          priceKopecks: 350000, estimatedMinutes: 45, isCompleted: true),
+          priceKopecks: 350000, estimatedMinutes: 45, isCompleted: true,
+          serviceId: 's1', catalogItemId: 'svc_s1'),
         OrderItem(id: 'i2', name: 'Замена масляного фильтра',
-          priceKopecks: 80000, estimatedMinutes: 15, isCompleted: true),
+          priceKopecks: 80000, estimatedMinutes: 15, isCompleted: true,
+          serviceId: 's2', catalogItemId: 'svc_s2'),
         OrderItem(id: 'i3', name: 'Диагностика подвески',
-          priceKopecks: 200000, estimatedMinutes: 60),
+          priceKopecks: 200000, estimatedMinutes: 60,
+          serviceId: 's4', catalogItemId: 'svc_s4'),
       ],
       comment: 'Просьба проверить стук в подвеске',
     ),
@@ -156,9 +159,11 @@ class MockData {
       dateTime: DateTime(2025, 12, 20, 14, 0),
       items: [
         OrderItem(id: 'i6', name: 'Замена тормозных дисков',
-          priceKopecks: 2800000, estimatedMinutes: 120, isCompleted: true),
+          priceKopecks: 2800000, estimatedMinutes: 120, isCompleted: true,
+          serviceId: 's7', catalogItemId: 'svc_s7'),
         OrderItem(id: 'i7', name: 'Замена колодок',
-          priceKopecks: 1200000, estimatedMinutes: 60, isCompleted: true),
+          priceKopecks: 1200000, estimatedMinutes: 60, isCompleted: true,
+          serviceId: 's6', catalogItemId: 'svc_s6'),
         OrderItem(id: 'i8', name: 'Прокачка тормозной системы',
           priceKopecks: 500000, estimatedMinutes: 40, isCompleted: true),
       ],
@@ -405,42 +410,57 @@ class MockData {
   // ═══════════════════════════════════════════════
 
   static final List<STOService> stoServices = [
-    // Техническое обслуживание
+    // Техническое обслуживание (`catalogItemId` — как у API для аналитики/моков)
     STOService(id: 's1', name: 'Замена масла двигателя',
-      category: 'Техническое обслуживание', priceKopecks: 350000, durationMinutes: 45),
+      category: 'Техническое обслуживание', priceKopecks: 350000, durationMinutes: 45,
+      catalogItemId: 'svc_s1'),
     STOService(id: 's2', name: 'Замена масляного фильтра',
-      category: 'Техническое обслуживание', priceKopecks: 80000, durationMinutes: 15),
+      category: 'Техническое обслуживание', priceKopecks: 80000, durationMinutes: 15,
+      catalogItemId: 'svc_s2'),
     STOService(id: 's3', name: 'Замена воздушного фильтра',
-      category: 'Техническое обслуживание', priceKopecks: 120000, durationMinutes: 20),
+      category: 'Техническое обслуживание', priceKopecks: 120000, durationMinutes: 20,
+      catalogItemId: 'svc_s3'),
     STOService(id: 's8', name: 'Замена антифриза',
-      category: 'Техническое обслуживание', priceKopecks: 250000, durationMinutes: 60),
+      category: 'Техническое обслуживание', priceKopecks: 250000, durationMinutes: 60,
+      catalogItemId: 'svc_s8'),
     // Диагностика
     STOService(id: 's4', name: 'Диагностика подвески',
-      category: 'Диагностика', priceKopecks: 200000, durationMinutes: 60),
+      category: 'Диагностика', priceKopecks: 200000, durationMinutes: 60,
+      catalogItemId: 'svc_s4'),
     STOService(id: 's5', name: 'Компьютерная диагностика',
-      category: 'Диагностика', priceKopecks: 300000, durationMinutes: 45),
+      category: 'Диагностика', priceKopecks: 300000, durationMinutes: 45,
+      catalogItemId: 'svc_s5'),
     // Тормозная система
     STOService(id: 's6', name: 'Замена тормозных колодок (перед)',
-      category: 'Тормозная система', priceKopecks: 450000, durationMinutes: 60),
+      category: 'Тормозная система', priceKopecks: 450000, durationMinutes: 60,
+      catalogItemId: 'svc_s6'),
     STOService(id: 's7', name: 'Замена тормозных дисков (перед)',
-      category: 'Тормозная система', priceKopecks: 800000, durationMinutes: 120),
+      category: 'Тормозная система', priceKopecks: 800000, durationMinutes: 120,
+      catalogItemId: 'svc_s7'),
     // Двигатель
     STOService(id: 's9', name: 'Замена свечей зажигания',
-      category: 'Двигатель', priceKopecks: 400000, durationMinutes: 40),
+      category: 'Двигатель', priceKopecks: 400000, durationMinutes: 40,
+      catalogItemId: 'svc_s9'),
     STOService(id: 's11', name: 'Капитальный ремонт двигателя',
-      category: 'Двигатель', priceKopecks: 15000000, durationMinutes: 2880), // 2-3 дня
+      category: 'Двигатель', priceKopecks: 15000000, durationMinutes: 2880, // 2-3 дня
+      catalogItemId: 'svc_s11'),
     STOService(id: 's12', name: 'Замена ремня ГРМ',
-      category: 'Двигатель', priceKopecks: 1200000, durationMinutes: 360), // 6 ч
+      category: 'Двигатель', priceKopecks: 1200000, durationMinutes: 360, // 6 ч
+      catalogItemId: 'svc_s12'),
     // Ходовая часть
     STOService(id: 's10', name: 'Развал-схождение',
-      category: 'Ходовая часть', priceKopecks: 350000, durationMinutes: 60),
+      category: 'Ходовая часть', priceKopecks: 350000, durationMinutes: 60,
+      catalogItemId: 'svc_s10'),
     STOService(id: 's13', name: 'Замена амортизаторов (пара)',
-      category: 'Ходовая часть', priceKopecks: 600000, durationMinutes: 180),
+      category: 'Ходовая часть', priceKopecks: 600000, durationMinutes: 180,
+      catalogItemId: 'svc_s13'),
     // Кузовные
     STOService(id: 's14', name: 'Покраска элемента',
-      category: 'Кузовные работы', priceKopecks: 800000, durationMinutes: 480), // 8 ч
+      category: 'Кузовные работы', priceKopecks: 800000, durationMinutes: 480, // 8 ч
+      catalogItemId: 'svc_s14'),
     STOService(id: 's15', name: 'Полировка кузова',
-      category: 'Кузовные работы', priceKopecks: 500000, durationMinutes: 240),
+      category: 'Кузовные работы', priceKopecks: 500000, durationMinutes: 240,
+      catalogItemId: 'svc_s15'),
   ];
 
   // ═══════════════════════════════════════════════

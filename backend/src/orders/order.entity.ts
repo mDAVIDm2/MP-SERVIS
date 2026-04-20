@@ -26,6 +26,10 @@ export class Order {
   @Column({ name: 'car_info', default: '' })
   carInfo: string;
 
+  /** URL фото авто с клиентского приложения (https или путь API), для карточек в Business. */
+  @Column({ name: 'car_photo_url', type: 'varchar', length: 1024, nullable: true })
+  carPhotoUrl: string | null;
+
   @Column({ name: 'vin', type: 'varchar', length: 32, nullable: true })
   vin: string | null;
 

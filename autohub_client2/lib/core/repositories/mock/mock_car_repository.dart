@@ -1,4 +1,5 @@
 import '../../../shared/models/car_model.dart';
+import '../../../shared/models/order_model.dart';
 import '../../api/api_exceptions.dart';
 import '../../constants/mock_data.dart';
 import '../car_repository.dart';
@@ -42,12 +43,17 @@ class MockCarRepository implements CarRepository {
     String? engineType,
     String? transmission,
     String? drivetrain,
+    String? bodyType,
     String? color,
+    String? preferredId,
+    bool mergedFromOrders = false,
   }) async {
     await _simulateDelay(800);
 
     final newCar = Car(
-      id: 'car_${DateTime.now().millisecondsSinceEpoch}',
+      id: (preferredId != null && preferredId.trim().isNotEmpty)
+          ? preferredId.trim()
+          : 'car_${DateTime.now().millisecondsSinceEpoch}',
       brand: brandName,
       model: modelName,
       generation: generation,
@@ -62,8 +68,10 @@ class MockCarRepository implements CarRepository {
       engineType: engineType,
       transmission: transmission,
       drivetrain: drivetrain,
+      bodyType: bodyType,
       color: color,
       reminders: [],
+      mergedFromOrders: mergedFromOrders,
     );
 
     MockData.cars.add(newCar);
@@ -125,6 +133,52 @@ class MockCarRepository implements CarRepository {
       color: old.color,
       photoUrl: old.photoUrl,
       reminders: old.reminders,
+    );
+    MockData.cars[index] = updated;
+    return Result.success(updated);
+  }
+
+  @override
+  Future<Result<Car>> patchCarGarageReference(
+    String id, {
+    required String brand,
+    required String model,
+    String? generation,
+    int? brandId,
+    int? modelId,
+    int? generationId,
+    String? nickname,
+  }) async {
+    await _simulateDelay();
+    final index = MockData.cars.indexWhere((c) => c.id == id);
+    if (index == -1) {
+      return Result.failure(const ApiException(
+        code: ApiErrorCode.notFound,
+        message: 'Автомобиль не найден',
+      ));
+    }
+    final old = MockData.cars[index];
+    final updated = Car(
+      id: old.id,
+      brand: brand,
+      model: model,
+      generation: generation,
+      brandId: brandId,
+      modelId: modelId,
+      generationId: generationId,
+      year: old.year,
+      nickname: nickname,
+      plateNumber: old.plateNumber,
+      vin: old.vin,
+      mileage: old.mileage,
+      engineType: old.engineType,
+      transmission: old.transmission,
+      drivetrain: old.drivetrain,
+      bodyType: old.bodyType,
+      color: old.color,
+      photoUrl: old.photoUrl,
+      reminders: old.reminders,
+      mergedFromOrders: old.mergedFromOrders,
     );
     MockData.cars[index] = updated;
     return Result.success(updated);
@@ -230,6 +284,13 @@ class MockCarRepository implements CarRepository {
     await _simulateDelay();
     return Result.success(null);
   }
+
+  @override
+  Future<Result<int>> mergeCarsFromOrders(
+    Iterable<Order> orders, {
+    Set<String> skipCarIds = const {},
+  }) async =>
+      Result.success(0);
 
   Future<void> _simulateDelay([int ms = 300]) async {
     await Future.delayed(Duration(milliseconds: ms));

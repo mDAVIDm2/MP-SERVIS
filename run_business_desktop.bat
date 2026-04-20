@@ -1,33 +1,46 @@
 @echo off
-chcp 65001 >nul 2>&1
 set "RUN_EXIT=0"
 
 echo ========================================
-echo   AutoHub Business - запуск на desktop (Windows)
+echo   MP-Servis Business - Windows desktop
 echo ========================================
 echo.
 
 cd /d "%~dp0autohub_business"
 if errorlevel 1 (
-  echo Ошибка: не удалось перейти в папку autohub_business.
+  echo ERROR - Cannot cd to autohub_business.
   set "RUN_EXIT=1"
   goto :final
 )
 if not exist "pubspec.yaml" (
-  echo Ошибка: нет pubspec.yaml в autohub_business.
+  echo ERROR - pubspec.yaml missing in autohub_business.
   set "RUN_EXIT=1"
   goto :final
 )
 
-rem firebase_core на Windows требует Firebase C++ SDK (~912 МБ). Один раз скачивает prep-скрипт.
+where flutter >nul 2>&1
+if errorlevel 1 (
+  echo ERROR - flutter not in PATH.
+  set "RUN_EXIT=9001"
+  goto :final
+)
+
+echo flutter pub get...
+call flutter pub get
+if errorlevel 1 (
+  set "RUN_EXIT=%errorlevel%"
+  goto :final
+)
+
+rem firebase_core on Windows needs Firebase C++ SDK (~912 MB). Prep script runs once.
 if not exist "build\windows\x64\extracted\firebase_cpp_sdk_windows\CMakeLists.txt" (
   echo.
-  echo Первый запуск Windows: подготовка Firebase C++ SDK ^(около 912 МБ, curl^).
-  echo При ошибке ZIP от CMake запустите вручную: tool\prep_firebase_cpp_windows.ps1
+  echo First Windows run - preparing Firebase C++ SDK ^(large download, curl^).
+  echo On ZIP errors run manually - tool\prep_firebase_cpp_windows.ps1
   echo.
   powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0autohub_business\tool\prep_firebase_cpp_windows.ps1"
   if errorlevel 1 (
-    echo Ошибка подготовки Firebase SDK.
+    echo ERROR - Firebase SDK prep failed.
     set "RUN_EXIT=1"
     goto :final
   )
@@ -40,11 +53,12 @@ set "RUN_EXIT=%errorlevel%"
 :final
 echo.
 if not "%RUN_EXIT%"=="0" (
-  echo Завершено с ошибкой (код %RUN_EXIT%).
+  echo Finished with error, code %RUN_EXIT%.
 ) else (
-  echo Сессия flutter run завершена (код 0).
+  echo flutter run finished OK.
 )
 echo.
-echo Нажмите любую клавишу, чтобы закрыть окно...
+if "%NO_PAUSE%"=="1" exit /b %RUN_EXIT%
+echo Press any key to close...
 pause
 exit /b %RUN_EXIT%

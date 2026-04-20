@@ -5,13 +5,18 @@ import {
   Delete,
   ForbiddenException,
   Get,
-  Headers,
   Param,
   Patch,
   Post,
+  Put,
   Req,
+  Res,
   UseGuards,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { Response } from 'express';
 import { AuthGuard } from '@nestjs/passport';
 import { User } from './user.entity';
 import { UsersService } from './users.service';
@@ -36,7 +41,43 @@ export class UsersController {
   async getProfile(@Req() req: { user: User }) {
     const u = req.user;
     const summaries = await this.users.getOrganizationSummariesForUser(u);
-    return this.users.profileResponse(u, summaries);
+    const payload = { ...this.users.profileResponse(u, summaries) } as Record<string, unknown>;
+    await this.users.appendStaffCapabilities(u, payload);
+    return payload;
+  }
+
+  @Post('avatar')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
+  async uploadAvatar(@Req() req: { user: User }, @UploadedFile() file: Express.Multer.File) {
+    if (!file || (!file.buffer && !file.path)) {
+      throw new BadRequestException('Передайте изображение в поле file');
+    }
+    const user = await this.users.saveUserAvatar(req.user.id, file);
+    const summaries = await this.users.getOrganizationSummariesForUser(user);
+    const payload = { ...this.users.profileResponse(user, summaries) } as Record<string, unknown>;
+    await this.users.appendStaffCapabilities(user, payload);
+    return payload;
+  }
+
+  @Get('avatar/:userId/:filename')
+  async getAvatarFile(
+    @Param('userId') userId: string,
+    @Param('filename') filename: string,
+    @Req() req: { user: User },
+    @Res() res: Response,
+  ) {
+    if (req.user.id !== userId) {
+      const ok = await this.users.canStaffFetchClientAvatar(req.user, userId);
+      if (!ok) {
+        throw new ForbiddenException('Нет доступа к этому аватару');
+      }
+    }
+    const filePath = this.users.getUserAvatarFilePath(userId, filename);
+    if (!filePath) {
+      return res.status(404).send('Not found');
+    }
+    res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate');
+    return res.sendFile(filePath);
   }
 
   @Patch()
@@ -55,15 +96,14 @@ export class UsersController {
       phone: body.phone,
     });
     const summaries = await this.users.getOrganizationSummariesForUser(user);
-    return this.users.profileResponse(user, summaries);
+    const payload = { ...this.users.profileResponse(user, summaries) } as Record<string, unknown>;
+    await this.users.appendStaffCapabilities(user, payload);
+    return payload;
   }
 
-  /** Удаление своего аккаунта (только клиентское приложение, не Business). */
+  /** Удаление своего аккаунта (Business и Client — с подтверждением в приложении). */
   @Delete('delete')
-  async deleteAccount(@Req() req: { user: User }, @Headers('x-autohub-app') app?: string) {
-    if (String(app ?? '').toLowerCase() === 'business') {
-      throw new ForbiddenException('Удаление через приложение СТО недоступно. Обратитесь в поддержку.');
-    }
+  async deleteAccount(@Req() req: { user: User }) {
     await this.users.deleteOwnAccount(req.user.id);
     return { ok: true };
   }
@@ -74,7 +114,9 @@ export class UsersController {
     if (!orgId) throw new BadRequestException('organization_id обязателен');
     const next = await this.users.switchActiveOrganization(req.user.id, orgId);
     const summaries = await this.users.getOrganizationSummariesForUser(next);
-    return this.users.profileResponse(next, summaries);
+    const payload = { ...this.users.profileResponse(next, summaries) } as Record<string, unknown>;
+    await this.users.appendStaffCapabilities(next, payload);
+    return payload;
   }
 
   @Get('notification-preferences')
@@ -90,6 +132,21 @@ export class UsersController {
     return this.users.updateNotificationPreferences(req.user.id, body ?? {});
   }
 
+  /** Полный снимок настроек клиентского приложения (синхронизация между устройствами). */
+  @Get('client-app-state')
+  async getClientAppState(@Req() req: { user: User }) {
+    return this.users.getClientAppState(req.user.id);
+  }
+
+  @Put('client-app-state')
+  async putClientAppState(@Req() req: { user: User }, @Body() body: { payload?: Record<string, unknown> }) {
+    const payload = body?.payload;
+    if (payload == null || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new BadRequestException('Передайте объект payload');
+    }
+    return this.users.putClientAppState(req.user.id, payload as Record<string, unknown>);
+  }
+
   @Post('organizations')
   async createOrganization(
     @Req() req: { user: User },
@@ -103,7 +160,9 @@ export class UsersController {
       phone: body?.phone,
       plan_key: body?.plan_key,
     });
-    return this.users.profileResponse(user, summaries);
+    const payload = { ...this.users.profileResponse(user, summaries) } as Record<string, unknown>;
+    await this.users.appendStaffCapabilities(user, payload);
+    return payload;
   }
 
   @Get('invitations')
@@ -121,7 +180,9 @@ export class UsersController {
     const { user, summaries } = await this.users.acceptInvitation(req.user.id, invitationId, {
       set_active_organization: body?.set_active_organization !== false,
     });
-    return this.users.profileResponse(user, summaries);
+    const payload = { ...this.users.profileResponse(user, summaries) } as Record<string, unknown>;
+    await this.users.appendStaffCapabilities(user, payload);
+    return payload;
   }
 
   @Post('invitations/:id/decline')

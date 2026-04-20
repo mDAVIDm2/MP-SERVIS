@@ -19,7 +19,7 @@ const throttler_1 = require("@nestjs/throttler");
 const auth_service_1 = require("./auth.service");
 const auth_dto_1 = require("./dto/auth.dto");
 function audienceFromReq(req) {
-    const raw = String(req.headers['x-autohub-app'] ?? '').toLowerCase();
+    const raw = String(req.headers['x-mp-servis-app'] ?? '').toLowerCase();
     return raw === 'business' ? 'business' : 'client';
 }
 function deviceMeta(req, body) {
@@ -47,11 +47,13 @@ let AuthController = class AuthController {
             String(dto.phone).trim() !== '') {
             throw new common_1.BadRequestException('Укажите только email или только phone');
         }
+        const aud = audienceFromReq(req);
         return this.auth.sendCode({
             email: dto.email,
             phone: dto.phone,
             channel: dto.channel,
             ip: ip || null,
+            audience: aud,
         });
     }
     async verifyCode(dto, req) {

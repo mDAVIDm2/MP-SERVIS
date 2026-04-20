@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../../core/config/platform_utils.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/app_colors_desktop.dart';
+import '../../../../core/theme/desktop_light_theme.dart';
 import '../../../../core/utils/formatters.dart' show formatDate, formatTimeOrNull;
 import '../../../../core/repositories/order_repository.dart';
 import '../../../../shared/models/order_model.dart';
@@ -62,10 +65,19 @@ class _MasterScheduleScreenState extends ConsumerState<MasterScheduleScreen> {
             o.status != OrderStatus.cancelled)
         .toList();
 
-    return Scaffold(
-      backgroundColor: AppColors.background,
+    final desk = isDesktopPlatform;
+    final border = desk ? AppColorsDesktop.border : AppColors.border;
+    final borderSoft = desk ? AppColorsDesktop.border.withValues(alpha: 0.65) : AppColors.border.withValues(alpha: 0.5);
+    final tp = desk ? AppColorsDesktop.textPrimary : AppColors.textPrimary;
+    final ts = desk ? AppColorsDesktop.textSecondary : AppColors.textSecondary;
+
+    final scaffold = Scaffold(
+      backgroundColor: desk ? AppColorsDesktop.background : AppColors.background,
       appBar: AppBar(
         title: const Text('Расписание'),
+        backgroundColor: desk ? AppColorsDesktop.surface : null,
+        foregroundColor: desk ? AppColorsDesktop.textPrimary : null,
+        surfaceTintColor: desk ? Colors.transparent : null,
       ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -82,7 +94,7 @@ class _MasterScheduleScreenState extends ConsumerState<MasterScheduleScreen> {
                   child: Center(
                     child: Text(
                       formatDate(_selectedDate),
-                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: tp),
                     ),
                   ),
                 ),
@@ -95,11 +107,11 @@ class _MasterScheduleScreenState extends ConsumerState<MasterScheduleScreen> {
           ),
           Expanded(
             child: myStaffId == null
-                ? const Center(
+                ? Center(
                     child: Text(
                       'Ваш профиль не найден в списке сотрудников.\nУточните у администратора.',
                       textAlign: TextAlign.center,
-                      style: TextStyle(color: AppColors.textSecondary),
+                      style: TextStyle(color: ts),
                     ),
                   )
                 : ListView.builder(
@@ -117,14 +129,14 @@ class _MasterScheduleScreenState extends ConsumerState<MasterScheduleScreen> {
                             child: Container(
                               decoration: BoxDecoration(
                                 border: Border(
-                                  right: BorderSide(color: AppColors.border),
-                                  bottom: i < _totalSlots - 1 ? BorderSide(color: AppColors.border.withValues(alpha: 0.5)) : BorderSide.none,
+                                  right: BorderSide(color: border),
+                                  bottom: i < _totalSlots - 1 ? BorderSide(color: borderSoft) : BorderSide.none,
                                 ),
                               ),
                               child: Center(
                                 child: Text(
                                   _slotTime(i),
-                                  style: const TextStyle(fontSize: 11, color: AppColors.textSecondary, fontWeight: FontWeight.w500),
+                                  style: TextStyle(fontSize: 11, color: ts, fontWeight: FontWeight.w500),
                                 ),
                               ),
                             ),
@@ -133,7 +145,7 @@ class _MasterScheduleScreenState extends ConsumerState<MasterScheduleScreen> {
                             child: Container(
                               decoration: BoxDecoration(
                                 border: Border(
-                                  bottom: i < _totalSlots - 1 ? BorderSide(color: AppColors.border.withValues(alpha: 0.5)) : BorderSide.none,
+                                  bottom: i < _totalSlots - 1 ? BorderSide(color: borderSoft) : BorderSide.none,
                                 ),
                               ),
                               child: inSlot.isEmpty
@@ -143,7 +155,7 @@ class _MasterScheduleScreenState extends ConsumerState<MasterScheduleScreen> {
                                       child: Column(
                                         mainAxisSize: MainAxisSize.min,
                                         crossAxisAlignment: CrossAxisAlignment.stretch,
-                                        children: inSlot.map((o) => _orderCard(o)).toList(),
+                                        children: inSlot.map((o) => _orderCard(o, desk)).toList(),
                                       ),
                                     ),
                             ),
@@ -156,17 +168,35 @@ class _MasterScheduleScreenState extends ConsumerState<MasterScheduleScreen> {
         ],
       ),
     );
+
+    return desk ? themeDesktopLight(child: scaffold) : scaffold;
   }
 
-  Widget _orderCard(Order order) {
+  Widget _orderCard(Order order, bool desk) {
     return Card(
       margin: const EdgeInsets.only(bottom: 4),
+      color: desk ? AppColorsDesktop.surface : null,
+      elevation: desk ? 0 : null,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: desk ? AppColorsDesktop.border : AppColors.border.withValues(alpha: 0.35)),
+      ),
       child: ListTile(
         dense: true,
-        title: Text(order.orderNumber, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+        title: Text(
+          order.orderNumber,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: desk ? AppColorsDesktop.textPrimary : AppColors.textPrimary,
+          ),
+        ),
         subtitle: Text(
           '${order.carInfo}\n${formatTimeOrNull(order.dateTime)}',
-          style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+          style: TextStyle(
+            fontSize: 11,
+            color: desk ? AppColorsDesktop.textSecondary : AppColors.textSecondary,
+          ),
         ),
         trailing: Container(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),

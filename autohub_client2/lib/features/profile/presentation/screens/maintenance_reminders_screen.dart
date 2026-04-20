@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/theme/app_colors.dart';
+import '../../../../core/l10n/l10n_scope.dart';
+import '../../../../core/theme/client_palette.dart';
 import '../../../../core/providers/app_providers.dart';
 import '../../../../core/settings/filter_by_car_setting.dart';
 import '../../../../core/settings/maintenance_reminders_provider.dart';
 import '../../../../core/settings/maintenance_warn_threshold_provider.dart';
 import '../../../../shared/models/car_model.dart';
 import '../widgets/car_maintenance_reminders_section.dart';
+import '../widgets/add_maintenance_record_sheet.dart';
 
 /// Экран «Напоминания о ТО»: компактные карточки с полосой прогресса, деталь по нажатию.
 class MaintenanceRemindersScreen extends ConsumerStatefulWidget {
@@ -22,43 +24,44 @@ class _MaintenanceRemindersScreenState extends ConsumerState<MaintenanceReminder
   bool _showOtherCars = false;
 
   void _showWarnThresholdsDialog(BuildContext context, WidgetRef ref) {
+    final l10n = L10nScope.of(context);
     final kmCtrl = TextEditingController(text: '${ref.read(maintenanceWarnWithinKmProvider)}');
     final daysCtrl = TextEditingController(text: '${ref.read(maintenanceWarnWithinDaysProvider)}');
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.cardBg,
-        title: const Text('Когда показывать рекомендации', style: TextStyle(color: AppColors.textPrimary)),
+        backgroundColor: context.palette.cardBg,
+        title: Text(l10n.maintWhenShowRecTitle, style: TextStyle(color: context.palette.textPrimary)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Показывать блок, когда до замены осталось:',
-              style: TextStyle(fontSize: 13, color: AppColors.textSecondary, height: 1.35),
+            Text(
+              l10n.maintWhenShowRecHint,
+              style: TextStyle(fontSize: 13, color: context.palette.textSecondary, height: 1.35),
             ),
-            const SizedBox(height: 12),
+            SizedBox(height: 12),
             TextField(
               controller: kmCtrl,
               keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Километров (100–10 000)',
+              decoration: InputDecoration(
+                labelText: l10n.maintKmThresholdLabel,
                 border: OutlineInputBorder(),
               ),
             ),
-            const SizedBox(height: 12),
+            SizedBox(height: 12),
             TextField(
               controller: daysCtrl,
               keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Дней по сроку (1–90)',
+              decoration: InputDecoration(
+                labelText: l10n.maintDaysThresholdLabel,
                 border: OutlineInputBorder(),
               ),
             ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(l10n.cancel)),
           TextButton(
             onPressed: () async {
               final km = int.tryParse(kmCtrl.text.trim());
@@ -67,7 +70,7 @@ class _MaintenanceRemindersScreenState extends ConsumerState<MaintenanceReminder
               if (d != null) await ref.read(maintenanceWarnWithinDaysProvider.notifier).setDays(d);
               if (ctx.mounted) Navigator.pop(ctx);
             },
-            child: const Text('Сохранить', style: TextStyle(color: AppColors.primary)),
+            child: Text(l10n.save, style: TextStyle(color: context.palette.primary)),
           ),
         ],
       ),
@@ -94,28 +97,29 @@ class _MaintenanceRemindersScreenState extends ConsumerState<MaintenanceReminder
 
   @override
   Widget build(BuildContext context) {
+    final l10n = L10nScope.of(context);
     final carsAsync = ref.watch(carsProvider);
     final ordersAsync = ref.watch(ordersProvider);
     ref.watch(maintenanceRemindersProvider);
     final selectedId = ref.watch(selectedCarIdProvider);
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.palette.background,
       appBar: AppBar(
-        backgroundColor: AppColors.background,
+        backgroundColor: context.palette.background,
         elevation: 0,
-        title: const Text(
-          'Напоминания о ТО',
+        title: Text(
+          l10n.maintenanceReminders,
           style: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary,
+            color: context.palette.textPrimary,
           ),
         ),
         actions: [
           IconButton(
-            tooltip: 'Когда показывать напоминание',
-            icon: const Icon(Icons.tune_rounded, color: AppColors.textSecondary),
+            tooltip: l10n.maintWhenShowTooltip,
+            icon: Icon(Icons.tune_rounded, color: context.palette.textSecondary),
             onPressed: () => _showWarnThresholdsDialog(context, ref),
           ),
         ],
@@ -123,14 +127,15 @@ class _MaintenanceRemindersScreenState extends ConsumerState<MaintenanceReminder
       body: carsAsync.when(
         data: (cars) {
           if (cars.isEmpty) {
-            return const Center(
+            return Center(
               child: Text(
-                'Добавьте автомобиль в Гараж',
-                style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
+                l10n.maintAddCarFirst,
+                style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
               ),
             );
           }
           final orders = ordersAsync.valueOrNull ?? [];
+          final ordersFailed = ordersAsync.hasError;
           final notifier = ref.read(maintenanceRemindersProvider.notifier);
           WidgetsBinding.instance.addPostFrameCallback((_) {
             notifier.syncFromOrders(orders, cars);
@@ -144,52 +149,108 @@ class _MaintenanceRemindersScreenState extends ConsumerState<MaintenanceReminder
             padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
             children: [
               Container(
-                padding: const EdgeInsets.all(14),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                 decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.06),
+                  color: context.palette.primary.withValues(alpha: 0.06),
                   borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.15)),
+                  border: Border.all(color: context.palette.primary.withValues(alpha: 0.15)),
                 ),
-                child: const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Коротко',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                    SizedBox(height: 6),
-                    Text(
-                      'Для каждого напоминания можно задать интервал по пробегу, по сроку или оба сразу.',
-                      style: TextStyle(fontSize: 13, color: AppColors.textSecondary, height: 1.4),
-                    ),
-                    SizedBox(height: 2),
-                    Text(
-                      'История подтягивается из завершённых заказов и может добавляться вручную.',
-                      style: TextStyle(fontSize: 13, color: AppColors.textSecondary, height: 1.4),
-                    ),
-                  ],
+                child: Text(
+                  l10n.maintIntroOneLine,
+                  style: TextStyle(fontSize: 13, color: context.palette.textSecondary, height: 1.35),
                 ),
               ),
-              const SizedBox(height: 20),
+              if (ordersFailed) ...[
+                SizedBox(height: 10),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: context.palette.warning.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: context.palette.warning.withValues(alpha: 0.35)),
+                  ),
+                  child: Text(
+                    l10n.maintOrdersLoadFailedHint,
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.35,
+                      color: context.palette.textSecondary,
+                    ),
+                  ),
+                ),
+              ],
+              SizedBox(height: 14),
+              Material(
+                color: context.palette.cardBg,
+                borderRadius: BorderRadius.circular(14),
+                child: InkWell(
+                  onTap: () => showAddMaintenanceRecordSheet(
+                    context,
+                    ref,
+                    cars: cars,
+                    initialCar: primary,
+                  ),
+                  borderRadius: BorderRadius.circular(14),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: context.palette.primary.withValues(alpha: 0.14),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(Icons.post_add_rounded, color: context.palette.primary, size: 24),
+                        ),
+                        SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                l10n.maintLogDoneTitle,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: context.palette.textPrimary.withValues(alpha: 0.96),
+                                ),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                l10n.maintLogDoneSubtitle,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: context.palette.textSecondary.withValues(alpha: 0.92),
+                                  height: 1.3,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Icon(Icons.chevron_right_rounded, color: context.palette.textTertiary),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(height: 20),
               Text(
                 primary.displayName,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.w700,
-                  color: AppColors.textPrimary,
+                  color: context.palette.textPrimary,
                 ),
               ),
-              const SizedBox(height: 10),
+              SizedBox(height: 10),
               CarMaintenanceRemindersSection(
                 car: primary,
                 availableTypes: types,
               ),
               if (otherCars.isNotEmpty) ...[
-                const SizedBox(height: 12),
+                SizedBox(height: 12),
                 Material(
                   color: Colors.transparent,
                   child: InkWell(
@@ -199,26 +260,26 @@ class _MaintenanceRemindersScreenState extends ConsumerState<MaintenanceReminder
                       width: double.infinity,
                       padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
                       decoration: BoxDecoration(
-                        color: AppColors.cardBg,
+                        color: context.palette.cardBg,
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: AppColors.border),
+                        border: Border.all(color: context.palette.border),
                       ),
                       child: Row(
                         children: [
                           Icon(
                             _showOtherCars ? Icons.expand_less_rounded : Icons.expand_more_rounded,
-                            color: AppColors.primary,
+                            color: context.palette.primary,
                           ),
-                          const SizedBox(width: 8),
+                          SizedBox(width: 8),
                           Expanded(
                             child: Text(
                               _showOtherCars
-                                  ? 'Скрыть другие машины'
-                                  : 'Показать другие машины (${otherCars.length})',
-                              style: const TextStyle(
+                                  ? l10n.maintHideOtherCars
+                                  : l10n.maintShowOtherCars(otherCars.length),
+                              style: TextStyle(
                                 fontSize: 15,
                                 fontWeight: FontWeight.w600,
-                                color: AppColors.textPrimary,
+                                color: context.palette.textPrimary,
                               ),
                             ),
                           ),
@@ -228,16 +289,16 @@ class _MaintenanceRemindersScreenState extends ConsumerState<MaintenanceReminder
                   ),
                 ),
                 if (_showOtherCars) ...[
-                  const SizedBox(height: 16),
+                  SizedBox(height: 16),
                   ...otherCars.expand((car) => [
                         Padding(
                           padding: const EdgeInsets.only(bottom: 8, top: 4),
                           child: Text(
                             car.displayName,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w600,
-                              color: AppColors.textSecondary,
+                              color: context.palette.textSecondary,
                             ),
                           ),
                         ),
@@ -248,8 +309,8 @@ class _MaintenanceRemindersScreenState extends ConsumerState<MaintenanceReminder
             ],
           );
         },
-        loading: () => const Center(child: CircularProgressIndicator(color: AppColors.primary)),
-        error: (e, _) => Center(child: Text('Ошибка: $e', style: const TextStyle(color: AppColors.error))),
+        loading: () => Center(child: CircularProgressIndicator(color: context.palette.primary)),
+        error: (e, _) => Center(child: Text(l10n.errorColon(e), style: TextStyle(color: context.palette.error))),
       ),
     );
   }

@@ -109,6 +109,20 @@ let ServiceCatalogService = class ServiceCatalogService {
         }
         return { categories: Array.from(byKey.values()) };
     }
+    async resolveItemBasicsByIds(ids) {
+        const out = new Map();
+        const uniq = [...new Set(ids.map((id) => String(id).trim()).filter((id) => id.length > 0))];
+        if (uniq.length === 0)
+            return out;
+        const rows = await this.itemRepo.find({ where: { id: (0, typeorm_2.In)(uniq) } });
+        for (const r of rows) {
+            out.set(r.id, {
+                name: r.name ?? '',
+                defaultDurationMinutes: r.defaultDurationMinutes ?? 60,
+            });
+        }
+        return out;
+    }
     async nextCategorySortOrder() {
         const r = await this.itemRepo
             .createQueryBuilder('i')
@@ -328,7 +342,7 @@ let ServiceCatalogService = class ServiceCatalogService {
         return {
             id: row.id,
             status: row.status,
-            message: 'Запрос отправлен разработчикам AutoHub. Услугу добавят в справочник после проверки.',
+            message: 'Запрос отправлен разработчикам MP-Servis. Услугу добавят в справочник после проверки.',
         };
     }
     async getSuggestionStats() {

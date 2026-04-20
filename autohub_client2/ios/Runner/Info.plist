@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Autohub Client</string>
+	<string>MP-Servis</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>autohub_client</string>
+	<string>MP-Servis</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -46,10 +46,18 @@
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>AutoHub строит маршрут от вашего местоположения до выбранного сервиса.</string>
+	<string>MP-Servis строит маршрут от вашего местоположения до выбранного сервиса.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Чтобы прикрепить фото к сообщению в чате с сервисом.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Чтобы сделать фото для чата с сервисом.</string>
+	<!-- Dev: HTTP к LAN IP (например 192.168.1.187:3000). В проде — только HTTPS. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

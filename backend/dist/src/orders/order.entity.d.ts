@@ -7,6 +7,7 @@ export declare class Order {
     orderNumber: string;
     carId: string;
     carInfo: string;
+    carPhotoUrl: string | null;
     vin: string | null;
     licensePlate: string | null;
     bodyType: string | null;

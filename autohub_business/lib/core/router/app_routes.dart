@@ -1,36 +1,41 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../core/config/platform_utils.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_colors_desktop.dart';
 import '../../core/auth/auth_provider.dart';
 import '../../features/auth/presentation/screens/auth_screens.dart';
 import '../../features/auth/presentation/screens/select_organization_screen.dart';
 import '../../features/auth/presentation/screens/subscription_block_screen.dart';
 import '../../features/profile/presentation/screens/incoming_invitations_screen.dart';
 import '../../shared/widgets/main_shell.dart';
+import 'root_navigator_key.dart';
 
 Widget _buildSplash() {
+  final desk = isDesktopPlatform;
+  final primary = desk ? AppColorsDesktop.primary : AppColors.primary;
   return Scaffold(
-    backgroundColor: AppColors.background,
+    backgroundColor: desk ? AppColorsDesktop.background : AppColors.background,
     body: Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Text(
-            'AutoHub Business',
+          Text(
+            'MP-Servis Business',
             style: TextStyle(
               fontSize: 24,
               fontWeight: FontWeight.w700,
-              color: AppColors.primary,
+              color: primary,
             ),
           ),
           const SizedBox(height: 24),
-          const SizedBox(
+          SizedBox(
             width: 24,
             height: 24,
             child: CircularProgressIndicator(
               strokeWidth: 2,
-              color: AppColors.primary,
+              color: primary,
             ),
           ),
         ],
@@ -50,6 +55,7 @@ class _AuthRefresh extends ChangeNotifier {
 GoRouter createAppRouter(Ref ref) {
   final refresh = _AuthRefresh(ref);
   return GoRouter(
+    navigatorKey: appRootNavigatorKey,
     initialLocation: '/',
     refreshListenable: refresh,
     redirect: (BuildContext context, GoRouterState state) {
@@ -100,14 +106,15 @@ GoRouter createAppRouter(Ref ref) {
       ),
       GoRoute(
         path: '/invitations',
-        builder: (context, state) => const IncomingInvitationsScreen(),
+        builder: (context, state) => IncomingInvitationsScreen(desktopChrome: isDesktopPlatform),
       ),
       GoRoute(
         path: '/app',
         builder: (context, state) {
           final tab = state.uri.queryParameters['tab'];
           final index = int.tryParse(tab ?? '0') ?? 0;
-          return MainShell(key: ValueKey('shell-$index'), initialTabIndex: index);
+          // Стабильный ключ: иначе при смене ?tab= каждый раз пересоздаётся весь shell — мелькание всех вкладок.
+          return MainShell(key: const ValueKey<Object>('main-shell'), initialTabIndex: index);
         },
       ),
     ],

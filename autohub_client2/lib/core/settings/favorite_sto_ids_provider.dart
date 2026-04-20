@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../auth/auth_provider.dart';
 import '../providers/app_providers.dart';
+import '../sync/client_app_state_push_bridge.dart';
 import 'filter_by_car_setting.dart';
 import '../../shared/models/sto_model.dart';
 
@@ -90,6 +91,7 @@ class FavoriteStoNotifier extends StateNotifier<FavoriteStoState> {
       }
       state = FavoriteStoState(globalIds: state.globalIds, perCarIds: nextPerCar);
       await _savePerCar(nextPerCar);
+      scheduleClientAppStatePush();
     } else {
       // Сортировка выключена — добавляем/убираем «всем машинам»: в global и в perCar у каждой машины
       final nextGlobal = Set<String>.from(state.globalIds);
@@ -119,13 +121,15 @@ class FavoriteStoNotifier extends StateNotifier<FavoriteStoState> {
       state = FavoriteStoState(globalIds: nextGlobal, perCarIds: nextPerCar);
       await _prefs?.setStringList(_keyGlobal, nextGlobal.toList());
       await _savePerCar(nextPerCar);
+      scheduleClientAppStatePush();
     }
   }
 
   Future<void> _savePerCar(Map<String, Set<String>> perCar) async {
-    if (_prefs == null || _userId == null) return;
+    final p = _prefs;
+    if (p == null || _userId == null) return;
     final encoded = perCar.map((k, v) => MapEntry(k, v.toList()));
-    await _prefs!.setString(_keyPerCar, jsonEncode(encoded));
+    await p.setString(_keyPerCar, jsonEncode(encoded));
   }
 }
 
@@ -141,6 +145,9 @@ final effectiveFavoriteStoIdsProvider = Provider<Set<String>>((ref) {
 });
 
 /// Список точек в избранном: загрузка по id из каталога API.
+///
+/// `GET /catalog/organizations/:id` не отдаёт `service_ids` / `services` (в отличие от поиска),
+/// поэтому фильтр по услугам на экране «Услуги» обнулял бы список. Подтягиваем прайс отдельно.
 final favoriteSTOsListProvider = FutureProvider<List<STO>>((ref) async {
   final ids = ref.watch(effectiveFavoriteStoIdsProvider);
   if (ids.isEmpty) return [];
@@ -148,7 +155,19 @@ final favoriteSTOsListProvider = FutureProvider<List<STO>>((ref) async {
   final list = <STO>[];
   for (final id in ids) {
     final r = await repo.getSTOById(id);
-    if (r.dataOrNull != null) list.add(r.dataOrNull!);
+    var sto = r.dataOrNull;
+    if (sto == null) continue;
+    if (sto.serviceIds.isEmpty && sto.services.isEmpty) {
+      final sr = await repo.getServices(id);
+      final svcs = sr.dataOrNull;
+      if (svcs != null && svcs.isNotEmpty) {
+        sto = sto.copyWith(
+          services: svcs,
+          serviceIds: svcs.map((s) => s.id).toList(),
+        );
+      }
+    }
+    list.add(sto);
   }
   return list;
 });

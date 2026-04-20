@@ -9,6 +9,22 @@ class ChatApiService {
   ChatApiService(this._client);
   final ApiClient _client;
 
+  Future<Result<Map<String, dynamic>>> openOrganizationChat(String organizationId) async {
+    try {
+      final res = await _client.post(
+        ApiEndpoints.chatsOpenOrganization,
+        data: {'organization_id': organizationId},
+      );
+      final data = res.data;
+      if (data is! Map<String, dynamic>) {
+        return Result.failure(const ApiException(code: ApiErrorCode.internal, message: 'Неверный формат ответа'));
+      }
+      return Result.success(data);
+    } on DioException catch (e) {
+      return Result.failure(ApiException.fromDioError(e));
+    }
+  }
+
   Future<Result<Map<String, dynamic>>> openSupportChat() async {
     try {
       final res = await _client.post(ApiEndpoints.chatsSupportOpen);
@@ -75,7 +91,7 @@ class ChatApiService {
     }
   }
 
-  /// Multipart: поле `text` (опционально) и файлы `files` (до лимита тарифа на бэкенде).
+  /// Multipart: поле `text` (опционально) и файлы `files`. Лимиты — по тарифу **организации** на бэкенде.
   Future<Result<Map<String, dynamic>>> sendMessageWithMedia(
     String chatId, {
     String text = '',

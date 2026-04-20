@@ -1,6 +1,6 @@
 (function () {
   const API = '/api/v1';
-  const TOKEN_KEY = 'autohub_internal_token';
+  const TOKEN_KEY = 'mp_servis_internal_token';
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];

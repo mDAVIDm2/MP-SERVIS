@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../shared/models/user_organization_summary.dart';
+import '../config/app_config.dart';
 import '../api/api_client.dart';
 import '../api/api_exceptions.dart';
 import '../api/services/api_services_providers.dart';
@@ -21,6 +22,7 @@ const _kUserName = 'auth_user_name';
 const _kUserRole = 'auth_user_role';
 const _kOrganizationId = 'auth_organization_id';
 const _kOrganizationsJson = 'auth_organizations_json';
+const _kUserAvatarUrl = 'auth_user_avatar_url';
 const _kDemoBusinessToken = 'demo_jwt_business';
 
 /// Роль в приложении Business (как в Master Prompt).
@@ -49,6 +51,8 @@ enum BusinessRole {
   bool get canSeeChats => this != BusinessRole.master;
   bool get canSeeClients => this != BusinessRole.master;
   bool get canSeeStaff => this == BusinessRole.owner || this == BusinessRole.admin;
+  /// Управление персоналом и приглашениями: владелец, админ, самозанятый. У мастера — нет.
+  bool get canInviteStaff => canSeeStaff || this == BusinessRole.solo;
   bool get canSeeSettings => true;
   bool get canAssignMaster => this == BusinessRole.owner || this == BusinessRole.admin;
   bool get canSeePrices => this != BusinessRole.master;
@@ -65,6 +69,29 @@ enum BusinessRole {
 
 enum AuthStatus { initial, unauthenticated, authenticating, authenticated }
 
+/// Права из карточки персонала (master/admin) с сервера; у owner/solo не используются.
+class StaffCapabilities {
+  final bool canSeeChats;
+  final bool canWriteChats;
+  final bool canManageOrgSettings;
+
+  const StaffCapabilities({
+    required this.canSeeChats,
+    required this.canWriteChats,
+    required this.canManageOrgSettings,
+  });
+
+  static StaffCapabilities? fromJson(dynamic raw) {
+    if (raw is! Map) return null;
+    final m = Map<String, dynamic>.from(raw);
+    return StaffCapabilities(
+      canSeeChats: m['can_see_chats'] == true,
+      canWriteChats: m['can_write_chats'] == true,
+      canManageOrgSettings: m['can_manage_org_settings'] == true,
+    );
+  }
+}
+
 class AuthUser {
   final String id;
   final String phone;
@@ -73,6 +100,10 @@ class AuthUser {
   final BusinessRole role;
   final String? organizationId;
   final List<UserOrganizationSummary> organizations;
+  final bool emailVerified;
+  final bool phoneVerified;
+  final String? avatarUrl;
+  final StaffCapabilities? staffCapabilities;
 
   const AuthUser({
     required this.id,
@@ -82,9 +113,41 @@ class AuthUser {
     required this.role,
     this.organizationId,
     this.organizations = const [],
+    this.emailVerified = true,
+    this.phoneVerified = true,
+    this.avatarUrl,
+    this.staffCapabilities,
   });
 
+  /// Вкладка «Чаты» (owner/solo — всегда да; master/admin — флаги персонала, иначе по умолчанию только admin).
+  bool get effectiveCanSeeChats {
+    if (role == BusinessRole.owner || role == BusinessRole.solo) return true;
+    return staffCapabilities?.canSeeChats ?? (role == BusinessRole.admin);
+  }
+
+  bool get effectiveCanWriteChats {
+    if (role == BusinessRole.owner || role == BusinessRole.solo) return true;
+    return staffCapabilities?.canWriteChats ?? (role == BusinessRole.admin);
+  }
+
+  /// Услуги, слоты, рабочее время и т.д.
+  bool get effectiveCanManageOrgSettings {
+    if (role == BusinessRole.owner || role == BusinessRole.solo) return true;
+    return staffCapabilities?.canManageOrgSettings ?? (role == BusinessRole.admin);
+  }
+
   bool get hasMultipleOrganizations => organizations.length > 1;
+
+  /// Организация для API: `organization_id` из профиля или первая запись в `organizations`, если поле не пришло.
+  String? get effectiveOrganizationId {
+    final id = organizationId?.trim();
+    if (id != null && id.isNotEmpty) return id;
+    for (final o in organizations) {
+      final oid = o.id.trim();
+      if (oid.isNotEmpty) return oid;
+    }
+    return null;
+  }
 
   String get displayName => name;
 
@@ -144,6 +207,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
   final AuthApiService _authApi;
   final WsClient _wsClient;
 
+  Future<String?>? _refreshInFlight;
+
   AuthNotifier(this._apiClient, this._prefs, this._authApi, this._wsClient) : super(const AuthState());
 
   Future<void> initialize() async {
@@ -202,6 +267,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
           role: role,
           organizationId: orgId,
           organizations: orgs,
+          emailVerified: true,
+          phoneVerified: true,
+          avatarUrl: _prefs.getString(_kUserAvatarUrl),
+          staffCapabilities: null,
         ),
         accessToken: token,
         refreshToken: refresh,
@@ -252,6 +321,11 @@ class AuthNotifier extends StateNotifier<AuthState> {
     } else {
       _prefs.remove(_kOrganizationsJson);
     }
+    if (user.avatarUrl != null && user.avatarUrl!.trim().isNotEmpty) {
+      _prefs.setString(_kUserAvatarUrl, user.avatarUrl!.trim());
+    } else {
+      _prefs.remove(_kUserAvatarUrl);
+    }
   }
 
   String _platformLabel() {
@@ -272,6 +346,54 @@ class AuthNotifier extends StateNotifier<AuthState> {
     return Result.failure(result.errorOrNull!);
   }
 
+  /// Обновление access по refresh (single-flight, для интерцептора Dio при 401).
+  Future<String?> refreshSession() {
+    final existing = _refreshInFlight;
+    if (existing != null) return existing;
+    final future = _refreshSessionOnce();
+    _refreshInFlight = future;
+    future.whenComplete(() {
+      if (identical(_refreshInFlight, future)) {
+        _refreshInFlight = null;
+      }
+    });
+    return future;
+  }
+
+  Future<String?> _refreshSessionOnce() async {
+    var refresh = state.refreshToken ?? _prefs.getString(_kRefreshToken);
+    if (refresh == null || refresh.isEmpty || refresh == _kDemoBusinessToken) {
+      return null;
+    }
+    final deviceId = await getOrCreateDeviceId(_prefs);
+    final result = await _authApi.refresh(
+      refresh,
+      deviceId: deviceId,
+      deviceName: 'MP-Servis Business',
+      platform: _platformLabel(),
+    );
+    final verified = result.dataOrNull;
+    if (verified == null) return null;
+    if (!mounted) return null;
+    state = AuthState(
+      status: AuthStatus.authenticated,
+      user: verified.user,
+      accessToken: verified.token,
+      refreshToken: verified.refreshToken ?? refresh,
+      subscriptionDeactivated: state.subscriptionDeactivated,
+    );
+    _apiClient.setToken(verified.token);
+    _wsClient.accessToken = verified.token;
+    _wsClient.connect();
+    _persist(
+      verified.user,
+      verified.token,
+      refreshToken: verified.refreshToken,
+      syncRefresh: true,
+    );
+    return verified.token;
+  }
+
   Future<Result<AuthUser>> verifyEmailCode(
     String email,
     String challengeId,
@@ -286,7 +408,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       challengeId,
       code,
       deviceId: deviceId,
-      deviceName: 'AutoHub Business',
+      deviceName: 'MP-Servis Business',
       platform: _platformLabel(),
       phoneUnverified: phoneUnverified,
       name: name,
@@ -343,6 +465,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
         role: BusinessRole.fromString(match.role),
         organizationId: match.id,
         organizations: u.organizations,
+        emailVerified: u.emailVerified,
+        phoneVerified: u.phoneVerified,
+        avatarUrl: u.avatarUrl,
+        staffCapabilities: u.staffCapabilities,
       );
       state = AuthState(
         status: AuthStatus.authenticated,
@@ -383,14 +509,19 @@ class AuthNotifier extends StateNotifier<AuthState> {
       final newId = 'demo_org_${DateTime.now().millisecondsSinceEpoch}';
       final newOrg = UserOrganizationSummary(id: newId, name: name, role: 'owner');
       final nextOrgs = [...u.organizations, newOrg];
+      final nextRole = u.role == BusinessRole.solo ? BusinessRole.solo : BusinessRole.owner;
       final next = AuthUser(
         id: u.id,
         phone: u.phone,
         email: u.email,
         name: u.name,
-        role: BusinessRole.owner,
+        role: nextRole,
         organizationId: newId,
         organizations: nextOrgs,
+        emailVerified: u.emailVerified,
+        phoneVerified: u.phoneVerified,
+        avatarUrl: u.avatarUrl,
+        staffCapabilities: u.staffCapabilities,
       );
       state = AuthState(
         status: AuthStatus.authenticated,
@@ -413,6 +544,68 @@ class AuthNotifier extends StateNotifier<AuthState> {
       refreshToken: state.refreshToken,
     );
     _persist(v.user, token);
+    return Result.success(null);
+  }
+
+  Future<Result<void>> uploadProfileAvatarBytes(List<int> bytes, String filename) async {
+    final token = state.accessToken;
+    if (token == null || token.isEmpty) {
+      return Result.failure(const ApiException(code: ApiErrorCode.unauthorized, message: 'Нет сессии'));
+    }
+    final r = await _authApi.uploadProfileAvatar(bytes: bytes, filename: filename);
+    final u = r.dataOrNull;
+    if (u == null) {
+      return Result.failure(
+        r.errorOrNull ?? const ApiException(code: ApiErrorCode.internal, message: 'Не удалось загрузить фото'),
+      );
+    }
+    final bustedAvatar = _avatarUrlWithCacheBust(u.avatarUrl);
+    final user = AuthUser(
+      id: u.id,
+      phone: u.phone,
+      email: u.email,
+      name: u.name,
+      role: u.role,
+      organizationId: u.organizationId,
+      organizations: u.organizations,
+      emailVerified: u.emailVerified,
+      phoneVerified: u.phoneVerified,
+      avatarUrl: bustedAvatar,
+      staffCapabilities: u.staffCapabilities,
+    );
+    state = AuthState(
+      status: AuthStatus.authenticated,
+      user: user,
+      accessToken: token,
+      refreshToken: state.refreshToken,
+      subscriptionDeactivated: state.subscriptionDeactivated,
+    );
+    _persist(user, token);
+    return Result.success(null);
+  }
+
+  String? _avatarUrlWithCacheBust(String? url) {
+    final base = AppConfig.resolveApiMediaUrl(url) ?? url;
+    if (base == null || base.isEmpty) return base;
+    final uri = Uri.parse(base);
+    return uri.replace(queryParameters: {
+      ...uri.queryParameters,
+      't': DateTime.now().millisecondsSinceEpoch.toString(),
+    }).toString();
+  }
+
+  Future<Result<void>> deleteAccount() async {
+    final token = state.accessToken;
+    if (token == null || token.isEmpty) {
+      return Result.failure(const ApiException(code: ApiErrorCode.unauthorized, message: 'Нет сессии'));
+    }
+    if (token == _kDemoBusinessToken) {
+      return Result.failure(const ApiException(code: ApiErrorCode.validation, message: 'В демо-режиме удаление недоступно'));
+    }
+    final r = await _authApi.deleteAccount();
+    final err = r.errorOrNull;
+    if (err != null) return Result.failure(err);
+    await logout();
     return Result.success(null);
   }
 
@@ -450,6 +643,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     _prefs.remove(_kUserRole);
     _prefs.remove(_kOrganizationId);
     _prefs.remove(_kOrganizationsJson);
+    _prefs.remove(_kUserAvatarUrl);
     state = const AuthState(status: AuthStatus.unauthenticated, subscriptionDeactivated: true);
   }
 
@@ -467,6 +661,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     await _prefs.remove(_kUserRole);
     await _prefs.remove(_kOrganizationId);
     await _prefs.remove(_kOrganizationsJson);
+    await _prefs.remove(_kUserAvatarUrl);
     state = const AuthState(
       status: AuthStatus.unauthenticated,
       subscriptionDeactivated: false,
@@ -490,6 +685,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     await _prefs.remove(_kUserRole);
     await _prefs.remove(_kOrganizationId);
     await _prefs.remove(_kOrganizationsJson);
+    await _prefs.remove(_kUserAvatarUrl);
     state = const AuthState(status: AuthStatus.unauthenticated, subscriptionDeactivated: false);
   }
 }
@@ -502,7 +698,15 @@ final StateNotifierProvider<AuthNotifier, AuthState> authProvider =
   final prefs = ref.watch(sharedPreferencesProvider).valueOrNull;
   final authApi = ref.watch(authApiServiceProvider);
   final wsClient = ref.watch(wsClientProvider);
-  return AuthNotifier(apiClient, prefs ?? _NoOpPrefs(), authApi, wsClient);
+  final notifier = AuthNotifier(apiClient, prefs ?? _NoOpPrefs(), authApi, wsClient);
+  apiClient.refreshTokenCallback = () => notifier.refreshSession();
+  apiClient.onUnauthorized = () {
+    notifier.forceLogoutUnauthorized();
+  };
+  apiClient.onSubscriptionDeactivated = () {
+    notifier.setSubscriptionDeactivated();
+  };
+  return notifier;
 });
 
 class _NoOpPrefs implements SharedPreferences {

@@ -21,6 +21,8 @@ class STOService {
 
   /// Требуемый навык мастера (MAINTENANCE, ENGINE, ELECTRICAL, DIAGNOSTICS, SUSPENSION, TIRES, BODY).
   final String? requiredSkill;
+  /// Id позиции единого справочника (`svc_*`), если строка прайса привязана к каталогу.
+  final String? catalogItemId;
   final bool useBodyTypePricing;
   final List<STOServiceBodyPricing> bodyTypePricing;
 
@@ -31,6 +33,7 @@ class STOService {
     required this.priceKopecks,
     this.durationMinutes = 60,
     this.requiredSkill,
+    this.catalogItemId,
     this.useBodyTypePricing = false,
     this.bodyTypePricing = const [],
   });
@@ -70,8 +73,14 @@ class STOServiceBodyPricing {
 class STOPackageAddon {
   final String serviceId;
   final int extraPriceKopecks;
+  /// Минуты поверх длительности услуги; `0` — использовать длительность услуги из прайса.
+  final int extraDurationMinutes;
 
-  const STOPackageAddon({required this.serviceId, this.extraPriceKopecks = 0});
+  const STOPackageAddon({
+    required this.serviceId,
+    this.extraPriceKopecks = 0,
+    this.extraDurationMinutes = 0,
+  });
 }
 
 class STOPackage {
@@ -81,6 +90,8 @@ class STOPackage {
   final int packagePriceKopecks;
   final List<String> includedServiceIds;
   final List<STOPackageAddon> addons;
+  /// `0` — сумма длительностей входящих услуг.
+  final int packageDurationMinutes;
 
   const STOPackage({
     required this.id,
@@ -89,6 +100,7 @@ class STOPackage {
     required this.packagePriceKopecks,
     this.includedServiceIds = const [],
     this.addons = const [],
+    this.packageDurationMinutes = 0,
   });
 }
 

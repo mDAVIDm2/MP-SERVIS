@@ -57,13 +57,14 @@ export class OrdersController {
   @Get(':id')
   async get(
     @Param('id') id: string,
-    @Req() req: Request & { user: { organizationId?: string | null; phone?: string } },
+    @Req() req: Request & { user: { id?: string; organizationId?: string | null; phone?: string } },
   ) {
-    const o = await this.orders.findOne(id);
-    if (!o) throw new NotFoundException('Order not found');
     const user = (req as any).user;
     const clientMode = isClientAppRequest(req);
     const orgId = user?.organizationId;
+    const clientLike = clientMode || (!orgId && user?.phone);
+    const o = await this.orders.findOne(id, clientLike && user?.id ? user.id : undefined);
+    if (!o) throw new NotFoundException('Order not found');
     const userPhone = user?.phone ? this.orders.normalizePhoneForCompare(user.phone) : '';
 
     if (clientMode || (!orgId && user?.phone)) {

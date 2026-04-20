@@ -167,7 +167,7 @@ export class FcmPushService {
       body,
       dataStr,
       collapse,
-      'autohub_messages',
+      'mp_servis_messages',
     );
     await this.sendMulticast(
       this.messagingBusiness,
@@ -176,7 +176,7 @@ export class FcmPushService {
       body,
       dataStr,
       collapse,
-      'autohub_business',
+      'mp_servis_business',
     );
   }
 

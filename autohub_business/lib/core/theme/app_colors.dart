@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Тема AutoHub Business: тёмная, акцент #FF6B00 (как в промпте).
+/// Тема MP-Servis Business: тёмная, акцент #FF6B00 (как в промпте).
 class AppColors {
   AppColors._();
 

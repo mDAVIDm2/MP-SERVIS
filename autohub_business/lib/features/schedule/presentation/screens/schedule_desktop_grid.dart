@@ -6,6 +6,8 @@ import '../../../../core/theme/app_colors_desktop.dart';
 import '../../../../core/repositories/order_repository.dart';
 import '../../../../core/repositories/settings_repository.dart';
 import '../../../../core/repositories/staff_repository.dart';
+import '../../../../core/auth/auth_provider.dart';
+import '../../../../core/utils/schedule_masters_filter.dart';
 import '../../../../core/repositories/organization_repository.dart';
 import '../../../../shared/models/order_model.dart';
 import '../../../../shared/models/settings_models.dart';
@@ -321,6 +323,7 @@ class _ScheduleDesktopGridState extends ConsumerState<ScheduleDesktopGrid> {
     if (!isDesktopPlatform) return const SizedBox.shrink();
     final orders = ref.watch(orderRepositoryProvider);
     final staff = ref.watch(staffRepositoryProvider);
+    final authUser = ref.watch(authProvider).user;
     final slots = ref.watch(settingsRepositoryProvider).slotsSettings;
     final dayStart = DateTime(widget.selectedDate.year, widget.selectedDate.month, widget.selectedDate.day);
     final dayEnd = dayStart.add(const Duration(days: 1));
@@ -332,9 +335,11 @@ class _ScheduleDesktopGridState extends ConsumerState<ScheduleDesktopGrid> {
             o.effectiveDateTime.isBefore(dayEnd) &&
             o.status != OrderStatus.cancelled)
         .toList();
-    final allMasters = staff
-        .where((e) => e.isActive && e.role == StaffRole.master)
-        .toList();
+    final allMasters = filterMastersForScheduleRole(
+      mastersOnShiftForDate(staff, widget.selectedDate),
+      authUser?.role,
+      authUser?.id,
+    );
     final hiddenIds = ref.watch(scheduleHiddenMasterIdsProvider);
     final masters = allMasters.where((m) => !hiddenIds.contains(m.id)).toList();
     final hasNamedBays = slots.hasNamedBays;
@@ -953,7 +958,12 @@ class _ScheduleDesktopGridState extends ConsumerState<ScheduleDesktopGrid> {
   }
 
   void _showMasterPickerForOrder(Order order) {
-    final staff = ref.read(staffRepositoryProvider).where((e) => e.isActive && e.role == StaffRole.master).toList();
+    final u = ref.read(authProvider).user;
+    final staff = filterMastersForScheduleRole(
+      mastersOnShiftForDate(ref.read(staffRepositoryProvider), widget.selectedDate),
+      u?.role,
+      u?.id,
+    );
     if (staff.isEmpty) return;
     showDialog<void>(
       context: context,
@@ -991,10 +1001,15 @@ class _ScheduleDesktopGridState extends ConsumerState<ScheduleDesktopGrid> {
 
   void _showAddMasterDialog(BuildContext context) {
     final hiddenIds = ref.read(scheduleHiddenMasterIdsProvider);
+    final authUser = ref.read(authProvider).user;
     final staff = ref.read(staffRepositoryProvider);
-    final hiddenMasters = staff
-        .where((e) => e.isActive && e.role == StaffRole.master && hiddenIds.contains(e.id))
-        .toList();
+    final hiddenMasters = filterMastersForScheduleRole(
+      staff
+          .where((e) => e.isActive && e.role == StaffRole.master && hiddenIds.contains(e.id))
+          .toList(),
+      authUser?.role,
+      authUser?.id,
+    );
     if (hiddenMasters.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Все мастера уже отображаются в таблице')),
@@ -1787,7 +1802,7 @@ class _DesktopScheduleOrderCardState extends ConsumerState<_DesktopScheduleOrder
     return card;
   }
 
-  /// Один слот: номер крупно, время справа с цветом, авто, статус внизу по центру.
+  /// Один слот: номер крупно, время справа с цветом, авто; верх прокручивается, статус закреплён снизу.
   Widget _buildCompactContent(
     Order order,
     DateTime startLocal,
@@ -1797,89 +1812,82 @@ class _DesktopScheduleOrderCardState extends ConsumerState<_DesktopScheduleOrder
   ) {
     final timeRange = _orderTimeRangeString(order);
     return Column(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      mainAxisSize: MainAxisSize.min,
       children: [
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+        Expanded(
+          child: SingleChildScrollView(
+            physics: const ClampingScrollPhysics(),
+            clipBehavior: Clip.hardEdge,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Text(
-                    '#${order.orderNumber}',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                      color: AppColorsDesktop.textPrimary,
-                      letterSpacing: -0.2,
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '#${order.orderNumber}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: AppColorsDesktop.textPrimary,
+                          letterSpacing: -0.2,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                    maxLines: 1,
+                    Text(
+                      timeRange,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF2563EB),
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (widget.isDraggable) ...[
+                      const SizedBox(width: 4),
+                      Icon(Icons.drag_indicator_rounded, size: 12, color: AppColorsDesktop.textTertiary),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  order.carInfo.isNotEmpty ? order.carInfo : 'Автомобиль не указан',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColorsDesktop.textPrimary,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                ..._contextMasterBayLines(order, boardMode, hasNamedBays, compact: true),
+                if (order.licensePlate != null && order.licensePlate!.trim().isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 1),
+                    child: Text(
+                      'Гос. ${order.licensePlate!.trim()}',
+                      style: const TextStyle(fontSize: 9, color: AppColorsDesktop.textTertiary),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                if (order.comment != null && order.comment!.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    order.comment!,
+                    style: const TextStyle(fontSize: 9, fontStyle: FontStyle.italic, color: AppColorsDesktop.textSecondary),
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
-                ),
-                Flexible(
-                  child: Text(
-                    timeRange,
-                    style: const TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF2563EB),
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                if (widget.isDraggable) ...[
-                  const SizedBox(width: 4),
-                  Icon(Icons.drag_indicator_rounded, size: 12, color: AppColorsDesktop.textTertiary),
                 ],
               ],
             ),
-            const SizedBox(height: 4),
-            Text(
-              order.carInfo.isNotEmpty ? order.carInfo : 'Автомобиль не указан',
-              style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                color: AppColorsDesktop.textPrimary,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            ..._contextMasterBayLines(order, boardMode, hasNamedBays, compact: true),
-            if (order.vin != null && order.vin!.trim().isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: Text(
-                  'VIN: ${order.vin!.trim()}',
-                  style: const TextStyle(fontSize: 9, color: AppColorsDesktop.textTertiary, fontFamily: 'monospace'),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            if (order.licensePlate != null && order.licensePlate!.trim().isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 1),
-                child: Text(
-                  'Гос. ${order.licensePlate!.trim()}',
-                  style: const TextStyle(fontSize: 9, color: AppColorsDesktop.textTertiary),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            if (order.comment != null && order.comment!.isNotEmpty) ...[
-              const SizedBox(height: 2),
-              Text(
-                order.comment!,
-                style: const TextStyle(fontSize: 9, fontStyle: FontStyle.italic, color: AppColorsDesktop.textSecondary),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-          ],
+          ),
         ),
         const SizedBox(height: 4),
         Center(
@@ -1918,99 +1926,88 @@ class _DesktopScheduleOrderCardState extends ConsumerState<_DesktopScheduleOrder
     final mainItems = disp.where((i) => !i.isAdditional).toList();
     final addItems = disp.where((i) => i.isAdditional).toList();
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.max,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Expanded(
-              child: Text(
-                '#${order.orderNumber}',
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
-                  color: AppColorsDesktop.textPrimary,
-                  letterSpacing: -0.2,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            Flexible(
-              child: Text(
-                timeRange,
-                style: const TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF2563EB),
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            if (widget.isDraggable) ...[
-              const SizedBox(width: 4),
-              Icon(Icons.drag_indicator_rounded, size: 14, color: AppColorsDesktop.textTertiary),
-            ],
-          ],
-        ),
-        const SizedBox(height: 6),
-        Text(
-          order.carInfo.isNotEmpty ? order.carInfo : 'Автомобиль не указан',
-          style: const TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            color: AppColorsDesktop.textPrimary,
-          ),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        ..._contextMasterBayLines(order, boardMode, hasNamedBays, compact: false),
-        if (order.vin != null && order.vin!.trim().isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: Text(
-              'VIN: ${order.vin!.trim()}',
-              style: const TextStyle(fontSize: 9, color: AppColorsDesktop.textTertiary, fontFamily: 'monospace'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        if (order.licensePlate != null && order.licensePlate!.trim().isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 1),
-            child: Text(
-              'Гос. номер: ${order.licensePlate!.trim()}',
-              style: const TextStyle(fontSize: 9, color: AppColorsDesktop.textTertiary),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        if (order.masterName != null && order.masterName!.isNotEmpty) ...[
-          const SizedBox(height: 2),
-          Text(
-            'Назначен: ${order.masterName}',
-            style: TextStyle(fontSize: fontSize, color: accent),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ],
-        if (order.clientName != null && order.clientName!.isNotEmpty) ...[
-          const SizedBox(height: 2),
-          Text(
-            'Клиент: ${order.clientName}',
-            style: const TextStyle(fontSize: fontSize, color: AppColorsDesktop.textSecondary),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ],
         Expanded(
           child: SingleChildScrollView(
+            physics: const ClampingScrollPhysics(),
+            clipBehavior: Clip.hardEdge,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '#${order.orderNumber}',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          color: AppColorsDesktop.textPrimary,
+                          letterSpacing: -0.2,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    Text(
+                      timeRange,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF2563EB),
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (widget.isDraggable) ...[
+                      const SizedBox(width: 4),
+                      Icon(Icons.drag_indicator_rounded, size: 14, color: AppColorsDesktop.textTertiary),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  order.carInfo.isNotEmpty ? order.carInfo : 'Автомобиль не указан',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColorsDesktop.textPrimary,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                ..._contextMasterBayLines(order, boardMode, hasNamedBays, compact: false),
+                if (order.licensePlate != null && order.licensePlate!.trim().isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 1),
+                    child: Text(
+                      'Гос. номер: ${order.licensePlate!.trim()}',
+                      style: const TextStyle(fontSize: 9, color: AppColorsDesktop.textTertiary),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                if (order.masterName != null && order.masterName!.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    'Назначен: ${order.masterName}',
+                    style: TextStyle(fontSize: fontSize, color: accent),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+                if (order.clientName != null && order.clientName!.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    'Клиент: ${order.clientName}',
+                    style: const TextStyle(fontSize: fontSize, color: AppColorsDesktop.textSecondary),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
                 if (disp.isNotEmpty) ...[
                   const SizedBox(height: 6),
                   Text(
@@ -2043,7 +2040,7 @@ class _DesktopScheduleOrderCardState extends ConsumerState<_DesktopScheduleOrder
                                 color: AppColorsDesktop.textPrimary,
                                 decoration: item.isCompleted ? TextDecoration.lineThrough : null,
                               ),
-                              maxLines: 1,
+                              maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
@@ -2072,7 +2069,7 @@ class _DesktopScheduleOrderCardState extends ConsumerState<_DesktopScheduleOrder
                                 fontWeight: FontWeight.w500,
                                 decoration: item.isCompleted ? TextDecoration.lineThrough : null,
                               ),
-                              maxLines: 1,
+                              maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
@@ -2099,29 +2096,41 @@ class _DesktopScheduleOrderCardState extends ConsumerState<_DesktopScheduleOrder
                         fontStyle: FontStyle.italic,
                         color: AppColorsDesktop.textSecondary,
                       ),
-                      maxLines: 2,
+                      maxLines: 3,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ],
-                  if (canSeePrices && totalKopecks > 0) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      'Итого: ${formatMoney(totalKopecks)}',
-                      style: const TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                        color: AppColorsDesktop.accentMoney,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                ] else if (order.comment != null && order.comment!.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    order.comment!,
+                    style: const TextStyle(
+                      fontSize: 9,
+                      fontStyle: FontStyle.italic,
+                      color: AppColorsDesktop.textSecondary,
                     ),
-                  ],
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+                if (canSeePrices && totalKopecks > 0) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'Итого: ${formatMoney(totalKopecks)}',
+                    style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: AppColorsDesktop.accentMoney,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ],
               ],
             ),
           ),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
         Center(
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
