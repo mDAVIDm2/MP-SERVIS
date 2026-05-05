@@ -12,6 +12,13 @@ export class BookingController {
     return this.booking.getAvailableSlots(body);
   }
 
+  @Post('nearest-slots-batch')
+  async nearestSlotsBatch(
+    @Body() body: { organization_ids?: string[]; service_ids?: string[] },
+  ) {
+    return this.booking.nearestSlotsBatch(body ?? {});
+  }
+
   /** Временный эндпоинт для разработки: очистить все заказы и OrderItem из БД (тестовые данные). */
   @Delete('clear-test-orders')
   async clearTestOrders() {

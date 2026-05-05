@@ -2,6 +2,7 @@ import { Controller, Get, NotFoundException, Param, Query, UseGuards } from '@ne
 import { AuthGuard } from '@nestjs/passport';
 import { ServiceCatalogService } from '../reference/service-catalog.service';
 import { OrganizationsService } from './organizations.service';
+import { computeOrganizationHoursLive } from './working-hours-calendar.util';
 
 interface ServiceItem {
   id: string;
@@ -67,6 +68,8 @@ export class CatalogController {
     const drafts: Array<{
       o: (typeof list)[0];
       carBrands: string[];
+      amenityIds: string[];
+      publicDescription: string;
       photoUrls: string[];
       byId: Map<string, ServicePayloadRow>;
       catalogItemIdsForSearch: Set<string>;
@@ -79,8 +82,17 @@ export class CatalogController {
         car_brands?: string[];
         services?: ServiceItem[];
         service_packages?: ServicePackageRow[];
+        amenity_ids?: string[];
+        public_description?: string;
       };
       const carBrands = Array.isArray(settings?.car_brands) ? settings.car_brands : [];
+      const amenityIds = Array.isArray(settings?.amenity_ids)
+        ? (settings.amenity_ids as string[]).filter((x) => typeof x === 'string' && x.trim() !== '')
+        : [];
+      const publicDescription =
+        settings?.public_description != null && String(settings.public_description).trim() !== ''
+          ? String(settings.public_description).trim()
+          : '';
       const photoUrls = this.org.getPhotoUrls(o);
       const services = Array.isArray(settings?.services) ? settings.services : [];
       const packages = Array.isArray(settings?.service_packages) ? settings.service_packages : [];
@@ -141,14 +153,31 @@ export class CatalogController {
 
       const bk = ((o as any).businessKind ?? 'sto') as string;
       const sm = ((o as any).schedulingMode ?? 'staff_based') as string;
-      drafts.push({ o, carBrands, photoUrls, byId, catalogItemIdsForSearch, bk, sm });
+      drafts.push({
+        o,
+        carBrands,
+        amenityIds,
+        publicDescription,
+        photoUrls,
+        byId,
+        catalogItemIdsForSearch,
+        bk,
+        sm,
+      });
     }
 
     const catalogBasics = await this.serviceCatalog.resolveItemBasicsByIds([...pendingCatalogIds]);
 
     const items: Array<{
       id: string; name: string; address: string; phone: string; working_hours: string;
-      car_brands: string[]; latitude?: number; longitude?: number; photo_urls: string[];
+      working_hours_week: Array<{ open: string; close: string; closed?: boolean }> | null;
+      working_hours_exceptions: Array<{ date: string; closed?: boolean; open?: string; close?: string }> | null;
+      timezone: string;
+      hours_live: ReturnType<typeof computeOrganizationHoursLive>;
+      car_brands: string[];
+      amenity_ids: string[];
+      public_description?: string;
+      latitude?: number; longitude?: number; photo_urls: string[];
       service_ids: string[];
       services: ServicePayloadRow[];
       business_kind: string;
@@ -181,13 +210,31 @@ export class CatalogController {
       const service_ids = [
         ...new Set([...servicesPayload.map((s) => s.id), ...d.catalogItemIdsForSearch]),
       ];
+      const tz = ((d.o as any).timezone ?? 'Europe/Moscow') as string;
+      const week = ((d.o as any).workingHoursWeek ?? null) as Array<{
+        open: string;
+        close: string;
+        closed?: boolean;
+      }> | null;
+      const exceptions = ((d.o as any).workingHoursExceptions ?? null) as Array<{
+        date: string;
+        closed?: boolean;
+        open?: string;
+        close?: string;
+      }> | null;
       items.push({
         id: d.o.id,
         name: d.o.name,
         address: d.o.address,
         phone: d.o.phone,
         working_hours: d.o.workingHours,
+        working_hours_week: week,
+        working_hours_exceptions: exceptions,
+        timezone: tz,
+        hours_live: computeOrganizationHoursLive({ timezone: tz, week, exceptions }),
         car_brands: d.carBrands,
+        amenity_ids: d.amenityIds,
+        public_description: d.publicDescription || undefined,
         latitude: (d.o as any).latitude ?? undefined,
         longitude: (d.o as any).longitude ?? undefined,
         photo_urls: d.photoUrls,
@@ -218,19 +265,47 @@ export class CatalogController {
   async getOrganization(@Param('id') id: string) {
     const o = await this.org.findOne(id);
     if (!o) throw new NotFoundException('Organization not found');
-    const settings = (await this.org.getSettings(id)) as { car_brands?: string[] };
+    const settings = (await this.org.getSettings(id)) as {
+      car_brands?: string[];
+      amenity_ids?: string[];
+      public_description?: string;
+    };
     const carBrands = Array.isArray(settings?.car_brands) ? settings.car_brands : [];
+    const amenityIds = Array.isArray(settings?.amenity_ids)
+      ? (settings.amenity_ids as string[]).filter((x) => typeof x === 'string' && x.trim() !== '')
+      : [];
+    const publicDescription =
+      settings?.public_description != null && String(settings.public_description).trim() !== ''
+        ? String(settings.public_description).trim()
+        : '';
     const photoUrls = this.org.getPhotoUrls(o);
     const bk = ((o as any).businessKind ?? 'sto') as string;
     const sm = ((o as any).schedulingMode ?? 'staff_based') as string;
+    const tz = (o as any).timezone ?? 'Europe/Moscow';
+    const week = ((o as any).workingHoursWeek ?? null) as Array<{
+      open: string;
+      close: string;
+      closed?: boolean;
+    }> | null;
+    const exceptions = ((o as any).workingHoursExceptions ?? null) as Array<{
+      date: string;
+      closed?: boolean;
+      open?: string;
+      close?: string;
+    }> | null;
     return {
       id: o.id,
       name: o.name,
       address: o.address,
       phone: o.phone,
       working_hours: o.workingHours,
-      timezone: (o as any).timezone ?? 'Europe/Moscow',
+      working_hours_week: week,
+      working_hours_exceptions: exceptions,
+      timezone: tz,
+      hours_live: computeOrganizationHoursLive({ timezone: tz, week, exceptions }),
       car_brands: carBrands,
+      amenity_ids: amenityIds,
+      public_description: publicDescription || undefined,
       latitude: (o as any).latitude ?? undefined,
       longitude: (o as any).longitude ?? undefined,
       photo_urls: photoUrls,

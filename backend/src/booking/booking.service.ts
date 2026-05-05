@@ -9,6 +9,10 @@ import { OrderItem } from '../orders/order-item.entity';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { normalizeSchedulingMode } from '../organizations/organization-scheduling';
 import { effectiveBayCountFromSlots } from '../organizations/bay-settings.util';
+import {
+  formatHmFromMinutes,
+  resolveEffectiveDayMinutes,
+} from '../organizations/working-hours-calendar.util';
 import { Skill } from '../shared/skill.enum';
 
 export interface ServiceItemInput {
@@ -212,17 +216,69 @@ export class BookingService {
     const wdStartStr = settings?.slots?.work_day_start ?? '09:00';
     const wdEndStr = settings?.slots?.work_day_end ?? '20:00';
     const bayCount = effectiveBayCountFromSlots(slotsBlock);
+    if (!dayStartLocal.isValid) {
+      return {
+        slots: [],
+        total_minutes: totalMinutes,
+        required_skills: requiredSkills,
+        slot_duration_minutes: slotDurationMinutes,
+        work_day_start: wdStartStr,
+        work_day_end: wdEndStr,
+        scheduling_mode: schedulingMode,
+        bay_count: schedulingMode === 'bay_based' ? bayCount : undefined,
+      };
+    }
+
+    const week = (org as any)?.workingHoursWeek as
+      | Array<{ open: string; close: string; closed?: boolean }>
+      | null
+      | undefined;
+    const exceptions = (org as any)?.workingHoursExceptions as
+      | Array<{ date: string; closed?: boolean; open?: string; close?: string }>
+      | null
+      | undefined;
+    const effDay = resolveEffectiveDayMinutes({ dateLocal: dayStartLocal, week, exceptions });
+    if (!effDay || effDay.closed) {
+      return {
+        slots: [],
+        total_minutes: totalMinutes,
+        required_skills: requiredSkills,
+        slot_duration_minutes: slotDurationMinutes,
+        work_day_start: wdStartStr,
+        work_day_end: wdEndStr,
+        scheduling_mode: schedulingMode,
+        bay_count: schedulingMode === 'bay_based' ? bayCount : undefined,
+      };
+    }
+    const slotCfgStart = orgWorkStart ?? parseTime(wdStartStr);
+    const slotCfgEnd = orgWorkEnd ?? parseTime(wdEndStr);
+    const winStart = Math.max(effDay.openM, slotCfgStart);
+    const winEnd = Math.min(effDay.closeM, slotCfgEnd);
+    if (winEnd <= winStart) {
+      return {
+        slots: [],
+        total_minutes: totalMinutes,
+        required_skills: requiredSkills,
+        slot_duration_minutes: slotDurationMinutes,
+        work_day_start: wdStartStr,
+        work_day_end: wdEndStr,
+        scheduling_mode: schedulingMode,
+        bay_count: schedulingMode === 'bay_based' ? bayCount : undefined,
+      };
+    }
+    const wdStartStrEff = formatHmFromMinutes(winStart);
+    const wdEndStrEff = formatHmFromMinutes(winEnd);
+
     const emptyMeta = {
       slots: [] as TimeSlot[],
       total_minutes: totalMinutes,
       required_skills: requiredSkills,
       slot_duration_minutes: slotDurationMinutes,
-      work_day_start: wdStartStr,
-      work_day_end: wdEndStr,
+      work_day_start: wdStartStrEff,
+      work_day_end: wdEndStrEff,
       scheduling_mode: schedulingMode,
       bay_count: schedulingMode === 'bay_based' ? bayCount : undefined,
     };
-    if (!dayStartLocal.isValid) return emptyMeta;
     const dayEndLocal = dayStartLocal.plus({ days: 1 });
     const dayStart = dayStartLocal.toUTC().toJSDate();
     const dayEnd = dayEndLocal.toUTC().toJSDate();
@@ -236,8 +292,8 @@ export class BookingService {
         dayEnd,
         totalMinutes,
         slotDurationMinutes,
-        wdStartStr,
-        wdEndStr,
+        wdStartStr: wdStartStrEff,
+        wdEndStr: wdEndStrEff,
         requiredSkills,
         bayCount,
       });
@@ -262,11 +318,9 @@ export class BookingService {
     for (const sch of schedules) {
       let start = parseTime(sch.startTime);
       let end = parseTime(sch.endTime);
-      // Пересечение с окном организации: нельзя «растягивать» смену мастера за пределы org work_day.
-      if (orgWorkStart != null && orgWorkEnd != null) {
-        start = Math.max(start, orgWorkStart);
-        end = Math.min(end, orgWorkEnd);
-      }
+      // Пересечение с окном организации и календарём (график / исключения).
+      start = Math.max(start, winStart);
+      end = Math.min(end, winEnd);
       if (end <= start) continue;
       const existing = scheduleByMaster.get(sch.masterId);
       if (!existing || start < existing.start) scheduleByMaster.set(sch.masterId, { start, end });
@@ -418,8 +472,8 @@ export class BookingService {
       total_minutes: totalMinutes,
       required_skills: requiredSkills,
       slot_duration_minutes: slotDurationMinutes,
-      work_day_start: wdStartStr,
-      work_day_end: wdEndStr,
+      work_day_start: wdStartStrEff,
+      work_day_end: wdEndStrEff,
       scheduling_mode: 'staff_based',
     };
   }
@@ -521,6 +575,50 @@ export class BookingService {
       scheduling_mode: 'bay_based',
       bay_count: bayCount,
     };
+  }
+
+  /**
+   * Ближайшее время начала записи по выбранным услугам (до 14 дней вперёд, по зоне организации).
+   * Тяжёлый вызов: только при активном фильтре услуг в поиске, батч ≤ 40 точек.
+   */
+  async nearestSlotsBatch(body: {
+    organization_ids?: string[];
+    service_ids?: string[];
+  }): Promise<{ results: Array<{ organization_id: string; nearest_start: string | null }> }> {
+    const rawIds = Array.isArray(body?.organization_ids) ? body.organization_ids : [];
+    const serviceIds = [
+      ...new Set(
+        (Array.isArray(body?.service_ids) ? body.service_ids : [])
+          .map((x) => String(x).trim())
+          .filter((x) => x.length > 0),
+      ),
+    ];
+    const organization_ids = [
+      ...new Set(
+        rawIds.map((x) => String(x).trim()).filter((x) => x.length > 0),
+      ),
+    ].slice(0, 40);
+    const results: Array<{ organization_id: string; nearest_start: string | null }> = [];
+    for (const organization_id of organization_ids) {
+      let nearest_start: string | null = null;
+      if (serviceIds.length > 0) {
+        const org = await this.orgService.findOne(organization_id);
+        if (org) {
+          const timezone = (org as any)?.timezone ?? 'Europe/Moscow';
+          const todayLocal = DateTime.now().setZone(timezone).startOf('day');
+          for (let d = 0; d < 14 && nearest_start == null; d++) {
+            const day = todayLocal.plus({ days: d });
+            const date = day.toFormat('yyyy-MM-dd');
+            const pack = await this.getAvailableSlots({ organization_id, date, service_ids: serviceIds });
+            if (pack.slots.length > 0) {
+              nearest_start = pack.slots[0].start;
+            }
+          }
+        }
+      }
+      results.push({ organization_id, nearest_start });
+    }
+    return { results };
   }
 
   /**

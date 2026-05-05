@@ -22,6 +22,8 @@ function toOrgDto(o: Organization) {
     address: o.address ?? '',
     phone: o.phone ?? '',
     working_hours: o.workingHours ?? '',
+    working_hours_week: (o as any).workingHoursWeek ?? null,
+    working_hours_exceptions: (o as any).workingHoursExceptions ?? null,
     timezone: o.timezone ?? 'Europe/Moscow',
     latitude: o.latitude ?? null,
     longitude: o.longitude ?? null,
@@ -107,6 +109,8 @@ export class InternalOrganizationsController {
       address?: string;
       phone?: string;
       working_hours?: string;
+      working_hours_week?: Array<{ open?: string; close?: string; closed?: boolean }> | null;
+      working_hours_exceptions?: Array<{ date?: string; closed?: boolean; open?: string; close?: string }> | null;
       timezone?: string;
       latitude?: number | null;
       longitude?: number | null;
@@ -117,6 +121,8 @@ export class InternalOrganizationsController {
       address: body.address,
       phone: body.phone,
       working_hours: body.working_hours,
+      working_hours_week: body.working_hours_week,
+      working_hours_exceptions: body.working_hours_exceptions,
       timezone: body.timezone,
       latitude: body.latitude,
       longitude: body.longitude,

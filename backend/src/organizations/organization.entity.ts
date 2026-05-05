@@ -19,6 +19,19 @@ export class Organization {
   @Column({ name: 'working_hours', default: 'Пн–Пт 9:00–19:00, Сб 10:00–16:00' })
   workingHours: string;
 
+  /**
+   * 7 элементов: пн…вс. { open, close, closed? } — время в локальном поясе организации, формат HH:mm.
+   */
+  @Column({ name: 'working_hours_week', type: 'jsonb', nullable: true })
+  workingHoursWeek: Array<{ open: string; close: string; closed?: boolean }> | null;
+
+  /**
+   * Разовые исключения: date YYYY-MM-DD в локальной зоне организации;
+   * closed: true — выходной; иначе open/close (HH:mm) — сокращённый или особый день.
+   */
+  @Column({ name: 'working_hours_exceptions', type: 'jsonb', nullable: true })
+  workingHoursExceptions: Array<{ date: string; closed?: boolean; open?: string; close?: string }> | null;
+
   /** IANA timezone (например Europe/Moscow). Используется для слотов и рабочего времени. */
   @Column({ name: 'timezone', type: 'varchar', length: 64, default: 'Europe/Moscow' })
   timezone: string;

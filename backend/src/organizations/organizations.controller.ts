@@ -69,6 +69,8 @@ export class OrganizationsController {
       address: o.address,
       phone: o.phone,
       working_hours: o.workingHours,
+      working_hours_week: (o as any).workingHoursWeek ?? null,
+      working_hours_exceptions: (o as any).workingHoursExceptions ?? null,
       timezone: (o as any).timezone ?? 'Europe/Moscow',
       photo_urls: photoUrls,
       latitude: (o as any).latitude ?? null,
@@ -112,6 +114,8 @@ export class OrganizationsController {
       address?: string;
       phone?: string;
       working_hours?: string;
+      working_hours_week?: Array<{ open?: string; close?: string; closed?: boolean }> | null;
+      working_hours_exceptions?: Array<{ date?: string; closed?: boolean; open?: string; close?: string }> | null;
       timezone?: string;
       latitude?: number | null;
       longitude?: number | null;
@@ -128,6 +132,8 @@ export class OrganizationsController {
       address: o.address,
       phone: o.phone,
       working_hours: o.workingHours,
+      working_hours_week: (o as any).workingHoursWeek ?? null,
+      working_hours_exceptions: (o as any).workingHoursExceptions ?? null,
       timezone: (o as any).timezone ?? 'Europe/Moscow',
       latitude: (o as any).latitude ?? null,
       longitude: (o as any).longitude ?? null,

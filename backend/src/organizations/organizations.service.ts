@@ -342,6 +342,10 @@ export class OrganizationsService {
       address?: string;
       phone?: string;
       working_hours?: string;
+      /** 7 дней, пн…вс */
+      working_hours_week?: Array<{ open?: string; close?: string; closed?: boolean }> | null;
+      /** Разовые выходные / сокращённые дни (YYYY-MM-DD в зоне точки). */
+      working_hours_exceptions?: Array<{ date?: string; closed?: boolean; open?: string; close?: string }> | null;
       timezone?: string;
       latitude?: number | null;
       longitude?: number | null;
@@ -349,7 +353,7 @@ export class OrganizationsService {
       scheduling_mode?: string;
     },
   ) {
-    const updateData: Record<string, string | number | null> = {};
+    const updateData: Record<string, string | number | null | object> = {};
     if (dto.name != null) updateData['name'] = dto.name;
     if (dto.address != null) updateData['address'] = dto.address;
     if (dto.phone != null) updateData['phone'] = dto.phone;
@@ -367,10 +371,107 @@ export class OrganizationsService {
     if (dto.scheduling_mode != null) {
       updateData['schedulingMode'] = normalizeSchedulingMode(dto.scheduling_mode);
     }
+    if (dto.working_hours_week !== undefined) {
+      if (dto.working_hours_week == null) {
+        updateData['workingHoursWeek'] = null;
+      } else {
+        const normalized = this.normalizeWorkingHoursWeek(dto.working_hours_week);
+        updateData['workingHoursWeek'] = normalized;
+        if (normalized != null) {
+          updateData['workingHours'] = this.summarizeWorkingHoursWeek(normalized);
+        }
+      }
+    }
+    if (dto.working_hours_exceptions !== undefined) {
+      if (dto.working_hours_exceptions == null) {
+        updateData['workingHoursExceptions'] = null;
+      } else {
+        updateData['workingHoursExceptions'] = this.normalizeWorkingHoursExceptions(dto.working_hours_exceptions);
+      }
+    }
     if (Object.keys(updateData).length > 0) {
       await this.orgRepo.update(id, updateData);
     }
     return this.orgRepo.findOne({ where: { id } });
+  }
+
+  private normalizeWorkingHoursExceptions(
+    input: Array<{ date?: string; closed?: boolean; open?: string; close?: string }>,
+  ): Array<{ date: string; closed?: boolean; open?: string; close?: string }> {
+    if (!Array.isArray(input)) {
+      throw new BadRequestException('working_hours_exceptions: ожидается массив');
+    }
+    const reDate = /^\d{4}-\d{2}-\d{2}$/;
+    const reHm = /^([01]\d|2[0-3]):[0-5]\d$/;
+    const out: Array<{ date: string; closed?: boolean; open?: string; close?: string }> = [];
+    const seen = new Set<string>();
+    for (const raw of input) {
+      if (!raw || typeof raw !== 'object') continue;
+      const date = String(raw.date ?? '').trim();
+      if (!reDate.test(date) || seen.has(date)) continue;
+      if (raw.closed === true) {
+        seen.add(date);
+        out.push({ date, closed: true });
+        continue;
+      }
+      const open = String(raw.open ?? '').trim();
+      const close = String(raw.close ?? '').trim();
+      if (reHm.test(open) && reHm.test(close)) {
+        if (open >= close) {
+          throw new BadRequestException(`working_hours_exceptions: для ${date} время «до» должно быть позже «с»`);
+        }
+        seen.add(date);
+        out.push({ date, open, close });
+      }
+    }
+    out.sort((a, b) => a.date.localeCompare(b.date));
+    return out;
+  }
+
+  private normalizeWorkingHoursWeek(
+    input: Array<{ open?: string; close?: string; closed?: boolean }>,
+  ): Array<{ open: string; close: string; closed: boolean }> {
+    if (!Array.isArray(input) || input.length !== 7) {
+      throw new BadRequestException('working_hours_week: укажите 7 дней (понедельник–воскресенье)');
+    }
+    const re = /^([01]\d|2[0-3]):[0-5]\d$/;
+    return input.map((raw, idx) => {
+      const closed = raw?.closed === true;
+      if (closed) {
+        return { open: '00:00', close: '00:00', closed: true };
+      }
+      const open = String(raw?.open ?? '09:00').trim();
+      const close = String(raw?.close ?? '19:00').trim();
+      if (!re.test(open) || !re.test(close)) {
+        throw new BadRequestException(`Неверный формат времени для дня ${idx + 1} (ожидается HH:mm)`);
+      }
+      if (open >= close) {
+        throw new BadRequestException(`Время «до» должно быть позже «с» (день ${idx + 1})`);
+      }
+      return { open, close, closed: false };
+    });
+  }
+
+  private summarizeWorkingHoursWeek(week: Array<{ open: string; close: string; closed: boolean }>): string {
+    const short = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+    const key = (d: { open: string; close: string; closed: boolean }) =>
+      d.closed ? 'x' : `${d.open}|${d.close}`;
+    const parts: string[] = [];
+    let i = 0;
+    while (i < 7) {
+      const k0 = key(week[i]);
+      let j = i + 1;
+      while (j < 7 && key(week[j]) === k0) j++;
+      const label = i === j - 1 ? short[i] : `${short[i]}–${short[j - 1]}`;
+      if (k0 === 'x') {
+        parts.push(`${label}: выходной`);
+      } else {
+        const [op, cl] = k0.split('|');
+        parts.push(`${label} ${op}–${cl}`);
+      }
+      i = j;
+    }
+    return parts.join(', ');
   }
 
   async getStaff(orgId: string) {
