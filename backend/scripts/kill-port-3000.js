@@ -1,9 +1,25 @@
 /**
- * Освобождает порт 3000 (убивает процесс, который его слушает).
- * Запускается перед `npm run dev`, чтобы избежать EADDRINUSE.
+ * Освобождает порт приложения (по умолчанию 3000), убивая LISTENING PID.
+ * prestart запускается до Nest, поэтому читаем PORT из .env в cwd (папка backend).
  */
 const { execSync } = require('child_process');
-const port = process.env.PORT || 3000;
+const fs = require('fs');
+const path = require('path');
+
+function readPortFromEnvFile() {
+  const envPath = path.join(process.cwd(), '.env');
+  try {
+    const raw = fs.readFileSync(envPath, 'utf8');
+    const m = raw.match(/^\s*PORT\s*=\s*(\S+)/m);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (!Number.isNaN(n)) return n;
+    }
+  } catch (_) {}
+  return null;
+}
+
+const port = process.env.PORT || readPortFromEnvFile() || 3000;
 
 function killPort(port) {
   try {
