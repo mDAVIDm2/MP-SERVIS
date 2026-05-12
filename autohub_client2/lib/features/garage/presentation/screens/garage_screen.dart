@@ -8,6 +8,8 @@ import '../../../../core/providers/app_providers.dart';
 import '../../../../core/settings/filter_by_car_setting.dart';
 import '../../../profile/presentation/screens/maintenance_reminders_screen.dart';
 import '../../../../core/settings/garage_maintenance_onboarding_provider.dart';
+import '../../../../core/onboarding/garage_first_car_tutorial_provider.dart';
+import '../../../../core/onboarding/garage_tutorial_target.dart';
 import '../../../../core/settings/maintenance_reminders_provider.dart';
 import '../../../profile/presentation/widgets/car_maintenance_reminders_section.dart';
 import '../widgets/garage_maintenance_recommendations_block.dart';
@@ -30,6 +32,8 @@ import '../widgets/reminder_card.dart';
 import '../widgets/order_card.dart';
 import '../widgets/mileage_update_sheet.dart';
 import '../widgets/garage_cars_list_sheet.dart';
+import '../widgets/incoming_car_transfers_banner.dart';
+import '../widgets/outgoing_car_transfers_banner.dart';
 
 class GarageScreen extends ConsumerStatefulWidget {
   const GarageScreen({super.key});
@@ -86,6 +90,8 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.invalidate(unreadNotificationCountProvider);
       ref.invalidate(unreadByCarProvider);
+      ref.invalidate(incomingCarTransfersProvider);
+      ref.invalidate(outgoingCarTransfersProvider);
     });
   }
 
@@ -148,8 +154,22 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
             physics: const BouncingScrollPhysics(),
             slivers: [
               SliverToBoxAdapter(child: _buildHeader()),
+              SliverToBoxAdapter(
+                child: ref.watch(outgoingCarTransfersProvider).when(
+                  data: (list) => OutgoingCarTransfersBanner(items: list),
+                  loading: () => const SizedBox.shrink(),
+                  error: (_, __) => const SizedBox.shrink(),
+                ),
+              ),
+              SliverToBoxAdapter(
+                child: ref.watch(incomingCarTransfersProvider).when(
+                  data: (list) => IncomingCarTransfersBanner(items: list),
+                  loading: () => const SizedBox.shrink(),
+                  error: (_, __) => const SizedBox.shrink(),
+                ),
+              ),
               SliverToBoxAdapter(child: _buildCarSection()),
-              if (_remindersOnboardingCarId != null)
+              if (_remindersOnboardingCarId != null && !ref.watch(garageFirstCarTutorialProvider).active)
                 SliverToBoxAdapter(child: _buildRemindersOnboardingBanner()),
               SliverToBoxAdapter(child: _buildStats()),
               if (currentCar.reminders.isNotEmpty)
@@ -225,6 +245,7 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
   }
 
   Future<void> _openAddCar() async {
+    final hadNoCars = (ref.read(carsProvider).valueOrNull ?? []).isEmpty;
     final newId = await Navigator.push<String?>(
       context,
       MaterialPageRoute(builder: (_) => const AddCarScreen()),
@@ -232,8 +253,12 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
     if (!mounted || newId == null || newId.isEmpty) return;
     await ref.read(selectedCarIdProvider.notifier).set(newId);
     if (!mounted) return;
+    if (hadNoCars) {
+      ref.read(garageFirstCarTutorialProvider.notifier).tryStart(newId);
+    }
     final seen = ref.read(garageMaintenanceOnboardingSeenProvider);
-    if (!seen.contains(newId)) {
+    final tutorialOn = ref.read(garageFirstCarTutorialProvider).active;
+    if (!tutorialOn && !seen.contains(newId)) {
       setState(() => _remindersOnboardingCarId = newId);
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -406,7 +431,7 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
               child: CarCard(
                 car: cars[i],
                 unreadNotificationsCount: ref.watch(unreadByCarProvider).whenOrNull(data: (m) => m[cars[i].id] ?? 0) ?? 0,
-                onFixReferenceTap: cars[i].hasManualReferencePending
+                onFixReferenceTap: cars[i].hasManualReferencePending && !cars[i].isFormerOwnerReadonly
                     ? () => Navigator.push<void>(
                           context,
                           MaterialPageRoute<void>(
@@ -426,15 +451,23 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
                     builder: (_) => CarPhotoDetailScreen(carId: cars[i].id),
                   ),
                 ),
-                onMileageTap: () => MileageUpdateSheet.show(
-                  context,
-                  cars[i],
-                  (newKm) async {
-                    final car = cars[i];
-                    final ok = await ref.read(carsProvider.notifier).updateMileage(car.id, newKm);
-                    if (!mounted || !ok) return;
-                  },
-                ),
+                onMileageTap: cars[i].isFormerOwnerReadonly
+                    ? () {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Пробег меняет текущий владелец. У вас доступ только для просмотра.'),
+                          ),
+                        );
+                      }
+                    : () => MileageUpdateSheet.show(
+                        context,
+                        cars[i],
+                        (newKm) async {
+                          final car = cars[i];
+                          final ok = await ref.read(carsProvider.notifier).updateMileage(car.id, newKm);
+                          if (!mounted || !ok) return;
+                        },
+                      ),
               ),
             ),
           ),
@@ -479,8 +512,7 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
             SizedBox(width: 10),
             StatBlock(
               value: last != null ? last.status.shortLabel : '—',
-              // Номер заказа в подписи, без отдельной строки — высота как у блоков 1–2.
-              label: last != null ? 'последний\nзаказ · #${last.orderNumber}' : 'последний\nзаказ',
+              label: 'последний\nзаказ',
               dotColor: last?.status.color,
               onTap: last != null ? () => pushCupertino(context, OrderDetailScreen(order: last)) : null,
             ),
@@ -555,30 +587,33 @@ class _GarageScreenState extends ConsumerState<GarageScreen> {
   /// Напоминания о ТО (интервалы из настроек): под «Последняя активность».
   Widget _buildMaintenanceToBlock() {
     final types = ref.watch(availableMaintenanceTypesProvider);
-    return Padding(
-      padding: const EdgeInsets.only(top: AppDesignSystem.blockSpacing),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SectionHeader(
-            title: 'Напоминания о ТО',
-            compact: true,
-            actionText: 'Все →',
-            onAction: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => MaintenanceRemindersScreen(initialCarId: currentCar.id),
+    return GarageTutorialTarget(
+      highlightStep: GarageFirstCarTutorialStep.garageReminders,
+      child: Padding(
+        padding: const EdgeInsets.only(top: AppDesignSystem.blockSpacing),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SectionHeader(
+              title: 'Напоминания о ТО',
+              compact: true,
+              actionText: 'Все →',
+              onAction: () => Navigator.push<void>(
+                context,
+                MaterialPageRoute<void>(
+                  builder: (_) => MaintenanceRemindersScreen(initialCarId: currentCar.id),
+                ),
               ),
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppDesignSystem.pagePaddingH),
-            child: CarMaintenanceRemindersSection(
-              car: currentCar,
-              availableTypes: types,
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppDesignSystem.pagePaddingH),
+              child: CarMaintenanceRemindersSection(
+                car: currentCar,
+                availableTypes: types,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

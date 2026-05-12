@@ -37,11 +37,6 @@ class _MainShellState extends ConsumerState<MainShell> with WidgetsBindingObserv
   int? _programmaticTabTarget;
   bool _mileagePromptOpen = false;
 
-  /// Свайп между вкладками только если жест начался у края (~25% ширины).
-  /// [Listener] на pointer down синхронно переключает physics — центр экрана не листает вкладки, карты/списки не перекрываются.
-  bool _allowSwipeBetweenTabs = false;
-  static const double _kTabSwipeEdgeFraction = 0.25;
-
   List<_NavItem> _navItems(BuildContext context) {
     final l10n = L10nScope.of(context);
     final unreadChats = ref.watch(totalUnreadChatsCountProvider);
@@ -114,57 +109,38 @@ class _MainShellState extends ConsumerState<MainShell> with WidgetsBindingObserv
   }
 
   Widget _buildTabPageView() {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final w = constraints.maxWidth;
-        return Listener(
-          behavior: HitTestBehavior.translucent,
-          onPointerDown: (e) {
-            if (w <= 0) return;
-            final x = e.localPosition.dx.clamp(0.0, w);
-            final allow =
-                x <= w * _kTabSwipeEdgeFraction || x >= w * (1.0 - _kTabSwipeEdgeFraction);
-            if (allow != _allowSwipeBetweenTabs) {
-              setState(() => _allowSwipeBetweenTabs = allow);
-            }
-          },
-          child: NotificationListener<ScrollNotification>(
-            onNotification: (n) {
-              if (n is UserScrollNotification) {
-                if (_programmaticTabTarget != null) {
-                  setState(() => _programmaticTabTarget = null);
-                }
-              }
-              return false;
-            },
-            child: PageView(
-              controller: _pageController,
-              physics: _allowSwipeBetweenTabs
-                  ? const BouncingScrollPhysics()
-                  : const NeverScrollableScrollPhysics(),
-              onPageChanged: (i) {
-                if (!mounted) return;
-                if (_programmaticTabTarget != null && i != _programmaticTabTarget) {
-                  return;
-                }
-                if (i == _currentIndex && _programmaticTabTarget == null) return;
-                HapticFeedback.selectionClick();
-                setState(() {
-                  _currentIndex = i;
-                  _programmaticTabTarget = null;
-                });
-              },
-              children: const [
-                GarageScreen(),
-                ServicesScreen(),
-                SearchScreen(),
-                ChatsScreen(),
-                ProfileScreen(),
-              ],
-            ),
-          ),
-        );
+    return NotificationListener<ScrollNotification>(
+      onNotification: (n) {
+        if (n is UserScrollNotification) {
+          if (_programmaticTabTarget != null) {
+            setState(() => _programmaticTabTarget = null);
+          }
+        }
+        return false;
       },
+      child: PageView(
+        controller: _pageController,
+        physics: const BouncingScrollPhysics(),
+        onPageChanged: (i) {
+          if (!mounted) return;
+          if (_programmaticTabTarget != null && i != _programmaticTabTarget) {
+            return;
+          }
+          if (i == _currentIndex && _programmaticTabTarget == null) return;
+          HapticFeedback.selectionClick();
+          setState(() {
+            _currentIndex = i;
+            _programmaticTabTarget = null;
+          });
+        },
+        children: const [
+          GarageScreen(),
+          ServicesScreen(),
+          SearchScreen(),
+          ChatsScreen(),
+          ProfileScreen(),
+        ],
+      ),
     );
   }
 

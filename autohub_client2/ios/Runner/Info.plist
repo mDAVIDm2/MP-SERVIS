@@ -51,7 +51,7 @@
 	<string>Чтобы прикрепить фото к сообщению в чате с сервисом.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Чтобы сделать фото для чата с сервисом.</string>
-	<!-- Dev: HTTP к LAN IP (например 192.168.1.187:3000). В проде — только HTTPS. -->
+	<!-- Dev: при HTTP к локальному Nest — cleartext в сетевом конфиге. Прод: HTTPS api.mp-servis.ru -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

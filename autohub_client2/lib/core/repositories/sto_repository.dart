@@ -1,6 +1,19 @@
 import '../../shared/models/sto_model.dart';
 import '../api/api_exceptions.dart';
 
+/// Строки для POST `/booking/available-slots` с фактическими минутами из заказа (не сумма прайса).
+class SlotAvailabilityItem {
+  final int estimatedMinutes;
+  final String? serviceId;
+  final String? requiredSkill;
+
+  const SlotAvailabilityItem({
+    required this.estimatedMinutes,
+    this.serviceId,
+    this.requiredSkill,
+  });
+}
+
 /// Абстрактный репозиторий автосервисов
 abstract class STORepository {
   /// Поиск точек в каталоге
@@ -30,7 +43,13 @@ abstract class STORepository {
   Future<Result<List<STOService>>> getAllServices();
 
   /// Доступные слоты (время начала в формате "HH:mm"). + required_skills для предупреждения при пустых слотах.
-  Future<Result<AvailableSlotsResult>> getAvailableSlots(String stoId, DateTime date, List<String> serviceIds);
+  /// Если задан [items], уходит тело `items` (минуты из заказа); иначе `service_ids` из прайса.
+  Future<Result<AvailableSlotsResult>> getAvailableSlots(
+    String stoId,
+    DateTime date,
+    List<String> serviceIds, {
+    List<SlotAvailabilityItem>? items,
+  });
 
   /// Отзывы
   Future<Result<List<STOReview>>> getReviews(String stoId);

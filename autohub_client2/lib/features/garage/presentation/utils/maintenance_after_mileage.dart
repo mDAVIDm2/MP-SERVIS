@@ -11,6 +11,14 @@ import '../../../../core/catalog/client_catalog_service_ids.dart';
 import 'maintenance_booking_services.dart';
 import '../../../search/presentation/screens/sto_detail_screen.dart';
 
+/// Строка текста в карточке срочной рекомендации (цвет по [accentError]).
+class MaintenanceUrgentLine {
+  const MaintenanceUrgentLine(this.text, {this.accentError = false});
+
+  final String text;
+  final bool accentError;
+}
+
 /// Позиция ТО, попадающая под порог предупреждения (км / дни).
 class MaintenanceUrgentSuggestion {
   const MaintenanceUrgentSuggestion({
@@ -18,12 +26,16 @@ class MaintenanceUrgentSuggestion {
     required this.title,
     required this.bodyLines,
     required this.serviceIds,
+    this.urgencyProgress = 0,
   });
 
   final MaintenanceType type;
   final String title;
-  final List<String> bodyLines;
+  final List<MaintenanceUrgentLine> bodyLines;
   final List<String> serviceIds;
+
+  /// 0…1: чем выше, тем ближе к плановой замене (см. [MaintenanceDueSnapshot.progress01]).
+  final double urgencyProgress;
 }
 
 /// Срочные рекомендации по напоминаниям ТО для [carId] при текущем [mileage].
@@ -46,17 +58,26 @@ List<MaintenanceUrgentSuggestion> listUrgentMaintenanceSuggestions({
     if (snap.lastRecord == null) continue;
 
     var hit = false;
-    final lines = <String>[];
+    final lines = <MaintenanceUrgentLine>[];
     if (cfg.useKmInterval && snap.kmRemaining != null) {
       if (snap.kmRemaining! <= warnKm) {
         hit = true;
         if (snap.overdueByKm) {
-          lines.add(l10n.maintUrgentKmOverdue(sep.format(-snap.kmRemaining!)));
+          lines.add(
+            MaintenanceUrgentLine(
+              l10n.maintUrgentKmOverdue(sep.format(snap.kmRemaining!)),
+              accentError: true,
+            ),
+          );
         } else {
-          lines.add(l10n.maintUrgentKmLeft(sep.format(snap.kmRemaining!)));
+          lines.add(
+            MaintenanceUrgentLine(
+              l10n.maintUrgentKmLeft(sep.format(snap.kmRemaining!)),
+            ),
+          );
         }
         if (snap.nextDueKm != null) {
-          lines.add(l10n.maintUrgentNextKm(sep.format(snap.nextDueKm!)));
+          lines.add(MaintenanceUrgentLine(l10n.maintUrgentNextKm(sep.format(snap.nextDueKm!))));
         }
       }
     }
@@ -64,12 +85,31 @@ List<MaintenanceUrgentSuggestion> listUrgentMaintenanceSuggestions({
       if (snap.daysRemaining! <= warnDays) {
         hit = true;
         if (snap.overdueByDate) {
-          lines.add(l10n.maintUrgentDateOverdueLine);
+          final d = snap.daysRemaining!;
+          if (d < 0) {
+            lines.add(
+              MaintenanceUrgentLine(
+                l10n.maintUrgentDateOverdueByDays(sep.format(d)),
+                accentError: true,
+              ),
+            );
+          } else {
+            lines.add(
+              MaintenanceUrgentLine(
+                l10n.maintUrgentDateOverdueLine,
+                accentError: true,
+              ),
+            );
+          }
         } else {
-          lines.add(l10n.maintUrgentDateLeftLine(snap.daysRemaining!));
+          lines.add(
+            MaintenanceUrgentLine(
+              l10n.maintUrgentDateLeftLine(snap.daysRemaining!),
+            ),
+          );
         }
         if (snap.nextDueDate != null) {
-          lines.add(l10n.maintUrgentPlanUntil(df.format(snap.nextDueDate!)));
+          lines.add(MaintenanceUrgentLine(l10n.maintUrgentPlanUntil(df.format(snap.nextDueDate!))));
         }
       }
     }
@@ -80,9 +120,11 @@ List<MaintenanceUrgentSuggestion> listUrgentMaintenanceSuggestions({
       title: t.localizedTitle(l10n),
       bodyLines: lines,
       serviceIds: maintenanceBookingServiceIds(t),
+      urgencyProgress: snap.progress01,
     ));
   }
 
+  urgent.sort((a, b) => b.urgencyProgress.compareTo(a.urgencyProgress));
   return urgent;
 }
 

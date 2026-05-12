@@ -47,8 +47,11 @@ class MockSTORepository implements STORepository {
 
   @override
   Future<Result<AvailableSlotsResult>> getAvailableSlots(
-    String stoId, DateTime date, List<String> serviceIds,
-  ) async {
+    String stoId,
+    DateTime date,
+    List<String> serviceIds, {
+    List<SlotAvailabilityItem>? items,
+  }) async {
     return Result.success(const AvailableSlotsResult(
       startTimes: [],
       slotChoices: [],

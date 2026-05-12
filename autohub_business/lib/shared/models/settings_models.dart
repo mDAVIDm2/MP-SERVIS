@@ -25,6 +25,28 @@ class ServiceCategory {
   }
 }
 
+/// Название «ТО и обслуживание» (единый регистр в справочнике).
+const String kToServiceCategoryName = 'ТО и обслуживание';
+
+/// Категории в UI: «ТО и обслуживание» всегда первая, если есть; остальные по [ServiceCategory.order].
+List<ServiceCategory> sortedServiceCategoriesForDisplay(List<ServiceCategory> categories) {
+  final list = List<ServiceCategory>.from(categories);
+  list.sort((a, b) => a.order.compareTo(b.order));
+  final idx = list.indexWhere((c) => c.name.trim().toLowerCase() == kToServiceCategoryName.toLowerCase());
+  if (idx > 0) {
+    final t = list.removeAt(idx);
+    list.insert(0, t);
+  }
+  return list;
+}
+
+/// Подпись категории в интерфейсе (регистр для известных шаблонов).
+String displayServiceCategoryTitle(String name) {
+  final t = name.trim();
+  if (t.toLowerCase() == 'двигатель') return 'Двигатель';
+  return name;
+}
+
 /// Услуга (позиция с ценой и длительностью).
 class ServiceItem {
   final String id;
@@ -512,6 +534,10 @@ class SettingsState {
   final List<ServiceItem> services;
   final List<ServicePackage> packages;
   final List<String> carBrands;
+  /// Id из единого справочника [StoAmenityCatalog] (см. `sto_amenity_catalog.dart`).
+  final List<String> amenityIds;
+  /// Текст «О сервисе» для карточки в клиентском приложении.
+  final String publicDescription;
   final SlotsSettings slotsSettings;
   final NotificationSettings notificationSettings;
   final List<MessageTemplate> messageTemplates;
@@ -521,6 +547,8 @@ class SettingsState {
     this.services = const [],
     this.packages = const [],
     this.carBrands = const [],
+    this.amenityIds = const [],
+    this.publicDescription = '',
     SlotsSettings? slotsSettings,
     NotificationSettings? notificationSettings,
     this.messageTemplates = const [],
@@ -533,6 +561,8 @@ class SettingsState {
     List<ServiceItem>? services,
     List<ServicePackage>? packages,
     List<String>? carBrands,
+    List<String>? amenityIds,
+    String? publicDescription,
     SlotsSettings? slotsSettings,
     NotificationSettings? notificationSettings,
     List<MessageTemplate>? messageTemplates,
@@ -542,6 +572,8 @@ class SettingsState {
       services: services ?? this.services,
       packages: packages ?? this.packages,
       carBrands: carBrands ?? this.carBrands,
+      amenityIds: amenityIds ?? this.amenityIds,
+      publicDescription: publicDescription ?? this.publicDescription,
       slotsSettings: slotsSettings ?? this.slotsSettings,
       notificationSettings: notificationSettings ?? this.notificationSettings,
       messageTemplates: messageTemplates ?? this.messageTemplates,

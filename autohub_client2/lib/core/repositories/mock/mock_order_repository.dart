@@ -126,6 +126,8 @@ class MockOrderRepository implements OrderRepository {
     DateTime? dateTime,
     bool acceptProposed = true,
     String? approvalMessageId,
+    List<String>? approvedItemIds,
+    List<String>? rejectedItemIds,
   }) async {
     await _delay();
     return Result.success(null);

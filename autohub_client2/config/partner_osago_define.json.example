@@ -1,0 +1,10 @@
+{
+  "PAMPADU_OSAGO_WIDGET_URL": "https://b2c.pampadu.ru/index.html#7d4b0b1c-cb14-4de1-824a-e55c49ac4fc5",
+  "PARTNER_API_TOKEN": "вставьте_JWT_из_кабинета_партнёра",
+  "PARTNER_OSAGO_PRODUCT_ID": "481",
+  "PARTNER_API_BASE_URL": "",
+  "PARTNER_OSAGO_FIELD_FIO": "fio_straxovatelia",
+  "PARTNER_OSAGO_FIELD_PHONE": "telefon_straxovatelia",
+  "PARTNER_OSAGO_FIELD_EMAIL": "elektronnaia_pocta_straxovatelia",
+  "PARTNER_OSAGO_FIELD_PLATE": "gosudarstvennyi_nomer_avtomobilia"
+}

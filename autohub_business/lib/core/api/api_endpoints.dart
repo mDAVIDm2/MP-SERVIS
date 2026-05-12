@@ -32,6 +32,7 @@ class ApiEndpoints {
   static String orderStatus(String id) => '/orders/$id/status';
   static String orderTime(String id) => '/orders/$id/time';
   static String orderItems(String id) => '/orders/$id/items';
+  static String orderInventoryLines(String id) => '/orders/$id/inventory-lines';
   static String orderConfirmByPhone(String id) => '/orders/$id/confirm-by-phone';
   static String orderChat(String orderId) => '/orders/$orderId/chat';
   static String orderPhotos(String id) => '/orders/$id/photos';
@@ -58,10 +59,21 @@ class ApiEndpoints {
   static String organizationSettings(String id) => '/organizations/$id/settings';
   static String organizationClients(String id) => '/organizations/$id/clients';
 
+  /// Справка по передаче авто между клиентами (для Business).
+  static String organizationCarTransferInsight(String orgId, String carId) =>
+      '/organizations/$orgId/client-cars/${Uri.encodeComponent(carId)}/transfer-insight';
+
   // Booking (слоты для записи)
   static const String bookingAvailableSlots = '/booking/available-slots';
 
   // Notifications
   static const String notifications = '/notifications';
   static const String registerPushToken = '/notifications/register-device';
+
+  // Inventory (Business; X-MP-Servis-App: business)
+  static const String inventoryItems = '/inventory/items';
+  static String inventoryItem(String id) => '/inventory/items/${Uri.encodeComponent(id)}';
+  static String inventoryItemMovements(String id) => '/inventory/items/${Uri.encodeComponent(id)}/movements';
+  static String inventoryItemReceipt(String id) => '/inventory/items/${Uri.encodeComponent(id)}/receipt';
+  static const String inventoryMovements = '/inventory/movements';
 }

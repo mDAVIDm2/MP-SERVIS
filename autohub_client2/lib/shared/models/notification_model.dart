@@ -9,6 +9,8 @@ enum NotificationType {
   order,
   chat,
   general,
+  carTransferRequest,
+  carTransferResult,
   unknown,
 }
 
@@ -48,6 +50,8 @@ NotificationType notificationTypeFromString(String? v) {
     case 'pending_car_suggested': return NotificationType.pendingCarSuggested;
     case 'order': return NotificationType.order;
     case 'chat': return NotificationType.chat;
+    case 'car_transfer_request': return NotificationType.carTransferRequest;
+    case 'car_transfer_result': return NotificationType.carTransferResult;
     default: return NotificationType.unknown;
   }
 }

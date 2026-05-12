@@ -47,6 +47,8 @@ flutter run -d windows
 | 3333 | Самозанятый     | Заказы, Календарь, Чаты, Профиль (без Персонала) |
 | иной | Администратор   | Заказы, Календарь, Чаты, Профиль |
 
+Тестовые **email** (`owner@mpservis.test` и т.д.) и **телефоны** из бэкенда (`auth.service`) работают только если в **`backend/.env`** на машине с API задано `ALLOW_TEST_AUTH=1` и **`NODE_ENV` не `production`**. Отдельно для Control Center в том же `.env` нужен **`INTERNAL_JWT_SECRET`** (см. `backend/.env.example`).
+
 После появления бэкенда — заменить на вызовы API и роль из JWT. Полный статус реализации — в [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md).
 
 ## Дальнейшие шаги

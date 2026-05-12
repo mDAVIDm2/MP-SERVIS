@@ -25,6 +25,11 @@ enum MaintenanceType {
   sparkPlugs('Свечи зажигания', 'По регламенту'),
   alignment('Развал-схождение', 'При смене шин/подвески'),
   general('ТО общее', 'По регламенту'),
+  cabinFilter('Замена салонного фильтра', 'По регламенту'),
+  fuelFilter('Замена топливного фильтра', 'По регламенту'),
+  brakeFluid('Замена тормозной жидкости', 'По регламенту'),
+  atf('Замена жидкости АКПП', 'По регламенту'),
+  wiperBlades('Замена щёток стеклоочистителя', 'По износу и сезону'),
   ;
 
   final String title;
@@ -58,6 +63,15 @@ enum MaintenanceType {
     if (lower.contains('свеч')) return MaintenanceType.sparkPlugs;
     if (lower.contains('развал') || lower.contains('схожден')) return MaintenanceType.alignment;
     if (lower.contains('то ') || lower.contains('техническое обслуживание')) return MaintenanceType.general;
+    if (lower.contains('салонн') && lower.contains('фильтр')) return MaintenanceType.cabinFilter;
+    if (lower.contains('топливн') && lower.contains('фильтр')) return MaintenanceType.fuelFilter;
+    if (lower.contains('тормозн') && lower.contains('жидк')) return MaintenanceType.brakeFluid;
+    if (lower.contains('акпп') || lower.contains('atf') || (lower.contains('жидкост') && lower.contains('коробк'))) {
+      return MaintenanceType.atf;
+    }
+    if (lower.contains('щёт') || lower.contains('щетк') || lower.contains('дворник') || lower.contains('стеклоочист')) {
+      return MaintenanceType.wiperBlades;
+    }
     return null;
   }
 
@@ -137,6 +151,8 @@ class MaintenanceRecord {
   final DateTime date;
   final String? place;
   final String? orderId;
+  /// Сумма, введённая вручную при записи в истории (1 ₽ = 100).
+  final int? priceKopecks;
 
   const MaintenanceRecord({
     required this.id,
@@ -146,6 +162,7 @@ class MaintenanceRecord {
     required this.date,
     this.place,
     this.orderId,
+    this.priceKopecks,
   });
 
   Map<String, dynamic> toJson() => {
@@ -156,6 +173,7 @@ class MaintenanceRecord {
         'date': date.millisecondsSinceEpoch,
         'place': place,
         'orderId': orderId,
+        if (priceKopecks != null) 'priceKopecks': priceKopecks,
       };
 
   static MaintenanceRecord fromJson(Map<String, dynamic> map) {
@@ -169,6 +187,7 @@ class MaintenanceRecord {
       date: DateTime.fromMillisecondsSinceEpoch((map['date'] as num?)?.toInt() ?? 0),
       place: map['place'] as String?,
       orderId: map['orderId'] as String?,
+      priceKopecks: (map['priceKopecks'] as num?)?.toInt(),
     );
   }
 }
@@ -353,6 +372,7 @@ class MaintenanceRemindersNotifier extends StateNotifier<MaintenanceRemindersSta
           date: r.date,
           place: r.place,
           orderId: r.orderId,
+          priceKopecks: r.priceKopecks,
         ));
       } else {
         out.add(r);
@@ -511,6 +531,7 @@ class MaintenanceRemindersNotifier extends StateNotifier<MaintenanceRemindersSta
           date: order.dateTime,
           place: place.isNotEmpty ? place : null,
           orderId: order.id,
+          priceKopecks: null,
         ));
         itemIndex++;
       }
@@ -576,6 +597,7 @@ class MaintenanceRemindersNotifier extends StateNotifier<MaintenanceRemindersSta
       date: record.date,
       place: record.place,
       orderId: record.orderId,
+      priceKopecks: record.priceKopecks,
     );
     state = MaintenanceRemindersState(
       configs: state.configs,

@@ -9,7 +9,10 @@ export type NotificationType =
   | 'general'
   | 'security'
   /** Приглашение в организацию (бизнес-приложение). */
-  | 'organization_invite';
+  | 'organization_invite'
+  /** Передача автомобиля между клиентами (гараж). */
+  | 'car_transfer_request'
+  | 'car_transfer_result';
 
 @Entity('notifications')
 export class Notification {

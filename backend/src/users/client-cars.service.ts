@@ -12,7 +12,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { User } from './user.entity';
 import { ClientCar } from './client-car.entity';
+import { ClientCarFormerOwnership } from './client-car-former-ownership.entity';
 import { UserClientHiddenCar } from './user-client-hidden-car.entity';
+import { CarTransferService } from './car-transfer.service';
 import { Order } from '../orders/order.entity';
 import { PendingCarReference } from '../reference/pending-car-reference.entity';
 import { Notification } from '../notifications/notification.entity';
@@ -67,7 +69,9 @@ export class ClientCarsService {
   constructor(
     @InjectRepository(ClientCar) private readonly carRepo: Repository<ClientCar>,
     @InjectRepository(UserClientHiddenCar) private readonly hiddenCarRepo: Repository<UserClientHiddenCar>,
+    @InjectRepository(ClientCarFormerOwnership) private readonly formerRepo: Repository<ClientCarFormerOwnership>,
     @InjectRepository(Order) private readonly orderRepo: Repository<Order>,
+    private readonly carTransfers: CarTransferService,
   ) {}
 
   /** Нормализация телефона как в заказах (для проверки привязки авто к клиенту). */
@@ -172,7 +176,7 @@ export class ClientCarsService {
     }
   }
 
-  private toJson(c: ClientCar) {
+  private toJson(c: ClientCar, extra?: Record<string, unknown>) {
     return {
       id: c.id,
       brand: c.brand,
@@ -195,6 +199,7 @@ export class ClientCarsService {
       merged_from_orders: c.mergedFromOrders,
       created_at: c.createdAt?.toISOString?.() ?? null,
       updated_at: c.updatedAt?.toISOString?.() ?? null,
+      ...(extra || {}),
     };
   }
 
@@ -210,7 +215,26 @@ export class ClientCarsService {
       .andWhere('h.id IS NULL')
       .orderBy('c.created_at', 'ASC')
       .getMany();
-    return { items: rows.map((r) => this.toJson(r)) };
+    const owned = rows.map((r) => this.toJson(r, { ownership_mode: 'owner' }));
+
+    const formerRows = await this.formerRepo.find({ where: { userId } });
+    if (!formerRows.length) return { items: owned };
+
+    const fids = [...new Set(formerRows.map((f) => String(f.carId || '').trim()).filter(Boolean))];
+    const formerCars = fids.length ? await this.carRepo.find({ where: { id: In(fids) } }) : [];
+    const byId = new Map(formerCars.map((c) => [c.id, c]));
+    const formerItems: Record<string, unknown>[] = [];
+    for (const f of formerRows) {
+      const c = byId.get(f.carId);
+      if (!c) continue;
+      formerItems.push(
+        this.toJson(c, {
+          ownership_mode: 'former',
+          transfer_id: f.transferId,
+        }),
+      );
+    }
+    return { items: [...owned, ...formerItems] };
   }
 
   async create(user: User, body: CreateClientCarBody): Promise<Record<string, unknown>> {
@@ -273,6 +297,9 @@ export class ClientCarsService {
 
   async patch(user: User, carId: string, body: PatchClientCarBody): Promise<Record<string, unknown>> {
     this.assertClientUser(user);
+    if (await this.carTransfers.isFormerOwner(user.id, carId)) {
+      throw new ForbiddenException('Редактирование недоступно: вы передали этот автомобиль');
+    }
     const c = await this.carRepo.findOne({ where: { id: carId } });
     if (!c || c.userId !== user.id) throw new NotFoundException('Автомобиль не найден');
     if (await this.isCarHiddenForUser(user.id, carId)) throw new NotFoundException('Автомобиль не найден');
@@ -307,6 +334,9 @@ export class ClientCarsService {
 
   async remove(user: User, carId: string): Promise<void> {
     this.assertClientUser(user);
+    if (await this.carTransfers.isFormerOwner(user.id, carId)) {
+      throw new ForbiddenException('Удаление недоступно. Используйте «Забыть автомобиль» в карточке.');
+    }
     const c = await this.carRepo.findOne({ where: { id: carId } });
     if (!c || c.userId !== user.id) throw new NotFoundException('Автомобиль не найден');
     if (await this.isCarHiddenForUser(user.id, carId)) throw new NotFoundException('Автомобиль не найден');
@@ -319,6 +349,9 @@ export class ClientCarsService {
 
   async saveCarPhoto(user: User, carId: string, file: Express.Multer.File): Promise<Record<string, unknown>> {
     this.assertClientUser(user);
+    if (await this.carTransfers.isFormerOwner(user.id, carId)) {
+      throw new ForbiddenException('Загрузка фото недоступна: вы передали этот автомобиль');
+    }
     const c = await this.carRepo.findOne({ where: { id: carId } });
     if (!c || c.userId !== user.id) throw new NotFoundException('Автомобиль не найден');
     if (await this.isCarHiddenForUser(user.id, carId)) throw new NotFoundException('Автомобиль не найден');
@@ -463,6 +496,9 @@ export class ClientCarsService {
   }
 
   async assertOwnsCar(viewer: User, carId: string): Promise<ClientCar> {
+    if (await this.carTransfers.isFormerOwner(viewer.id, carId)) {
+      throw new ForbiddenException('Действие недоступно для бывшего владельца');
+    }
     const c = await this.carRepo.findOne({ where: { id: carId } });
     if (!c || c.userId !== viewer.id) throw new NotFoundException('Автомобиль не найден');
     if (await this.isCarHiddenForUser(viewer.id, carId)) throw new NotFoundException('Автомобиль не найден');

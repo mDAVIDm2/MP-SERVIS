@@ -47,3 +47,4 @@ app.*.map.json
 # Firebase (скачивается из консоли, не коммитить)
 /android/app/google-services.json
 /config/firebase_define.json
+/config/partner_osago_define.json

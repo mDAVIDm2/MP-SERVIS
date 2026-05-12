@@ -8,7 +8,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
-import '../../../../core/auth/auth_provider.dart' show sharedPreferencesProvider;
+import '../../../../core/auth/auth_provider.dart' show authProvider, sharedPreferencesProvider;
 import '../../../../core/catalog/client_catalog_service_ids.dart';
 import '../../../../core/l10n/app_l10n.dart';
 import '../../../../core/l10n/l10n_scope.dart';
@@ -25,12 +25,18 @@ import '../../../../shared/models/external_poi.dart';
 import '../../../../core/navigation/app_routes.dart';
 import '../../../../core/navigation/driving_route_launcher.dart';
 import '../../../../core/navigation/shell_navigation_provider.dart';
+import '../../../../core/onboarding/garage_first_car_tutorial_provider.dart';
+import '../../../../core/onboarding/garage_tutorial_target.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../shared/models/sto_model.dart';
 import '../../data/external_poi_cache.dart';
 import '../../data/overpass_poi_service.dart';
 import '../widgets/location_preview_card.dart';
+import '../widgets/sto_list_leading_image.dart';
 import '../widgets/sto_osm_map.dart';
+import '../widgets/sto_search_list_brands_line.dart';
+import '../widgets/sto_working_hours_block.dart' show stoSearchCardTodayHoursLine;
+import '../../../chats/presentation/screens/chat_detail_screen.dart';
 import 'sto_detail_screen.dart';
 
 /// Главный ряд фильтров: один пункт «Мойка»; подтипы мойки — [WashSubtype] и [_washExternalMatchUnion].
@@ -99,8 +105,9 @@ Set<String>? _externalMatchForMainKind(String? kind) {
   // Запас по долготе к запасу по широте (в стороны шире), соотношение 2:1.
   const lngPerLat = 2.0;
   const maxHalfLng = 0.26;
-  var halfLat = (halfLatVis * 2.85).clamp(minHalfLat, maxHalfLat);
-  var halfLng = (lngPerLat * halfLat).clamp(math.max(halfLngVis * 2.5, lngPerLat * minHalfLat * 0.9), maxHalfLng);
+  // Запас к видимой области: больше — POI подгружаются до сдвига в эту зону.
+  var halfLat = (halfLatVis * 3.35).clamp(minHalfLat, maxHalfLat);
+  var halfLng = (lngPerLat * halfLat).clamp(math.max(halfLngVis * 3.1, lngPerLat * minHalfLat * 0.9), maxHalfLng);
   return (
     minLat: (cLat - halfLat).clamp(-85.0, 85.0),
     minLng: (cLng - halfLng).clamp(-180.0, 180.0),
@@ -121,6 +128,43 @@ double _distanceKm(double lat1, double lon1, double lat2, double lon2) {
           math.sin(dLon / 2);
   final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
   return R * c;
+}
+
+/// Не обрезаем непартнёров по «оценочному» прямоугольнику (он легко расходится с реальным кадром — тогда
+/// на карте пусто). Ограничиваем только числом ближайших к центру — слой кластеризации в [STOOSMMap] тяжёлый на тысячах точек.
+List<ExternalPOI> _prioritizeExternalsForMap(List<ExternalPOI> list, LatLng center, {int maxCount = 400}) {
+  if (list.length <= maxCount) return list;
+  final copy = List<ExternalPOI>.from(list);
+  copy.sort((a, b) {
+    final da = _distanceKm(a.lat, a.lng, center.latitude, center.longitude);
+    final db = _distanceKm(b.lat, b.lng, center.latitude, center.longitude);
+    return da.compareTo(db);
+  });
+  return copy.take(maxCount).toList();
+}
+
+/// Bbox из [STOOSMMap] — отбрасываем вырожденные/«глобальные» значения (до layout, сбой камеры).
+bool _isPlausibleVisibleMapRect(({double minLat, double minLng, double maxLat, double maxLng}) r) {
+  final latSpan = r.maxLat - r.minLat;
+  final lngSpan = r.maxLng - r.minLng;
+  if (latSpan <= 1e-9 || lngSpan <= 1e-9) return false;
+  if (latSpan > 170 || lngSpan > 350) return false;
+  return true;
+}
+
+/// south/west/north/east из flutter_map — приводим к min≤max (на всякий случай).
+({double minLat, double minLng, double maxLat, double maxLng}) _normalizeVisibleBounds(
+  double south,
+  double west,
+  double north,
+  double east,
+) {
+  return (
+    minLat: math.min(south, north),
+    maxLat: math.max(south, north),
+    minLng: math.min(west, east),
+    maxLng: math.max(west, east),
+  );
 }
 
 class SearchScreen extends ConsumerStatefulWidget {
@@ -150,6 +194,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   double? _minRating;
   /// Выбранные ID услуг для фильтра (AND: точка должна оказывать все выбранные услуги).
   List<String> _selectedServiceIds = [];
+
+  /// ISO UTC ближайшего слота по фильтру услуг (ключ — organization id).
+  Map<String, String?> _nearestSlotIsoByOrgId = {};
+  Timer? _nearestSlotsDebounce;
+  String _nearestSlotsFetchKey = '';
 
   bool _mapReady = false;
   MapController? _osmMapController;
@@ -182,6 +231,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   double _currentZoom = 14.0;
   /// Текущий центр карты (для плавной анимации к выбранной точке).
   LatLng? _lastMapCenter;
+  /// Видимый bbox из [MapController.camera.visibleBounds] (не грубая оценка по центру/зуму).
+  ({double minLat, double minLng, double maxLat, double maxLng})? _lastVisibleMapRect;
 
   /// Базовый список точек из API/поиска; затем применяются локальные фильтры (машина, рейтинг, расстояние, услуги).
   /// [skipCarFilter] — чтобы понять, скрыла ли пустой список именно привязка к марке авто.
@@ -242,6 +293,49 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
       }).toList();
     }
     return list;
+  }
+
+  void _scheduleNearestSlotsPrefetch(WidgetRef ref, List<STO> stos) {
+    final sids = normalizeClientServiceFilterIds(_selectedServiceIds);
+    if (sids.isEmpty) {
+      if (_nearestSlotIsoByOrgId.isNotEmpty || _nearestSlotsFetchKey.isNotEmpty) {
+        setState(() {
+          _nearestSlotIsoByOrgId = {};
+          _nearestSlotsFetchKey = '';
+        });
+      }
+      return;
+    }
+    final orgKeys = stos.map((s) => s.id).where((x) => x.isNotEmpty).toList()..sort();
+    final key = '${sids.join(',')}|${orgKeys.join(',')}';
+    if (key == _nearestSlotsFetchKey) return;
+    _nearestSlotsDebounce?.cancel();
+    _nearestSlotsDebounce = Timer(const Duration(milliseconds: 450), () async {
+      if (!mounted) return;
+      final api = ref.read(catalogApiServiceProvider);
+      final result = await api.nearestSlotsBatch(organizationIds: orgKeys, serviceIds: sids);
+      if (!mounted) return;
+      result.when(
+        success: (data) {
+          final raw = data['results'] as List<dynamic>? ?? [];
+          final map = <String, String?>{};
+          for (final e in raw) {
+            if (e is! Map) continue;
+            final id = e['organization_id']?.toString() ?? '';
+            final ns = e['nearest_start']?.toString();
+            if (id.isEmpty) continue;
+            map[id] = (ns != null && ns.isNotEmpty) ? ns : null;
+          }
+          setState(() {
+            _nearestSlotIsoByOrgId = map;
+            _nearestSlotsFetchKey = key;
+          });
+        },
+        failure: (_) {
+          setState(() => _nearestSlotsFetchKey = key);
+        },
+      );
+    });
   }
 
   @override
@@ -345,6 +439,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
 
   @override
   void dispose() {
+    _nearestSlotsDebounce?.cancel();
     _locationWaitTimer?.cancel();
     _debounceTimer?.cancel();
     _externalSessionSaveDebounce?.cancel();
@@ -399,8 +494,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   Future<void> _fetchExternalPOIsForBounds(double minLat, double minLng, double maxLat, double maxLng) async {
     if (!mounted || !_showExternalPOIsOnMap) return;
 
+    final nb = _normalizeVisibleBounds(minLat, minLng, maxLat, maxLng);
     final gen = ++_externalFetchGeneration;
-    final ex = _expandBoundsForExternalFetch(minLat, minLng, maxLat, maxLng);
+    final ex = _expandBoundsForExternalFetch(nb.minLat, nb.minLng, nb.maxLat, nb.maxLng);
 
     try {
       await _externalPoiCache.ensureLoaded();
@@ -506,8 +602,18 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
 
   /// Повторная загрузка внешних POI по текущему центру/зуму (после включения слоя «непартнёрские»).
   void _refetchExternalPoisForCurrentMapView() {
-    final center = _lastMapCenter;
-    if (center == null) return;
+    final rect = _lastVisibleMapRect;
+    if (rect != null && _isPlausibleVisibleMapRect(rect)) {
+      unawaited(_fetchExternalPOIsForBounds(rect.minLat, rect.minLng, rect.maxLat, rect.maxLng));
+      return;
+    }
+    LatLng? center = _lastMapCenter;
+    if (center == null && _osmMapController != null) {
+      try {
+        center = _osmMapController!.camera.center;
+      } catch (_) {}
+    }
+    center ??= const LatLng(45.0355, 38.9753);
     final zoom = _currentZoom;
     final scale = 180 / (math.pow(2, zoom) * 256);
     final dLat = 0.5 * scale * 256;
@@ -520,11 +626,32 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     ));
   }
 
-  /// Внешние POI для отображения на карте: без дубликатов партнёров (в радиусе 50 м).
+  void _onMapVisibleBounds(double minLat, double minLng, double maxLat, double maxLng) {
+    final n = _normalizeVisibleBounds(minLat, minLng, maxLat, maxLng);
+    final next = (minLat: n.minLat, minLng: n.minLng, maxLat: n.maxLat, maxLng: n.maxLng);
+    final prev = _lastVisibleMapRect;
+    const t = 1e-7;
+    final changed = prev == null ||
+        (prev.minLat - next.minLat).abs() > t ||
+        (prev.maxLat - next.maxLat).abs() > t ||
+        (prev.minLng - next.minLng).abs() > t ||
+        (prev.maxLng - next.maxLng).abs() > t;
+    if (changed) {
+      _lastVisibleMapRect = next;
+      if (mounted) setState(() {});
+    }
+    if (!_showExternalPOIsOnMap) return;
+    unawaited(_fetchExternalPOIsForBounds(next.minLat, next.minLng, next.maxLat, next.maxLng));
+  }
+
+  /// Внешние POI для отображения на карте: скрываем только очень близкие к партнёру точки (тот же объект),
+  /// иначе при плотной сети партнёров весь слой OSM обнулялся.
+  static const double _hideExternalIfNearPartnerKm = 0.02;
+
   List<ExternalPOI> _getExternalPOIsForMap(List<STO> withCoords, AppL10n l10n) {
     return _getFilteredExternalPOIs(l10n)
         .where((p) => !withCoords.any((s) =>
-            _distanceKm(p.lat, p.lng, s.latitude!, s.longitude!) < 0.05))
+            _distanceKm(p.lat, p.lng, s.latitude!, s.longitude!) < _hideExternalIfNearPartnerKm))
         .toList();
   }
 
@@ -604,31 +731,176 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     phase1.forward();
   }
 
-  /// Плавно смещаем карту к точке, затем приближаем и открываем экран детали (общая длительность ~2–2.5 с).
+  bool _sameLatLng(LatLng a, LatLng b) {
+    return (a.latitude - b.latitude).abs() < 1e-5 && (a.longitude - b.longitude).abs() < 1e-5;
+  }
+
+  /// Только сдвиг центра карты, зум не меняется.
+  void _runMapPanAnimation(LatLng from, LatLng to, double zoom, {required VoidCallback onComplete}) {
+    final ctrl = _osmMapController;
+    if (!_mapReady || ctrl == null) {
+      onComplete();
+      return;
+    }
+    if (_sameLatLng(from, to)) {
+      onComplete();
+      return;
+    }
+    if (MediaQuery.of(context).disableAnimations || !TickerMode.of(context)) {
+      ctrl.move(to, zoom);
+      if (mounted) {
+        setState(() {
+          _lastMapCenter = to;
+          _currentZoom = zoom;
+        });
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) onComplete();
+        });
+      }
+      return;
+    }
+
+    final anim = AnimationController(duration: const Duration(milliseconds: 850), vsync: this);
+    final curve = CurvedAnimation(parent: anim, curve: Curves.easeInOut);
+    final latTween = Tween<double>(begin: from.latitude, end: to.latitude);
+    final lngTween = Tween<double>(begin: from.longitude, end: to.longitude);
+
+    void tick() {
+      if (!mounted || _osmMapController == null) return;
+      _osmMapController!.move(
+        LatLng(latTween.evaluate(curve), lngTween.evaluate(curve)),
+        zoom,
+      );
+    }
+
+    anim.addListener(tick);
+    anim.addStatusListener((s) {
+      if (s != AnimationStatus.completed) return;
+      anim.removeListener(tick);
+      anim.dispose();
+      if (!mounted) return;
+      setState(() {
+        _lastMapCenter = to;
+        _currentZoom = zoom;
+      });
+      onComplete();
+    });
+    anim.forward();
+  }
+
+  /// Смена масштаба без сдвига географического центра (отближение / приближение).
+  void _runMapZoomAtCenterAnimation(LatLng center, double fromZ, double toZ, int durationMs, {required VoidCallback onComplete}) {
+    final ctrl = _osmMapController;
+    if (!_mapReady || ctrl == null) {
+      onComplete();
+      return;
+    }
+    if ((fromZ - toZ).abs() < 0.05) {
+      onComplete();
+      return;
+    }
+    if (MediaQuery.of(context).disableAnimations || !TickerMode.of(context)) {
+      ctrl.move(center, toZ);
+      if (mounted) {
+        setState(() {
+          _lastMapCenter = center;
+          _currentZoom = toZ;
+        });
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) onComplete();
+        });
+      }
+      return;
+    }
+
+    final anim = AnimationController(duration: Duration(milliseconds: durationMs), vsync: this);
+    final curve = CurvedAnimation(parent: anim, curve: Curves.easeInOut);
+    final zTween = Tween<double>(begin: fromZ, end: toZ);
+
+    void tick() {
+      if (!mounted || _osmMapController == null) return;
+      _osmMapController!.move(center, zTween.evaluate(curve));
+    }
+
+    anim.addListener(tick);
+    anim.addStatusListener((s) {
+      if (s != AnimationStatus.completed) return;
+      anim.removeListener(tick);
+      anim.dispose();
+      if (!mounted) return;
+      setState(() {
+        _lastMapCenter = center;
+        _currentZoom = toZ;
+      });
+      onComplete();
+    });
+    anim.forward();
+  }
+
+  /// Плавно смещаем карту к точке и открываем деталь: при нужной «высоте» — только центрирование + пауза;
+  /// при слишком сильном приближении — сначала отближение 0.5 с, затем переезд + пауза; иначе — прежняя двухфазная анимация + пауза.
   void _animateToStoAndOpen(STO sto) {
     final initialIds = _selectedServiceIds.isNotEmpty
         ? normalizeClientServiceFilterIds(_selectedServiceIds)
         : null;
-    if (sto.latitude == null || sto.longitude == null) {
+    void openDetail() {
+      if (!mounted) return;
       pushStoDetailScreen(context, STODetailScreen(sto: sto, initialServiceIds: initialIds));
+    }
+
+    if (sto.latitude == null || sto.longitude == null) {
+      openDetail();
       return;
     }
     if (!_mapReady || _osmMapController == null) {
-      pushStoDetailScreen(context, STODetailScreen(sto: sto, initialServiceIds: initialIds));
+      openDetail();
       return;
     }
     final target = LatLng(sto.latitude!, sto.longitude!);
     const targetZoom = 16.0;
+    const eps = 0.25;
     final startCenter = _lastMapCenter ?? target;
     final startZoom = _currentZoom;
 
-    if (startCenter.latitude == target.latitude && startCenter.longitude == target.longitude && (startZoom - targetZoom).abs() < 0.2) {
-      pushStoDetailScreen(context, STODetailScreen(sto: sto, initialServiceIds: initialIds));
+    if (_sameLatLng(startCenter, target) && (startZoom - targetZoom).abs() < eps) {
+      Future.delayed(const Duration(milliseconds: 300), openDetail);
+      return;
+    }
+
+    if (MediaQuery.of(context).disableAnimations || !TickerMode.of(context)) {
+      _osmMapController!.move(target, targetZoom);
+      if (mounted) {
+        setState(() {
+          _lastMapCenter = target;
+          _currentZoom = targetZoom;
+        });
+        Future.delayed(const Duration(milliseconds: 300), openDetail);
+      }
+      return;
+    }
+
+    final sameHeight = (startZoom - targetZoom).abs() < eps;
+    final tooZoomedIn = startZoom > targetZoom + eps;
+
+    if (sameHeight) {
+      _runMapPanAnimation(startCenter, target, startZoom, onComplete: () {
+        Future.delayed(const Duration(milliseconds: 300), openDetail);
+      });
+      return;
+    }
+
+    if (tooZoomedIn) {
+      _runMapZoomAtCenterAnimation(startCenter, startZoom, targetZoom, 500, onComplete: () {
+        final panFrom = _lastMapCenter ?? startCenter;
+        _runMapPanAnimation(panFrom, target, targetZoom, onComplete: () {
+          Future.delayed(const Duration(milliseconds: 300), openDetail);
+        });
+      });
       return;
     }
 
     _animateMapToCenterAndZoom(target, targetZoom, onComplete: () {
-      if (mounted) pushStoDetailScreen(context, STODetailScreen(sto: sto, initialServiceIds: initialIds));
+      Future.delayed(const Duration(milliseconds: 300), openDetail);
     });
   }
 
@@ -813,26 +1085,31 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                 },
               ),
             // Переключатель: Карта / Список (по умолчанию открыта карта)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-              child: Container(
-                height: 40,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: context.palette.border),
-                ),
-                child: Row(
-                  children: [
-                    _SegmentBtn(label: l10n.searchViewMap, active: _isMapView,
-                      onTap: () => setState(() => _isMapView = true)),
-                    _SegmentBtn(label: l10n.searchViewList, active: !_isMapView,
-                      onTap: () => setState(() => _isMapView = false)),
-                  ],
+            GarageTutorialTarget(
+              highlightStep: GarageFirstCarTutorialStep.searchMapAndFilters,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                child: Container(
+                  height: 40,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: context.palette.border),
+                  ),
+                  child: Row(
+                    children: [
+                      _SegmentBtn(label: l10n.searchViewMap, active: _isMapView,
+                        onTap: () => setState(() => _isMapView = true)),
+                      _SegmentBtn(label: l10n.searchViewList, active: !_isMapView,
+                        onTap: () => setState(() => _isMapView = false)),
+                    ],
+                  ),
                 ),
               ),
             ),
             // Фильтры (главный ряд)
-            SizedBox(
+            GarageTutorialTarget(
+              highlightStep: GarageFirstCarTutorialStep.bookingHint,
+              child: SizedBox(
               height: 40,
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
@@ -884,6 +1161,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                   );
                 },
               ),
+            ),
             ),
             // Подтипы мойки (справа в том же стиле — вторая строка, только при выбранной «Мойка»)
             Builder(
@@ -995,6 +1273,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         ref.watch(selectedCarIdProvider) != null;
     final itemCount = stos.length + (showShowAllFooter ? 1 : 0);
 
+    if (stos.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scheduleNearestSlotsPrefetch(ref, stos);
+      });
+    }
+
     if (itemCount == 0) {
       final isServiceFilter = _selectedServiceIds.isNotEmpty;
       final filterByCar = ref.watch(filterByCarSettingProvider);
@@ -1099,7 +1383,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                 ),
               );
             }
-            final sto = stos[i];
+            final sto = stos[i].copyWith(nearestSlotStartIso: _nearestSlotIsoByOrgId[stos[i].id]);
             final allReviews = ref.watch(stoReviewsProvider);
             final userReviews = allReviews.where((r) => r.stoId == sto.id).toList();
             final displayRating = StoReviewsNotifier.computedRating(sto.rating, sto.reviewCount, userReviews);
@@ -1129,9 +1413,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           ),
           onCall: (s) => _openCallForSto(context, s),
           onRoute: (s) => _openRouteToSto(context, s),
-          onShare: (_) => ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(l10n.searchShareSoon)),
-          ),
+          onWrite: (s) => _openChatWithSto(context, s),
             );
           },
         ),
@@ -1140,7 +1422,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   }
 
   Widget _buildMapView(List<STO> stos, WidgetRef ref, AppL10n l10n) {
-    final withCoords = stos.where((s) => s.latitude != null && s.longitude != null).toList();
+    if (stos.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scheduleNearestSlotsPrefetch(ref, stos);
+      });
+    }
+    final withCoords = stos
+        .map((s) => s.copyWith(nearestSlotStartIso: _nearestSlotIsoByOrgId[s.id]))
+        .where((s) => s.latitude != null && s.longitude != null)
+        .toList();
     const krasnodar = LatLng(45.0355, 38.9753);
     final userLat = _userPosition?.latitude;
     final userLon = _userPosition?.longitude;
@@ -1164,12 +1454,23 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         ? <STO>[]
         : (List<STO>.from(withCoords)..sort((a, b) => b.rating.compareTo(a.rating))).take(6).toList();
 
-    final showShowAllOnMap = ref.watch(filterByCarSettingProvider) &&
-        ref.watch(selectedCarIdProvider) != null;
+    final mapCenter = _lastMapCenter ?? initialCenter;
+    // Партнёрские точки — все с координатами. Непартнёры — без лишней гео-обрезки по прямоугольнику
+    // (она давала пустую карту); только усечение по числу ближайших к центру.
+    final externalsOnMap = _showExternalPOIsOnMap
+        ? _prioritizeExternalsForMap(_getExternalPOIsForMap(withCoords, l10n), mapCenter)
+        : <ExternalPOI>[];
+    final showExternalOsmBanner =
+        _showExternalPOIsOnMap && !_externalPOIsLoading && externalsOnMap.isEmpty;
+
+    final canUseBrandToggle =
+        ref.watch(filterByCarSettingProvider) && ref.watch(selectedCarIdProvider) != null;
     final mapProvider = ref.watch(mapProviderSettingProvider);
     final showExternalMapLauncher =
         mapProvider == MapProvider.google || mapProvider == MapProvider.yandex;
     final hasMapLocButton = _showMyLocationButton || _userPosition != null;
+    final mapFabBottom = 8.0 + MediaQuery.of(context).padding.bottom;
+    const mapFabStep = 56.0;
 
     return Stack(
       children: [
@@ -1177,7 +1478,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           initialCenter: initialCenter,
           initialZoom: initialZoom,
           partners: withCoords,
-          externals: _showExternalPOIsOnMap ? _getExternalPOIsForMap(withCoords, l10n) : [],
+          favoriteStoIds: ref.watch(effectiveFavoriteStoIdsProvider),
+          externals: externalsOnMap,
           tileUrlTemplate: InAppMapTiles.urlTemplateFor(mapProvider),
           tileSubdomains: InAppMapTiles.subdomainsFor(mapProvider),
           userLocation: userLocation,
@@ -1193,7 +1495,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
             _currentZoom = zoom;
           }),
           onControllerReady: (c) => setState(() => _osmMapController = c),
-          onVisibleBoundsChanged: _fetchExternalPOIsForBounds,
+          onVisibleBoundsChanged: _onMapVisibleBounds,
         ),
         if (_showExternalPOIsOnMap && _externalPOIsLoading)
           Positioned(
@@ -1202,10 +1504,17 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
             top: 0,
             child: SafeArea(
               bottom: false,
-              child: LinearProgressIndicator(
-                minHeight: 2,
-                color: context.palette.primary,
-                backgroundColor: Colors.transparent,
+              child: Material(
+                color: context.palette.cardBg.withValues(alpha: 0.92),
+                elevation: 1,
+                shadowColor: context.palette.shadowDark,
+                child: LinearProgressIndicator(
+                  minHeight: 3,
+                  color: context.palette.primary,
+                  backgroundColor: context.palette.brightness == Brightness.dark
+                      ? context.palette.border.withValues(alpha: 0.55)
+                      : context.palette.strokeSoft.withValues(alpha: 0.65),
+                ),
               ),
             ),
           ),
@@ -1228,7 +1537,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                         scrollDirection: Axis.horizontal,
                         padding: const EdgeInsets.symmetric(horizontal: 12),
                         itemCount: recommended.length,
-                        separatorBuilder: (_, __) => SizedBox(width: 8),
+                        separatorBuilder: (_, _) => SizedBox(width: 8),
                         itemBuilder: (_, i) {
                           final sto = recommended[i];
                           final distKm = (userLat != null && userLon != null && sto.latitude != null && sto.longitude != null)
@@ -1245,7 +1554,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Icon(Icons.location_on_rounded, size: 20, color: context.palette.primary),
+                                    StoListLeadingImage(sto: sto, size: 36, borderRadius: 8),
                                     SizedBox(width: 8),
                                     Column(
                                       mainAxisSize: MainAxisSize.min,
@@ -1334,67 +1643,83 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                 ],
               ),
             ),
+            ),
           ),
-        ),
+        if (showExternalOsmBanner)
+          Positioned(
+            left: 10,
+            right: 10,
+            bottom: mapFabBottom + mapFabStep * 3 + 12,
+            child: Material(
+              elevation: 3,
+              borderRadius: BorderRadius.circular(12),
+              color: context.palette.cardBg.withValues(alpha: 0.96),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.info_outline_rounded, size: 22, color: context.palette.primary),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        l10n.searchExternalOsmEmptyHint,
+                        style: TextStyle(fontSize: 13, color: context.palette.textSecondary, height: 1.35),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         // Открыть текущий вид в Google / Яндекс (настройка «Карты» в профиле)
         if (showExternalMapLauncher)
           Positioned(
-            right: 12,
-            bottom: MediaQuery.of(context).padding.bottom +
-                16 +
-                52 +
-                (hasMapLocButton ? 52 : 0),
-            child: SafeArea(
-              top: false,
-              child: Material(
-                elevation: 2,
-                borderRadius: BorderRadius.circular(28),
-                color: context.palette.cardBg.withValues(alpha: 0.95),
-                child: IconButton(
-                  onPressed: () {
-                    final c = _lastMapCenter ?? initialCenter;
-                    launchExternalMapView(
-                      provider: mapProvider,
-                      center: c,
-                      zoom: _currentZoom,
-                    );
-                  },
-                  icon: Icon(
-                    mapProvider == MapProvider.google ? Icons.map_rounded : Icons.explore_rounded,
-                    color: context.palette.primary,
-                    size: 26,
-                  ),
-                  tooltip: mapProvider == MapProvider.google ? l10n.searchOpenInGoogleMaps : l10n.searchOpenInYandexMaps,
+            right: 8,
+            bottom: mapFabBottom + mapFabStep + (hasMapLocButton ? mapFabStep : 0),
+            child: Material(
+              elevation: 2,
+              borderRadius: BorderRadius.circular(28),
+              color: context.palette.cardBg.withValues(alpha: 0.95),
+              child: IconButton(
+                onPressed: () {
+                  final c = _lastMapCenter ?? initialCenter;
+                  launchExternalMapView(
+                    provider: mapProvider,
+                    center: c,
+                    zoom: _currentZoom,
+                  );
+                },
+                icon: Icon(
+                  mapProvider == MapProvider.google ? Icons.map_rounded : Icons.explore_rounded,
+                  color: context.palette.primary,
+                  size: 26,
                 ),
+                tooltip: mapProvider == MapProvider.google ? l10n.searchOpenInGoogleMaps : l10n.searchOpenInYandexMaps,
               ),
             ),
           ),
-        // Кнопка «Моё местоположение» — правый нижний угол (если геолокация не успела за 3 сек или для перехода к себе)
+        // «Моё местоположение» — над нижним меню слоёв
         if (_showMyLocationButton || _userPosition != null)
           Positioned(
-            right: 12,
-            bottom: MediaQuery.of(context).padding.bottom + 16 + 52,
-            child: SafeArea(
-              top: false,
-              child: Material(
-                elevation: 2,
-                borderRadius: BorderRadius.circular(28),
-                color: context.palette.cardBg.withValues(alpha: 0.95),
-                child: IconButton(
-                  onPressed: _moveMapToUserLocation,
-                  icon: Icon(Icons.my_location_rounded, color: context.palette.primary, size: 26),
-                  tooltip: l10n.searchMyLocation,
-                ),
+            right: 8,
+            bottom: mapFabBottom + mapFabStep,
+            child: Material(
+              elevation: 2,
+              borderRadius: BorderRadius.circular(28),
+              color: context.palette.cardBg.withValues(alpha: 0.95),
+              child: IconButton(
+                onPressed: _moveMapToUserLocation,
+                icon: Icon(Icons.my_location_rounded, color: context.palette.primary, size: 26),
+                tooltip: l10n.searchMyLocation,
               ),
             ),
           ),
-        // Меню отображения карты — правый нижний угол
+        // Меню слоёв карты — у нижнего края (атрибуция OSM перенесена влево на самой карте)
         Positioned(
-          right: 12,
-          bottom: MediaQuery.of(context).padding.bottom + 16,
-          child: SafeArea(
-            top: false,
-            child: Material(
+          right: 8,
+          bottom: mapFabBottom,
+          child: Material(
               elevation: 2,
               borderRadius: BorderRadius.circular(28),
               color: context.palette.cardBg.withValues(alpha: 0.95),
@@ -1421,7 +1746,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                       });
                     }
                   }
-                  if (value == 'all_orgs') setState(() => _showAllOrganizations = !_showAllOrganizations);
+                  if (value == 'all_orgs' && canUseBrandToggle) {
+                    setState(() => _showAllOrganizations = !_showAllOrganizations);
+                  }
                 },
                 itemBuilder: (context) => [
                   PopupMenuItem<String>(
@@ -1440,28 +1767,27 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                       ],
                     ),
                   ),
-                  if (showShowAllOnMap)
-                    PopupMenuItem<String>(
-                      value: 'all_orgs',
-                      child: Row(
-                        children: [
-                          Icon(Icons.directions_car_rounded, size: 20, color: context.palette.primary),
-                          SizedBox(width: 10),
-                          Flexible(
-                            child: Text(
-                              _showAllOrganizations ? l10n.searchWithCarBrandFilter : l10n.searchWithoutCarBrandFilter,
-                              style: TextStyle(fontSize: 14),
-                              overflow: TextOverflow.ellipsis,
-                            ),
+                  PopupMenuItem<String>(
+                    value: 'all_orgs',
+                    enabled: canUseBrandToggle,
+                    child: Row(
+                      children: [
+                        Icon(Icons.directions_car_rounded, size: 20, color: context.palette.primary),
+                        SizedBox(width: 10),
+                        Flexible(
+                          child: Text(
+                            _showAllOrganizations ? l10n.searchWithCarBrandFilter : l10n.searchWithoutCarBrandFilter,
+                            style: TextStyle(fontSize: 14),
+                            overflow: TextOverflow.ellipsis,
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
+                  ),
                 ],
               ),
             ),
           ),
-        ),
       ],
     );
   }
@@ -1702,6 +2028,37 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     );
   }
 
+  Future<void> _openChatWithSto(BuildContext context, STO sto) async {
+    final phoneNorm =
+        (ref.read(authProvider).user?.phone ?? '').replaceAll(RegExp(r'\D'), '');
+    if (phoneNorm.isEmpty) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Укажите телефон в профиле, чтобы написать сервису'),
+          ),
+        );
+      }
+      return;
+    }
+    final result = await ref.read(chatRepositoryProvider).openOrganizationChat(sto.id);
+    if (!context.mounted) return;
+    result.when(
+      success: (chat) {
+        ref.read(chatsProvider.notifier).loadChats();
+        pushCupertino(context, ChatDetailScreen(chat: chat));
+      },
+      failure: (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.message),
+            backgroundColor: context.palette.error,
+          ),
+        );
+      },
+    );
+  }
+
   void _showFilters(BuildContext context) {
     final l10n = L10nScope.of(context);
     double tempMaxKm = _maxDistanceKm ?? 50;
@@ -1865,30 +2222,85 @@ class _SegmentBtn extends StatelessWidget {
   }
 }
 
-/// Оранжевый бейдж с суммой и временем по выбранным услугам.
+/// Оранжевый бейдж: дата слева, интервал по центру, сумма и значок справа.
 class _PriceTimeBadge extends StatelessWidget {
   final int priceKopecks;
   final int durationMinutes;
+  final String? nearestSlotIsoUtc;
 
-  const _PriceTimeBadge({required this.priceKopecks, required this.durationMinutes});
+  const _PriceTimeBadge({
+    required this.priceKopecks,
+    required this.durationMinutes,
+    this.nearestSlotIsoUtc,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final priceStr = Formatters.money(priceKopecks);
-    final timeStr = Formatters.durationMinutes(durationMinutes);
+    final dateStr = Formatters.searchNearestSlotDateFull(nearestSlotIsoUtc);
+    final rangeStr = Formatters.searchNearestSlotTimeRange(nearestSlotIsoUtc, durationMinutes);
+    final amountPlain = Formatters.moneyRublesPlain(priceKopecks);
+    final fallback =
+        '${Formatters.durationMinutes(durationMinutes)} · ${Formatters.money(priceKopecks)}';
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         color: const Color(0xFFE65100),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         boxShadow: [
           BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 4, offset: const Offset(0, 2)),
         ],
       ),
-      child: Text(
-        '$priceStr · $timeStr',
-        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white),
-      ),
+      child: dateStr.isEmpty || rangeStr.isEmpty
+          ? Text(
+              fallback,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white),
+            )
+          : Row(
+              children: [
+                Expanded(
+                  flex: 34,
+                  child: Text(
+                    dateStr,
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Expanded(
+                  flex: 42,
+                  child: Text(
+                    rangeStr,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Expanded(
+                  flex: 34,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          amountPlain,
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.right,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      const Icon(Icons.payments_rounded, size: 15, color: Colors.white),
+                    ],
+                  ),
+                ),
+              ],
+            ),
     );
   }
 }
@@ -1904,7 +2316,7 @@ class _SearchSTOCard extends StatelessWidget {
   final VoidCallback? onFavoriteTap;
   final void Function(STO)? onCall;
   final void Function(STO)? onRoute;
-  final void Function(STO)? onShare;
+  final void Function(STO)? onWrite;
   const _SearchSTOCard({
     required this.sto,
     this.displayRating,
@@ -1915,16 +2327,17 @@ class _SearchSTOCard extends StatelessWidget {
     this.onFavoriteTap,
     this.onCall,
     this.onRoute,
-    this.onShare,
+    this.onWrite,
   });
 
   @override
   Widget build(BuildContext context) {
     final l10n = L10nScope.of(context);
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-      padding: EdgeInsets.all(compact ? 14 : 16),
+    final statusLine = stoSearchCardTodayHoursLine(sto, l10n);
+    final openNow = sto.hoursLive != null ? sto.hoursLive!.isPositiveNow : sto.isOpen;
+    final openStyleColor = openNow ? context.palette.success : context.palette.error;
+
+    return Container(
       decoration: BoxDecoration(
         color: context.palette.cardBg.withValues(alpha: 0.95),
         borderRadius: BorderRadius.circular(14),
@@ -1938,171 +2351,208 @@ class _SearchSTOCard extends StatelessWidget {
         ],
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 80,
-                height: 80,
-                decoration: BoxDecoration(
-                  color: context.palette.nestedBg,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Center(
-                  child: Text(sto.name[0], style: TextStyle(
-                    fontSize: 28, fontWeight: FontWeight.w700, color: context.palette.primary,
-                  )),
-                ),
-              ),
-              SizedBox(width: 12),
-              Expanded(
-                child: Column(
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onTap,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(13)),
+              child: Padding(
+                padding: EdgeInsets.all(compact ? 14 : 16),
+                child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: Text(
-                            sto.name,
-                            style: TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.w600, color: context.palette.textPrimary,
+                    SizedBox(
+                      width: 80,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          StoListLeadingImage(sto: sto, size: 80, borderRadius: 12),
+                          const SizedBox(height: 4),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.star_rounded, size: 14, color: context.palette.primary),
+                              const SizedBox(width: 2),
+                              Flexible(
+                                child: Text(
+                                  '${Formatters.rating(displayRating ?? sto.rating)} (${displayReviewCount ?? sto.reviewCount})',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: context.palette.textSecondary,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  sto.name,
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                    color: context.palette.textPrimary,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              GestureDetector(
+                                onTap: onFavoriteTap,
+                                child: Icon(
+                                  isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                                  size: 22,
+                                  color: isFavorite ? context.palette.error : context.palette.textTertiary,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  sto.address,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: context.palette.textSecondary,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              if (sto.distanceKm != null)
+                                Text(
+                                  Formatters.distance(sto.distanceKm!),
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: context.palette.textSecondary,
+                                  ),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.only(top: 3),
+                                child: Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    color: openStyleColor,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  statusLine,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500,
+                                    color: openStyleColor,
+                                    height: 1.25,
+                                  ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          StoSearchListBrandsLine(sto: sto),
+                          if (sto.minPrice != null) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              sto.minPrice!,
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: context.palette.textSecondary,
+                              ),
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        GestureDetector(
-                          onTap: () {
-                            onFavoriteTap?.call();
-                          },
-                          child: Icon(
-                            isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-                            size: 22,
-                            color: isFavorite ? context.palette.error : context.palette.textTertiary,
-                          ),
-                        ),
-                      ],
+                          ],
+                        ],
+                      ),
                     ),
-                    SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Icon(Icons.star_rounded, size: 14, color: context.palette.primary),
-                        SizedBox(width: 2),
-                        Text(
-                          '${Formatters.rating(displayRating ?? sto.rating)} (${displayReviewCount ?? sto.reviewCount})',
-                          style: TextStyle(
-                            fontSize: 14, color: context.palette.textSecondary,
-                          ),
-                        ),
-                      ],
-                    ),
-                    SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(sto.address, style: TextStyle(
-                            fontSize: 14, color: context.palette.textSecondary,
-                          ), maxLines: 1, overflow: TextOverflow.ellipsis),
-                        ),
-                        if (sto.distanceKm != null)
-                          Text(Formatters.distance(sto.distanceKm!), style: TextStyle(
-                            fontSize: 14, color: context.palette.textSecondary,
-                          )),
-                      ],
-                    ),
-                    SizedBox(height: 6),
-                    Row(
-                      children: [
-                        Container(
-                          width: 8,
-                          height: 8,
-                          decoration: BoxDecoration(
-                            color: sto.isOpen ? context.palette.success : context.palette.error,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        SizedBox(width: 6),
-                        Text(
-                          sto.isOpen ? l10n.searchOpen : l10n.searchClosed,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: sto.isOpen ? context.palette.success : context.palette.error,
-                          ),
-                        ),
-                      ],
-                    ),
-                    SizedBox(height: 6),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 4,
-                      children: sto.specializations.take(4).map((s) => Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: context.palette.nestedBg,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text(s, style: TextStyle(fontSize: 11, color: context.palette.textPrimary)),
-                      )).toList(),
-                    ),
-                    if (sto.minPrice != null) ...[
-                      SizedBox(height: 4),
-                      Text(sto.minPrice!, style: TextStyle(fontSize: 14, color: context.palette.textSecondary)),
-                    ],
                   ],
                 ),
               ),
-            ],
+            ),
           ),
-          if (onCall != null || onRoute != null || onShare != null) ...[
-            SizedBox(height: 10),
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerLeft,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (onCall != null)
-                    _ActionChip(icon: Icons.phone_rounded, label: l10n.searchCall, onTap: () => onCall!(sto)),
-                  if (onCall != null && (onRoute != null || onShare != null)) SizedBox(width: 6),
-                  if (onRoute != null)
-                    _ActionChip(icon: Icons.directions_rounded, label: l10n.searchRoute, onTap: () => onRoute!(sto)),
-                  if (onRoute != null && onShare != null) SizedBox(width: 6),
-                  if (onShare != null)
-                    _ActionChip(icon: Icons.share_rounded, label: l10n.searchShare, onTap: () => onShare!(sto)),
-                ],
+          if (onCall != null || onRoute != null || onWrite != null) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (onCall != null)
+                      _ActionChip(icon: Icons.phone_rounded, label: l10n.searchCall, onTap: () => onCall!(sto)),
+                    if (onCall != null && (onRoute != null || onWrite != null)) const SizedBox(width: 6),
+                    if (onRoute != null)
+                      _ActionChip(
+                        icon: Icons.directions_rounded,
+                        label: l10n.searchRoute,
+                        onTap: () => onRoute!(sto),
+                      ),
+                    if (onRoute != null && onWrite != null) const SizedBox(width: 6),
+                    if (onWrite != null)
+                      _ActionChip(
+                        icon: Icons.chat_bubble_outline_rounded,
+                        label: l10n.searchWrite,
+                        onTap: () => onWrite!(sto),
+                      ),
+                  ],
+                ),
               ),
             ),
           ],
           if (sto.totalSelectedPriceKopecks != null && sto.totalSelectedPriceKopecks! > 0) ...[
-            SizedBox(height: 10),
-            Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(
-                  color: context.palette.nestedBg,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: context.palette.border.withValues(alpha: 0.5)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.account_balance_wallet_outlined, size: 18, color: context.palette.primary),
-                    SizedBox(width: 8),
-                    _PriceTimeBadge(
-                      priceKopecks: sto.totalSelectedPriceKopecks!,
-                      durationMinutes: sto.totalSelectedDurationMinutes ?? 0,
-                    ),
-                  ],
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: Center(
+                child: Container(
+                  width: double.infinity,
+                  constraints: const BoxConstraints(maxWidth: 520),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: context.palette.nestedBg,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: context.palette.border.withValues(alpha: 0.5)),
+                  ),
+                  child: _PriceTimeBadge(
+                    priceKopecks: sto.totalSelectedPriceKopecks!,
+                    durationMinutes: sto.totalSelectedDurationMinutes ?? 0,
+                    nearestSlotIsoUtc: sto.nearestSlotStartIso,
+                  ),
                 ),
               ),
             ),
           ],
         ],
-      ),
       ),
     );
   }

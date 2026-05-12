@@ -14,6 +14,11 @@ abstract final class ClientCatalogServiceIds {
   static const timingBelt = 'svc_maint_timing_belt';
   static const shockFront = 'svc_susp_shock_f';
   static const sparkPlugs = 'svc_maint_spark_plugs';
+  static const cabinFilter = 'svc_maint_cabin_filter';
+  static const fuelFilter = 'svc_maint_fuel_filter';
+  static const brakeFluid = 'svc_maint_brake_fluid';
+  static const atf = 'svc_maint_atf';
+  static const wiperBlades = 'svc_maint_wiper_blades';
 }
 
 /// Старые mock-ID из клиента (`mock_data.dart`) → актуальные `svc_*`.

@@ -61,6 +61,7 @@ class _AddMaintenanceRecordSheetBodyState extends ConsumerState<_AddMaintenanceR
   final FocusNode _kmFocus = FocusNode();
   final FocusNode _placeFocus = FocusNode();
   final GlobalKey _kmFieldKey = GlobalKey();
+  final Map<MaintenanceType, TextEditingController> _priceByType = {};
 
   @override
   void initState() {
@@ -128,7 +129,38 @@ class _AddMaintenanceRecordSheetBodyState extends ConsumerState<_AddMaintenanceR
     _searchCtrl.dispose();
     _kmFocus.dispose();
     _placeFocus.dispose();
+    for (final c in _priceByType.values) {
+      c.dispose();
+    }
+    _priceByType.clear();
     super.dispose();
+  }
+
+  TextEditingController _priceFor(MaintenanceType t) {
+    return _priceByType.putIfAbsent(t, () => TextEditingController());
+  }
+
+  int? _parsePriceRubKopecks(MaintenanceType t) {
+    final c = _priceByType[t];
+    if (c == null) return null;
+    final raw = c.text.replaceAll(' ', '').trim();
+    if (raw.isEmpty) return null;
+    final rub = int.tryParse(raw);
+    if (rub == null || rub < 0) return null;
+    return rub * 100;
+  }
+
+  void _toggleType(MaintenanceType t) {
+    setState(() {
+      if (_selectedTypes.contains(t)) {
+        _selectedTypes.remove(t);
+        final c = _priceByType.remove(t);
+        c?.dispose();
+      } else {
+        _selectedTypes.add(t);
+        _priceFor(t);
+      }
+    });
   }
 
   Future<void> _pickDate() async {
@@ -180,6 +212,7 @@ class _AddMaintenanceRecordSheetBodyState extends ConsumerState<_AddMaintenanceR
           odometerKm: km,
           date: _date,
           place: place,
+          priceKopecks: _parsePriceRubKopecks(type),
         ),
       );
       i++;
@@ -361,51 +394,75 @@ class _AddMaintenanceRecordSheetBodyState extends ConsumerState<_AddMaintenanceR
         children.add(
           Padding(
             padding: const EdgeInsets.only(bottom: 6),
-            child: Material(
-              color: sel ? context.palette.primary.withValues(alpha: 0.14) : context.palette.cardBg,
-              borderRadius: BorderRadius.circular(12),
-              child: InkWell(
-                onTap: () => setState(() {
-                  if (sel) {
-                    _selectedTypes.remove(t);
-                  } else {
-                    _selectedTypes.add(t);
-                  }
-                }),
-                borderRadius: BorderRadius.circular(12),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                  child: Row(
-                    children: [
-                      Icon(
-                        sel ? Icons.check_box_rounded : Icons.check_box_outline_blank_rounded,
-                        color: sel ? context.palette.primary : context.palette.textTertiary,
-                        size: 22,
-                      ),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              t.localizedTitle(l10n),
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: sel ? context.palette.textPrimary : context.palette.textPrimary.withValues(alpha: 0.92),
-                              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Material(
+                  color: sel ? context.palette.primary.withValues(alpha: 0.14) : context.palette.cardBg,
+                  borderRadius: BorderRadius.circular(12),
+                  child: InkWell(
+                    onTap: () => _toggleType(t),
+                    borderRadius: BorderRadius.circular(12),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      child: Row(
+                        children: [
+                          Icon(
+                            sel ? Icons.check_box_rounded : Icons.check_box_outline_blank_rounded,
+                            color: sel ? context.palette.primary : context.palette.textTertiary,
+                            size: 22,
+                          ),
+                          SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  t.localizedTitle(l10n),
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: sel ? context.palette.textPrimary : context.palette.textPrimary.withValues(alpha: 0.92),
+                                  ),
+                                ),
+                                Text(
+                                  t.localizedSubtitle(l10n),
+                                  style: TextStyle(fontSize: 11, color: context.palette.textSecondary, height: 1.25),
+                                ),
+                              ],
                             ),
-                            Text(
-                              t.localizedSubtitle(l10n),
-                              style: TextStyle(fontSize: 11, color: context.palette.textSecondary, height: 1.25),
-                            ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
-              ),
+                if (sel) ...[
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: _priceFor(t),
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    style: TextStyle(fontSize: 15, color: context.palette.textPrimary),
+                    scrollPadding: const EdgeInsets.only(bottom: 120),
+                    decoration: InputDecoration(
+                      labelText: l10n.maintRecordPriceOptional,
+                      hintText: l10n.maintRecordPriceHint,
+                      filled: true,
+                      fillColor: context.palette.cardBg,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: context.palette.border),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: context.palette.primary, width: 1.5),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
         );

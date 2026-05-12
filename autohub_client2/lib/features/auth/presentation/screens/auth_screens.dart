@@ -6,20 +6,14 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/api/api_endpoints.dart';
 import '../../../../core/theme/client_palette.dart';
+import '../../../../core/utils/russian_mobile_phone.dart';
 import '../../../../core/auth/auth_provider.dart';
 import '../../../../core/providers/app_providers.dart';
 import '../../../../core/settings/theme_mode_provider.dart';
 import '../../../../shared/widgets/common_widgets.dart';
 import '../../../../shared/widgets/main_shell.dart';
 
-bool _isPhoneValidForRegister(String raw) {
-  final d = raw.replaceAll(RegExp(r'\D'), '');
-  if (d.isEmpty) return false;
-  if (d.length == 11 && d.startsWith('8')) return true;
-  if (d.length == 11 && d.startsWith('7')) return true;
-  if (d.length == 10) return true;
-  return false;
-}
+bool _isPhoneValidForRegister(String raw) => RussianMobilePhone.isComplete(raw);
 
 // ─── Welcome Screen ───
 class WelcomeScreen extends StatelessWidget {
@@ -290,7 +284,7 @@ class RegisterProfileScreen extends ConsumerStatefulWidget {
 
 class _RegisterProfileScreenState extends ConsumerState<RegisterProfileScreen> {
   final _name = TextEditingController();
-  final _phone = TextEditingController();
+  final _phone = TextEditingController(text: RussianMobilePhone.prefix);
   String? _error;
 
   @override
@@ -319,7 +313,7 @@ class _RegisterProfileScreenState extends ConsumerState<RegisterProfileScreen> {
           accountExists: false,
           debugOtp: widget.debugOtp,
           registerName: _name.text.trim(),
-          registerPhone: _phone.text.trim(),
+          registerPhone: RussianMobilePhone.e164OrNull(_phone.text) ?? _phone.text.trim(),
         ),
       ),
     );
@@ -412,10 +406,11 @@ class _RegisterProfileScreenState extends ConsumerState<RegisterProfileScreen> {
             TextField(
               controller: _phone,
               keyboardType: TextInputType.phone,
+              inputFormatters: [RussianMobilePhoneInputFormatter()],
               style: TextStyle(color: context.palette.textPrimary),
               onChanged: (_) => setState(() => _error = null),
               decoration: InputDecoration(
-                hintText: '+7 … или 8 …',
+                hintText: '+7 (999) 123-45-67',
                 hintStyle: TextStyle(color: context.palette.textPlaceholder.withValues(alpha: 0.7)),
                 filled: true,
                 fillColor: context.palette.cardBg,
@@ -803,7 +798,7 @@ class MandatoryProfileBasicsScreen extends ConsumerStatefulWidget {
 
 class _MandatoryProfileBasicsScreenState extends ConsumerState<MandatoryProfileBasicsScreen> {
   final _name = TextEditingController();
-  final _phone = TextEditingController();
+  final _phone = TextEditingController(text: RussianMobilePhone.prefix);
   bool _busy = false;
   String? _error;
   bool _prefilled = false;
@@ -816,7 +811,11 @@ class _MandatoryProfileBasicsScreenState extends ConsumerState<MandatoryProfileB
     final u = ref.read(authProvider).user;
     if (u != null) {
       if (u.name.trim().isNotEmpty) _name.text = u.name;
-      if (u.phone != null && u.phone!.trim().isNotEmpty) _phone.text = u.phone!;
+      if (u.phone != null && u.phone!.trim().isNotEmpty) {
+        _phone.text = RussianMobilePhone.displayFromAny(u.phone);
+      } else {
+        _phone.text = RussianMobilePhone.prefix;
+      }
     }
   }
 
@@ -837,9 +836,10 @@ class _MandatoryProfileBasicsScreenState extends ConsumerState<MandatoryProfileB
     });
     try {
       final client = ref.read(apiClientProvider);
+      final phoneOut = RussianMobilePhone.e164OrNull(_phone.text) ?? _phone.text.trim();
       final res = await client.patch(
         ApiEndpoints.profile,
-        data: {'name': _name.text.trim(), 'phone': _phone.text.trim()},
+        data: {'name': _name.text.trim(), 'phone': phoneOut},
       );
       final map = res.data;
       if (map is Map<String, dynamic>) {
@@ -922,10 +922,11 @@ class _MandatoryProfileBasicsScreenState extends ConsumerState<MandatoryProfileB
             TextField(
               controller: _phone,
               keyboardType: TextInputType.phone,
+              inputFormatters: [RussianMobilePhoneInputFormatter()],
               style: TextStyle(color: context.palette.textPrimary),
               onChanged: (_) => setState(() => _error = null),
               decoration: InputDecoration(
-                hintText: '+7 …',
+                hintText: '+7 (999) 123-45-67',
                 filled: true,
                 fillColor: context.palette.cardBg,
                 border: OutlineInputBorder(

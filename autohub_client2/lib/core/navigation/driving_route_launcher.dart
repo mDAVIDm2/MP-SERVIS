@@ -6,6 +6,8 @@ import 'package:map_launcher/map_launcher.dart';
 import '../settings/preferred_directions_map_provider.dart';
 import '../theme/client_palette.dart';
 
+bool _drivingRouteFlowInProgress = false;
+
 extension _FirstOrNull<E> on Iterable<E> {
   E? get firstOrNull {
     final it = iterator;
@@ -41,6 +43,11 @@ Future<void> launchDrivingRoute(
   required String destinationTitle,
   Position? userPosition,
 }) async {
+  if (_drivingRouteFlowInProgress) {
+    return;
+  }
+  _drivingRouteFlowInProgress = true;
+  try {
   final available = await MapLauncher.installedMaps;
   if (available.isEmpty) {
     if (context.mounted) {
@@ -159,5 +166,8 @@ Future<void> launchDrivingRoute(
         ),
       );
     }
+  }
+  } finally {
+    _drivingRouteFlowInProgress = false;
   }
 }

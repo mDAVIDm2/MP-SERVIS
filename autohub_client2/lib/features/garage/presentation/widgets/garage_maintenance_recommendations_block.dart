@@ -38,6 +38,8 @@ class GarageMaintenanceRecommendationsBlock extends ConsumerWidget {
 
     if (urgent.isEmpty) return const SizedBox.shrink();
 
+    final top = urgent.take(4).toList();
+
     return Padding(
       padding: const EdgeInsets.only(top: AppDesignSystem.blockSpacing),
       child: Column(
@@ -47,7 +49,7 @@ class GarageMaintenanceRecommendationsBlock extends ConsumerWidget {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: AppDesignSystem.pagePaddingH),
             child: Column(
-              children: urgent.map((u) => Padding(
+              children: top.map((u) => Padding(
                     padding: const EdgeInsets.only(bottom: 12),
                     child: _UrgentRecommendationCard(
                       suggestion: u,
@@ -107,14 +109,15 @@ class _UrgentRecommendationCard extends ConsumerWidget {
                     ),
                     SizedBox(height: 8),
                     ...visibleLines.map(
-                      (l) => Padding(
+                      (line) => Padding(
                         padding: const EdgeInsets.only(bottom: 4),
                         child: Text(
-                          l,
+                          line.text,
                           style: TextStyle(
                             fontSize: 13,
                             height: 1.35,
-                            color: context.palette.textSecondary,
+                            color: line.accentError ? context.palette.error : context.palette.textSecondary,
+                            fontWeight: line.accentError ? FontWeight.w600 : FontWeight.w400,
                           ),
                         ),
                       ),

@@ -19,6 +19,7 @@ const SERVICE_CATALOG_SEED_BASE: CatalogSeedRow[] = [
   { id: 'svc_maint_to_1', categoryKey: 'maintenance', categoryName: 'ТО и обслуживание', name: 'ТО-1 (регламентное)', defaultDurationMinutes: 60, sortOrder: 120 },
   { id: 'svc_maint_to_2', categoryKey: 'maintenance', categoryName: 'ТО и обслуживание', name: 'ТО-2 (регламентное)', defaultDurationMinutes: 120, sortOrder: 130 },
   { id: 'svc_maint_to_3', categoryKey: 'maintenance', categoryName: 'ТО и обслуживание', name: 'ТО-3 (регламентное)', defaultDurationMinutes: 180, sortOrder: 140 },
+  { id: 'svc_maint_wiper_blades', categoryKey: 'maintenance', categoryName: 'ТО и обслуживание', name: 'Замена щёток стеклоочистителя', defaultDurationMinutes: 20, sortOrder: 145 },
   // Двигатель
   { id: 'svc_eng_diag', categoryKey: 'engine', categoryName: 'Двигатель', name: 'Диагностика двигателя', defaultDurationMinutes: 60, sortOrder: 10, requiredSkill: 'DIAGNOSTICS' },
   { id: 'svc_eng_compression', categoryKey: 'engine', categoryName: 'Двигатель', name: 'Компрессометрия', defaultDurationMinutes: 90, sortOrder: 20, requiredSkill: 'ENGINE' },

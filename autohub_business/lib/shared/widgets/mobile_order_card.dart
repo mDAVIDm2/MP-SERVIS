@@ -243,7 +243,7 @@ class MobileOrderCard extends ConsumerWidget {
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(
-                      order.status.label,
+                      order.stoDisplayStatusLabel,
                       style: TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.w700,

@@ -28,5 +28,15 @@ List<String> maintenanceBookingServiceIds(MaintenanceType type) {
       return [ClientCatalogServiceIds.wheelAlignment];
     case MaintenanceType.general:
       return [ClientCatalogServiceIds.oilEngine, ClientCatalogServiceIds.airFilter];
+    case MaintenanceType.cabinFilter:
+      return [ClientCatalogServiceIds.cabinFilter];
+    case MaintenanceType.fuelFilter:
+      return [ClientCatalogServiceIds.fuelFilter];
+    case MaintenanceType.brakeFluid:
+      return [ClientCatalogServiceIds.brakeFluid];
+    case MaintenanceType.atf:
+      return [ClientCatalogServiceIds.atf];
+    case MaintenanceType.wiperBlades:
+      return [ClientCatalogServiceIds.wiperBlades];
   }
 }

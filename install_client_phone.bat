@@ -12,8 +12,15 @@ echo   Другой девайс: set DEVICE_ID=^<id^> перед запуско
 echo.
 echo Сборка: по умолчанию release ^(как прод^).
 echo   Быстрый debug: set DEBUG_INSTALL=1
+echo   Уже есть APK — не пересобирать, только поставить: set INSTALL_ONLY=1
+echo     ^(файл: build\app\outputs\flutter-apk\app-release.apk или app-debug.apk^)
 echo API: по умолчанию https://api.mp-servis.ru/api/v1
 echo   Локальный Nest: set USE_LAN_API=1
+echo ОСАГО партнёр: если есть config\partner_osago_define.json — подключается к сборке.
+echo.
+echo ВАЖНО: без INSTALL_ONLY скрипт ВСЕГДА заново делает flutter build apk.
+echo   Тогда на телефон попадает результат ЭТОЙ сборки, а не старый apk с диска.
+echo   Разница с ручной сборкой: firebase_define.json, другие dart-define, кэш.
 echo.
 echo Конфликт подписи: adb uninstall ru.mpservis.client
 echo.
@@ -38,12 +45,31 @@ set "ARGS="
 if not "%USE_LAN_API%"=="1" (
   set "ARGS=--dart-define=MP_SERVIS_API_BASE_URL=https://api.mp-servis.ru/api/v1"
 )
+if exist "config\partner_osago_define.json" (
+  if defined ARGS (
+    set "ARGS=!ARGS! --dart-define-from-file=config/partner_osago_define.json"
+  ) else (
+    set "ARGS=--dart-define-from-file=config/partner_osago_define.json"
+  )
+)
 if exist "config\firebase_define.json" (
   if defined ARGS (
     set "ARGS=!ARGS! --dart-define-from-file=config/firebase_define.json"
   ) else (
     set "ARGS=--dart-define-from-file=config/firebase_define.json"
   )
+)
+
+if "%INSTALL_ONLY%"=="1" (
+  if "%DEBUG_INSTALL%"=="1" (
+    set "APK=build\app\outputs\flutter-apk\app-debug.apk"
+  ) else (
+    set "APK=build\app\outputs\flutter-apk\app-release.apk"
+  )
+  echo.
+  echo INSTALL_ONLY=1 — сборка пропущена, ставим готовый APK:
+  echo   !APK!
+  goto :after_build
 )
 
 echo flutter pub get...
@@ -73,6 +99,8 @@ if errorlevel 1 (
   echo ERROR: сборка не удалась.
   exit /b %errorlevel%
 )
+
+:after_build
 
 if not exist "!APK!" (
   echo ERROR: APK не найден: !APK!

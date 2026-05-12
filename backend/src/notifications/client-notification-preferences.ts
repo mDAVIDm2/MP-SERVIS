@@ -42,6 +42,7 @@ export function channelForNotificationType(type: NotificationType): Notification
   if (type === 'security') return 'security';
   if (type === 'chat') return 'chat';
   if (type === 'order') return 'order';
+  if (type === 'car_transfer_request' || type === 'car_transfer_result') return 'order';
   if (type === 'general') return 'promotion';
   if (type === 'organization_invite') return 'reminder';
   if (type === 'pending_car_approved' || type === 'pending_car_rejected' || type === 'pending_car_suggested') {
@@ -64,7 +65,9 @@ export function prefsAllowType(prefs: ClientNotificationPreferences, type: Notif
 export function notificationTypesAllowedByPrefs(prefs: ClientNotificationPreferences): NotificationType[] {
   const out: NotificationType[] = [];
   if (prefs.chatMessages) out.push('chat');
-  if (prefs.orderUpdates) out.push('order');
+  if (prefs.orderUpdates) {
+    out.push('order', 'car_transfer_request', 'car_transfer_result');
+  }
   if (prefs.promotions) out.push('general');
   if (prefs.reminders) {
     out.push('pending_car_approved', 'pending_car_rejected', 'pending_car_suggested', 'organization_invite');

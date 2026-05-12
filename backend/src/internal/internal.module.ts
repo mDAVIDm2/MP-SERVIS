@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuditLog } from '../audit/audit-log.entity';
 import { InternalOperator } from './internal-operator.entity';
@@ -30,12 +31,19 @@ import { InternalSupportChatsController } from './internal-support-chats.control
   imports: [
     TypeOrmModule.forFeature([InternalOperator, AuditLog]),
     PassportModule,
+    ThrottlerModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
-      useFactory: (config: ConfigService) => ({
-        secret: config.get<string>('JWT_SECRET') || 'dev-secret',
-        signOptions: { expiresIn: config.get<string>('JWT_EXPIRES_IN') || '7d' },
-      }),
+      useFactory: (config: ConfigService) => {
+        const secret = config.get<string>('INTERNAL_JWT_SECRET')?.trim();
+        if (process.env.NODE_ENV === 'production' && !secret) {
+          throw new Error('INTERNAL_JWT_SECRET is required when NODE_ENV=production');
+        }
+        return {
+          secret: secret || 'dev-internal-secret',
+          signOptions: { expiresIn: config.get<string>('JWT_EXPIRES_IN') || '7d' },
+        };
+      },
       inject: [ConfigService],
     }),
     OrganizationsModule,

@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -12,11 +13,59 @@ import '../../../../core/settings/filter_by_car_setting.dart';
 import '../../../../core/theme/client_palette.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../core/utils/scroll_center.dart';
+import '../../../../core/l10n/maintenance_type_l10n.dart';
+import '../../../../core/settings/maintenance_reminders_provider.dart';
+import '../../../../core/settings/car_manual_expenses_provider.dart';
+import '../../../../core/settings/car_expense_group_ids.dart';
+import '../widgets/add_car_manual_expense_sheet.dart';
+import '../../../../shared/models/car_model.dart';
 import '../../../../shared/models/order_model.dart';
 import '../../../../shared/org_business_kind.dart';
+import '../analytics/analytics_block_editor_screen.dart';
 import '../analytics/analytics_catalog_helper.dart';
 import '../analytics/analytics_dashboard_models.dart';
 import '../analytics/analytics_export.dart';
+import '../analytics/car_expense_analytics.dart';
+
+Map<String, int> _categoryTotalsForCalendarMonth(
+  AppL10n l10n,
+  List<Order> financialCar,
+  List<MaintenanceRecord> maintCar,
+  List<CarManualExpenseRecord> manualCar,
+  int year,
+  int month,
+  List<CatalogCategory> catalogCategories,
+  List<CatalogServiceItem> catalogItems,
+) {
+  final map = <String, int>{};
+  for (final o in financialCar) {
+    if (o.dateTime.year != year || o.dateTime.month != month) continue;
+    for (final item in o.itemsForDisplay.where((i) => i.isApproved && !i.isRejected)) {
+      final cat = AnalyticsCatalogHelper.labelForOrderItem(
+        item,
+        categories: catalogCategories,
+        catalogLines: catalogItems,
+        english: l10n.isEn,
+      );
+      map[cat] = (map[cat] ?? 0) + item.priceKopecks;
+    }
+  }
+  for (final r in maintCar) {
+    if (r.date.year != year || r.date.month != month) continue;
+    final p = r.priceKopecks;
+    if (p == null || p <= 0) continue;
+    final type = MaintenanceType.fromTypeKey(r.typeKey);
+    if (type == null) continue;
+    final label = type.localizedTitle(l10n);
+    map[label] = (map[label] ?? 0) + p;
+  }
+  for (final m in manualCar) {
+    if (m.date.year != year || m.date.month != month) continue;
+    final label = m.groupLabelAppL10n(l10n);
+    map[label] = (map[label] ?? 0) + m.priceKopecks;
+  }
+  return map;
+}
 
 class AnalyticsScreen extends ConsumerStatefulWidget {
   const AnalyticsScreen({super.key});
@@ -47,10 +96,151 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
     await AnalyticsDashboardStorage.save(prefs, _blocks);
   }
 
+  String _chartDisplayLabel(AppL10n l10n, AnalyticsChartDisplay d) {
+    return switch (d) {
+      AnalyticsChartDisplay.bar => l10n.analyticsChartBars,
+      AnalyticsChartDisplay.pie => l10n.analyticsChartPie,
+      AnalyticsChartDisplay.table => l10n.analyticsChartTable,
+      AnalyticsChartDisplay.spendingList => l10n.analyticsChartSpendingList,
+      AnalyticsChartDisplay.fuelConsumptionLine => l10n.analyticsChartFuelLine,
+      AnalyticsChartDisplay.tripCostScales => l10n.analyticsChartTripCost,
+      AnalyticsChartDisplay.monthCompareCategories => l10n.analyticsChartMonthCompare,
+    };
+  }
+
+  Future<void> _openAnalyticsBlockEditor(
+    BuildContext context,
+    AppL10n l10n,
+    Car car, {
+    int? existingIndex,
+  }) async {
+    final isNew = existingIndex == null;
+    final primary = _blocks.first;
+    final initial = isNew
+        ? AnalyticsBlockConfig(
+            id: 'b_${DateTime.now().millisecondsSinceEpoch}',
+            periodMonths: primary.periodMonths,
+            groupBy: primary.groupBy,
+            display: AnalyticsChartDisplay.pie,
+            metric: primary.metric,
+            orgKindFilterCode: primary.orgKindFilterCode,
+            showLifetimeFuelAverageLine: primary.showLifetimeFuelAverageLine,
+          )
+        : _blocks[existingIndex].duplicate();
+
+    final orders = ref.read(ordersProvider).valueOrNull ?? [];
+    final maintAll = ref.read(maintenanceRemindersProvider).records;
+    final manualAll = ref.read(carManualExpensesProvider);
+    final catalogData = ref.read(catalogServicesProvider(null));
+    final catCategories = catalogData.valueOrNull?.categories ?? const <CatalogCategory>[];
+    final catItems = catalogData.valueOrNull?.items ?? const <CatalogServiceItem>[];
+    final catalogLoading = catalogData.isLoading;
+
+    final kindCodes = <String>{};
+    for (final o in orders.where((o) => o.carId == car.id)) {
+      final k = OrgBusinessKind.normalizeCode(o.organizationBusinessKind);
+      if (k != null && k.isNotEmpty) kindCodes.add(k);
+    }
+    final kindList = kindCodes.toList()..sort();
+
+    final result = await Navigator.of(context).push<AnalyticsBlockConfig>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (ctx) => AnalyticsBlockEditorScreen(
+          initial: initial,
+          filtersCard: (draft, onUpdate) => _FiltersCard(
+            l10n: l10n,
+            block: draft,
+            catalogLoading: catalogLoading,
+            kindCodes: kindList,
+            chartDisplayLabel: (d) => _chartDisplayLabel(l10n, d),
+            onUpdate: onUpdate,
+          ),
+          preview: (draft) {
+            final financialB = _filteredOrders(orders, car.id, draft).where(_countsFinancial).toList();
+            final maintB = _maintenanceRecordsInPeriod(maintAll, car.id, draft.periodMonths);
+            final manualB = _carManualRecordsInPeriod(manualAll, car.id, draft.periodMonths);
+            final groupsB = _buildGroups(
+              l10n,
+              financialB,
+              groupBy: draft.groupBy,
+              catalogCategories: catCategories,
+              catalogItems: catItems,
+              maintenanceRecordsInPeriod: maintB,
+              manualExpensesInPeriod: manualB,
+            );
+            return _buildMainVisual(
+              ctx,
+              l10n,
+              car,
+              orders,
+              groupsB,
+              draft,
+              catCategories,
+              catItems,
+              maintAll,
+              manualAll,
+            );
+          },
+        ),
+      ),
+    );
+
+    if (!mounted || result == null) return;
+    setState(() {
+      if (isNew) {
+        _blocks.add(result);
+      } else {
+        _blocks[existingIndex] = result;
+      }
+    });
+    await _savePrefs();
+  }
+
   DateTime? _rangeStartMonths(int periodMonths) {
     if (periodMonths <= 0) return null;
     final now = DateTime.now();
     return DateTime(now.year, now.month - periodMonths, now.day);
+  }
+
+  /// Средний расход для подписи под диаграммой «классы трат».
+  double? _fuelAvgForExpenseClassFooter(
+    AnalyticsBlockConfig block,
+    Car car,
+    List<CarManualExpenseRecord> manualAll,
+  ) {
+    if (block.groupBy != AnalyticsGroupBy.expenseClass || block.metric != AnalyticsValueMetric.totalSpend) {
+      return null;
+    }
+    return computeCarFuelRefuelStats(
+      manualAll,
+      car.id,
+      fromInclusive: _rangeStartMonths(block.periodMonths),
+    )?.meanLPer100FromIntervals;
+  }
+
+  List<MaintenanceRecord> _maintenanceRecordsInPeriod(
+    List<MaintenanceRecord> all,
+    String carId,
+    int periodMonths,
+  ) {
+    final rangeStart = _rangeStartMonths(periodMonths);
+    return all
+        .where((r) => r.carId == carId)
+        .where((r) => rangeStart == null || !r.date.isBefore(rangeStart))
+        .toList();
+  }
+
+  List<CarManualExpenseRecord> _carManualRecordsInPeriod(
+    List<CarManualExpenseRecord> all,
+    String carId,
+    int periodMonths,
+  ) {
+    final rangeStart = _rangeStartMonths(periodMonths);
+    return all
+        .where((r) => r.carId == carId)
+        .where((r) => rangeStart == null || !r.date.isBefore(rangeStart))
+        .toList();
   }
 
   List<Order> _filteredOrders(List<Order> orders, String carId, AnalyticsBlockConfig block) {
@@ -120,24 +310,37 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
     final primary = _blocks.first;
     final carOrders = _filteredOrders(orders, car.id, primary);
     final financial = carOrders.where(_countsFinancial).toList();
-
-    final kindCodes = <String>{};
-    for (final o in orders.where((o) => o.carId == car.id)) {
-      final k = OrgBusinessKind.normalizeCode(o.organizationBusinessKind);
-      if (k != null && k.isNotEmpty) kindCodes.add(k);
+    final maintAll = ref.watch(maintenanceRemindersProvider).records;
+    final maintInPrimary = _maintenanceRecordsInPeriod(maintAll, car.id, primary.periodMonths);
+    var maintKopecksInPeriod = 0;
+    var maintPaidCount = 0;
+    for (final r in maintInPrimary) {
+      final p = r.priceKopecks;
+      if (p != null && p > 0) {
+        maintKopecksInPeriod += p;
+        maintPaidCount++;
+      }
     }
-    final kindList = kindCodes.toList()..sort();
 
-    final totalKopecks = financial.fold<int>(0, (s, o) => s + _orderAmount(o));
+    final manualAll = ref.watch(carManualExpensesProvider);
+    final manualInPrimary = _carManualRecordsInPeriod(manualAll, car.id, primary.periodMonths);
+    var manualKopecksInPeriod = 0;
+    for (final m in manualInPrimary) {
+      if (m.priceKopecks > 0) manualKopecksInPeriod += m.priceKopecks;
+    }
+    final manualPaidCount = manualInPrimary.length;
+
+    final totalKopecks = financial.fold<int>(0, (s, o) => s + _orderAmount(o)) + maintKopecksInPeriod + manualKopecksInPeriod;
     final orderCountFin = financial.length;
-    final avgCheck = orderCountFin > 0 ? totalKopecks ~/ orderCountFin : 0;
+    final totalForAvg = orderCountFin + maintPaidCount + manualPaidCount;
+    final avgCheck = totalForAvg > 0 ? totalKopecks ~/ totalForAvg : 0;
+    final finMonthKeys = financial.map((o) => '${o.dateTime.year}-${o.dateTime.month}').toSet();
+    final manMonthKeys = manualInPrimary
+        .map((m) => '${m.date.year}-${m.date.month}')
+        .toSet();
+    final allDistinctMonths = {...finMonthKeys, ...manMonthKeys};
     final monthsForAvg = primary.periodMonths <= 0
-        ? (financial.isEmpty
-            ? 1
-            : math.max(
-                1,
-                financial.map((o) => '${o.dateTime.year}-${o.dateTime.month}').toSet().length,
-              ))
+        ? (allDistinctMonths.isEmpty ? 1 : math.max(1, allDistinctMonths.length))
         : math.max(1, primary.periodMonths);
     final avgMonthly = totalKopecks ~/ monthsForAvg;
 
@@ -150,6 +353,8 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
       groupBy: primary.groupBy,
       catalogCategories: catCategories,
       catalogItems: catItems,
+      maintenanceRecordsInPeriod: maintInPrimary,
+      manualExpensesInPeriod: manualInPrimary,
     );
     final primaryExportValues = primaryGroups.map((g) => _bucketValue(g, primary)).toList();
 
@@ -222,6 +427,20 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
             periodLabel: primary.periodMonths <= 0 ? l10n.analyticsKpiPeriodAll() : l10n.analyticsKpiPeriodMonths(primary.periodMonths),
           ),
           const SizedBox(height: 16),
+          _AnalyticsManualBlock(
+            l10n: l10n,
+            records: manualInPrimary,
+            fuelStats: computeCarFuelRefuelStats(
+              manualAll,
+              car.id,
+              fromInclusive: _rangeStartMonths(primary.periodMonths),
+            ),
+            onAdd: () async {
+              await showAddCarManualExpenseSheet(context, ref, car: car);
+            },
+            onDelete: (id) => ref.read(carManualExpensesProvider.notifier).remove(id),
+          ),
+          const SizedBox(height: 16),
           ReorderableListView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
@@ -237,15 +456,36 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
             },
             itemBuilder: (context, blockIndex) {
               final block = _blocks[blockIndex];
+              final maintAllRows = ref.watch(maintenanceRemindersProvider).records;
+              final manualAllRows = ref.watch(carManualExpensesProvider);
               final financialB = _filteredOrders(orders, car.id, block).where(_countsFinancial).toList();
+              final maintB = _maintenanceRecordsInPeriod(
+                maintAllRows,
+                car.id,
+                block.periodMonths,
+              );
+              final manualB = _carManualRecordsInPeriod(
+                manualAllRows,
+                car.id,
+                block.periodMonths,
+              );
               final groupsB = _buildGroups(
                 l10n,
                 financialB,
                 groupBy: block.groupBy,
                 catalogCategories: catCategories,
                 catalogItems: catItems,
+                maintenanceRecordsInPeriod: maintB,
+                manualExpensesInPeriod: manualB,
               );
               final exportValsB = groupsB.map((g) => _bucketValue(g, block)).toList();
+              final standaloneChart = switch (block.display) {
+                AnalyticsChartDisplay.fuelConsumptionLine => true,
+                AnalyticsChartDisplay.tripCostScales => true,
+                AnalyticsChartDisplay.monthCompareCategories => true,
+                _ => false,
+              };
+              final showEmptyFilterHint = !standaloneChart && groupsB.isEmpty;
               return Material(
                 key: ValueKey<String>(block.id),
                 color: Colors.transparent,
@@ -269,7 +509,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
                               _blocks.length > 1
                                   ? '${l10n.analyticsDataSection} · ${blockIndex + 1}'
                                   : l10n.analyticsDataSection,
-                              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: context.palette.textPrimary),
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: context.palette.textPrimary),
                             ),
                           ),
                           if (groupsB.isNotEmpty)
@@ -285,6 +525,11 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
                                   ),
                               icon: Icon(Icons.ios_share_rounded, size: 22, color: context.palette.textPrimary),
                             ),
+                          IconButton(
+                            tooltip: l10n.analyticsEditChartBlock,
+                            onPressed: () => _openAnalyticsBlockEditor(context, l10n, car, existingIndex: blockIndex),
+                            icon: Icon(Icons.tune_rounded, size: 22, color: context.palette.textPrimary),
+                          ),
                           if (_blocks.length > 1)
                             IconButton(
                               tooltip: l10n.analyticsRemoveChartBlock,
@@ -296,19 +541,13 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
                             ),
                         ],
                       ),
-                      const SizedBox(height: 8),
-                      _FiltersCard(
-                        l10n: l10n,
-                        block: block,
-                        catalogLoading: catalogData.isLoading,
-                        kindCodes: kindList,
-                        onUpdate: (updated) {
-                          setState(() => _blocks[blockIndex] = updated);
-                          _savePrefs();
-                        },
+                      const SizedBox(height: 4),
+                      Text(
+                        l10n.analyticsTapChartToConfigure,
+                        style: TextStyle(fontSize: 11, color: context.palette.textTertiary),
                       ),
-                      const SizedBox(height: 12),
-                      if (groupsB.isEmpty)
+                      const SizedBox(height: 10),
+                      if (showEmptyFilterHint)
                         Padding(
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           child: Text(
@@ -318,7 +557,28 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
                           ),
                         )
                       else
-                        _buildMainVisual(context, l10n, groupsB, block),
+                        Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(18),
+                            onTap: () => _openAnalyticsBlockEditor(context, l10n, car, existingIndex: blockIndex),
+                            child: Padding(
+                              padding: const EdgeInsets.all(4),
+                              child: _buildMainVisual(
+                                context,
+                                l10n,
+                                car,
+                                orders,
+                                groupsB,
+                                block,
+                                catCategories,
+                                catItems,
+                                maintAllRows,
+                                manualAllRows,
+                              ),
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -328,21 +588,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
-              onPressed: () {
-                setState(() {
-                  _blocks.add(
-                    AnalyticsBlockConfig(
-                      id: 'b_${DateTime.now().millisecondsSinceEpoch}',
-                      periodMonths: primary.periodMonths,
-                      groupBy: primary.groupBy,
-                      display: AnalyticsChartDisplay.pie,
-                      metric: primary.metric,
-                      orgKindFilterCode: primary.orgKindFilterCode,
-                    ),
-                  );
-                });
-                _savePrefs();
-              },
+              onPressed: () => _openAnalyticsBlockEditor(context, l10n, car),
               icon: Icon(Icons.add_chart_rounded, color: context.palette.primary),
               label: Text(l10n.analyticsAddChartBlock, style: TextStyle(color: context.palette.primary)),
             ),
@@ -365,20 +611,34 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
     required AnalyticsGroupBy groupBy,
     List<CatalogCategory> catalogCategories = const [],
     List<CatalogServiceItem> catalogItems = const [],
+    List<MaintenanceRecord> maintenanceRecordsInPeriod = const [],
+    List<CarManualExpenseRecord> manualExpensesInPeriod = const [],
   }) {
     switch (groupBy) {
       case AnalyticsGroupBy.month:
-        final map = <String, List<Order>>{};
+        final orderMap = <String, List<Order>>{};
         for (final o in financial) {
           final k = '${o.dateTime.year}-${o.dateTime.month.toString().padLeft(2, '0')}';
-          map.putIfAbsent(k, () => []).add(o);
+          orderMap.putIfAbsent(k, () => []).add(o);
         }
-        final keys = map.keys.toList()..sort();
-        return keys
+        final monthManual = <String, ({int k, int n})>{};
+        for (final m in manualExpensesInPeriod) {
+          final k = '${m.date.year}-${m.date.month.toString().padLeft(2, '0')}';
+          final cur = monthManual[k];
+          if (cur == null) {
+            monthManual[k] = (k: m.priceKopecks, n: 1);
+          } else {
+            monthManual[k] = (k: cur.k + m.priceKopecks, n: cur.n + 1);
+          }
+        }
+        final allKeys = {...orderMap.keys, ...monthManual.keys}.toList()..sort();
+        return allKeys
             .map((k) => _GroupBucket(
                   label: _monthLabel(k, l10n),
                   sortKey: k,
-                  orders: map[k]!,
+                  orders: orderMap[k] ?? const [],
+                  additiveKopecks: monthManual[k]?.k ?? 0,
+                  additiveCount: monthManual[k]?.n ?? 0,
                 ))
             .toList();
       case AnalyticsGroupBy.orgKind:
@@ -393,14 +653,32 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
                   : OrgBusinessKind.labelForOrderSnapshot(code, english: l10n.isEn));
           map.putIfAbsent(label, () => []).add(o);
         }
+        var manualK = 0;
+        var manualN = 0;
+        for (final m in manualExpensesInPeriod) {
+          manualK += m.priceKopecks;
+          manualN++;
+        }
         final entries = map.entries.toList()..sort((a, b) => _groupValue(b.value).compareTo(_groupValue(a.value)));
-        return entries
+        final out = entries
             .map((e) => _GroupBucket(
                   label: e.key,
                   sortKey: e.key,
                   orders: e.value,
                 ))
             .toList();
+        if (manualK > 0) {
+          out.add(
+            _GroupBucket(
+              label: l10n.analyticsManualOrgKindGroup,
+              sortKey: '\u0000manual',
+              orders: const [],
+              additiveKopecks: manualK,
+              additiveCount: manualN,
+            ),
+          );
+        }
+        return out;
       case AnalyticsGroupBy.serviceCategory:
         final map = <String, int>{};
         final counts = <String, int>{};
@@ -416,6 +694,20 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
             counts[cat] = (counts[cat] ?? 0) + 1;
           }
         }
+        for (final r in maintenanceRecordsInPeriod) {
+          final p = r.priceKopecks;
+          if (p == null || p <= 0) continue;
+          final type = MaintenanceType.fromTypeKey(r.typeKey);
+          if (type == null) continue;
+          final label = type.localizedTitle(l10n);
+          map[label] = (map[label] ?? 0) + p;
+          counts[label] = (counts[label] ?? 0) + 1;
+        }
+        for (final m in manualExpensesInPeriod) {
+          final label = m.groupLabelAppL10n(l10n);
+          map[label] = (map[label] ?? 0) + m.priceKopecks;
+          counts[label] = (counts[label] ?? 0) + 1;
+        }
         final entries = map.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
         return entries
             .map((e) => _GroupBucket(
@@ -425,6 +717,47 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
                   extraKopecks: e.value,
                   lineCount: counts[e.key] ?? 0,
                 ))
+            .toList();
+      case AnalyticsGroupBy.expenseClass:
+        final map = <String, int>{};
+        final counts = <String, int>{};
+        for (final id in CarExpenseGroupIds.ordered) {
+          map[id] = 0;
+          counts[id] = 0;
+        }
+        for (final o in financial) {
+          for (final item in o.itemsForDisplay.where((i) => i.isApproved && !i.isRejected)) {
+            final g = CarExpenseClassifier.groupForOrderItem(
+              item,
+              categories: catalogCategories,
+              catalogItems: catalogItems,
+            );
+            map[g] = (map[g] ?? 0) + item.priceKopecks;
+            counts[g] = (counts[g] ?? 0) + 1;
+          }
+        }
+        for (final r in maintenanceRecordsInPeriod) {
+          final p = r.priceKopecks;
+          if (p == null || p <= 0) continue;
+          final g = CarExpenseGroupIds.maintenance;
+          map[g] = (map[g] ?? 0) + p;
+          counts[g] = (counts[g] ?? 0) + 1;
+        }
+        for (final m in manualExpensesInPeriod) {
+          final g = CarExpenseClassifier.groupForManual(m);
+          map[g] = (map[g] ?? 0) + m.priceKopecks;
+          counts[g] = (counts[g] ?? 0) + 1;
+        }
+        return CarExpenseGroupIds.ordered
+            .map(
+              (id) => _GroupBucket(
+                label: l10n.carExpenseClassGroupTitle(id),
+                sortKey: id,
+                orders: const [],
+                extraKopecks: map[id] ?? 0,
+                lineCount: counts[id] ?? 0,
+              ),
+            )
             .toList();
     }
   }
@@ -451,22 +784,109 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
         AnalyticsValueMetric.avgMonthlySpend => b.extraKopecks! ~/ denom,
       };
     }
+    if (block.groupBy == AnalyticsGroupBy.expenseClass && b.extraKopecks != null) {
+      final denom = block.periodMonths <= 0 ? 1 : math.max(1, block.periodMonths);
+      return switch (block.metric) {
+        AnalyticsValueMetric.totalSpend => b.extraKopecks!,
+        AnalyticsValueMetric.orderCount => b.lineCount ?? 0,
+        AnalyticsValueMetric.avgCheck =>
+          (b.lineCount ?? 0) > 0 ? b.extraKopecks! ~/ (b.lineCount ?? 1) : 0,
+        AnalyticsValueMetric.avgMonthlySpend => b.extraKopecks! ~/ denom,
+      };
+    }
     final list = b.orders;
-    if (list.isEmpty) return 0;
-    final sum = list.fold<int>(0, (s, o) => s + _orderAmount(o));
+    final orderSum = list.fold<int>(0, (s, o) => s + _orderAmount(o));
+    final sum = orderSum + b.additiveKopecks;
+    if (sum <= 0 && list.isEmpty) return 0;
+    final n = list.length + b.additiveCount;
     final denom = block.periodMonths <= 0 ? 1 : math.max(1, block.periodMonths);
     return switch (block.metric) {
       AnalyticsValueMetric.totalSpend => sum,
-      AnalyticsValueMetric.orderCount => list.length,
-      AnalyticsValueMetric.avgCheck => sum ~/ list.length,
+      AnalyticsValueMetric.orderCount => n,
+      AnalyticsValueMetric.avgCheck => n > 0 ? sum ~/ n : 0,
       AnalyticsValueMetric.avgMonthlySpend => sum ~/ denom,
     };
   }
 
-  Widget _buildMainVisual(BuildContext context, AppL10n l10n, List<_GroupBucket> groups, AnalyticsBlockConfig block) {
+  Widget _buildMainVisual(
+    BuildContext context,
+    AppL10n l10n,
+    Car car,
+    List<Order> allOrders,
+    List<_GroupBucket> groups,
+    AnalyticsBlockConfig block,
+    List<CatalogCategory> catalogCategories,
+    List<CatalogServiceItem> catalogItems,
+    List<MaintenanceRecord> maintAll,
+    List<CarManualExpenseRecord> manualAll,
+  ) {
+    final palette = context.palette;
+
+    switch (block.display) {
+      case AnalyticsChartDisplay.fuelConsumptionLine:
+        final statsPeriod = computeCarFuelRefuelStats(
+          manualAll,
+          car.id,
+          fromInclusive: _rangeStartMonths(block.periodMonths),
+        );
+        final statsAll = computeCarFuelRefuelStats(manualAll, car.id, fromInclusive: null);
+        return _FuelConsumptionLineCard(
+          l10n: l10n,
+          palette: palette,
+          stats: statsPeriod,
+          lifetimeMeanL100: block.showLifetimeFuelAverageLine ? statsAll?.meanLPer100FromIntervals : null,
+          periodMeanL100: statsPeriod?.meanLPer100FromIntervals,
+        );
+      case AnalyticsChartDisplay.tripCostScales:
+        final stats = computeCarFuelRefuelStats(
+          manualAll,
+          car.id,
+          fromInclusive: _rangeStartMonths(block.periodMonths),
+        );
+        return _TripCostScalesCard(l10n: l10n, palette: palette, stats: stats);
+      case AnalyticsChartDisplay.monthCompareCategories:
+        final financial = allOrders.where((o) => o.carId == car.id).where(_countsFinancial).toList();
+        final maintCar = maintAll.where((r) => r.carId == car.id).toList();
+        final manualCar = manualAll.where((r) => r.carId == car.id).toList();
+        final now = DateTime.now();
+        final cur = _categoryTotalsForCalendarMonth(
+          l10n,
+          financial,
+          maintCar,
+          manualCar,
+          now.year,
+          now.month,
+          catalogCategories,
+          catalogItems,
+        );
+        final prevMonth = DateTime(now.year, now.month - 1);
+        final prev = _categoryTotalsForCalendarMonth(
+          l10n,
+          financial,
+          maintCar,
+          manualCar,
+          prevMonth.year,
+          prevMonth.month,
+          catalogCategories,
+          catalogItems,
+        );
+        return _MonthCompareCategoriesCard(
+          l10n: l10n,
+          palette: palette,
+          thisMonthLabel: DateFormat('MMMM yyyy', l10n.intlLocale).format(now),
+          prevMonthLabel: DateFormat('MMMM yyyy', l10n.intlLocale).format(prevMonth),
+          thisMonthTotals: cur,
+          prevMonthTotals: prev,
+        );
+      case AnalyticsChartDisplay.bar:
+      case AnalyticsChartDisplay.pie:
+      case AnalyticsChartDisplay.table:
+      case AnalyticsChartDisplay.spendingList:
+        break;
+    }
+
     final values = groups.map((g) => _bucketValue(g, block)).toList();
     final maxV = values.isEmpty ? 0 : values.reduce(math.max);
-    final palette = context.palette;
     final colors = [
       palette.primary,
       palette.info,
@@ -478,15 +898,38 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
 
     switch (block.display) {
       case AnalyticsChartDisplay.bar:
-        return _BarHistogram(
-          labels: groups.map((g) => g.label).toList(),
-          values: values,
-          maxValue: maxV > 0 ? maxV : 1,
-          valueLabel: _metricTitle(l10n, block),
-          colors: colors,
-          palette: palette,
+        final fuelAvgFoot = _fuelAvgForExpenseClassFooter(block, car, manualAll);
+        final barCore = block.groupBy == AnalyticsGroupBy.expenseClass
+            ? _ExpenseClassHorizontalBars(
+                labels: groups.map((g) => g.label).toList(),
+                values: values,
+                maxValue: maxV > 0 ? maxV : 1,
+                valueLabel: _metricTitle(l10n, block),
+                colors: colors,
+                palette: palette,
+              )
+            : _BarHistogram(
+                labels: groups.map((g) => g.label).toList(),
+                values: values,
+                maxValue: maxV > 0 ? maxV : 1,
+                valueLabel: _metricTitle(l10n, block),
+                colors: colors,
+                palette: palette,
+              );
+        if (fuelAvgFoot == null) return barCore;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            barCore,
+            const SizedBox(height: 8),
+            Text(
+              l10n.analyticsFuelIntervalAvgLegend(fuelAvgFoot),
+              style: TextStyle(fontSize: 12, color: palette.textSecondary, height: 1.35),
+            ),
+          ],
         );
       case AnalyticsChartDisplay.pie:
+        final fuelAvgFoot = _fuelAvgForExpenseClassFooter(block, car, manualAll);
         final slices = <_PieSlice>[];
         for (var i = 0; i < groups.length; i++) {
           final v = values[i];
@@ -496,9 +939,22 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
         if (slices.isEmpty) {
           return Text(l10n.analyticsPieNoPositive, style: TextStyle(color: palette.textSecondary));
         }
-        return _PieChartCard(slices: slices, palette: palette, holeColor: palette.background);
+        final pieCore = _PieChartCard(slices: slices, palette: palette, holeColor: palette.background);
+        if (fuelAvgFoot == null) return pieCore;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            pieCore,
+            const SizedBox(height: 8),
+            Text(
+              l10n.analyticsFuelIntervalAvgLegend(fuelAvgFoot),
+              style: TextStyle(fontSize: 12, color: palette.textSecondary, height: 1.35),
+            ),
+          ],
+        );
       case AnalyticsChartDisplay.table:
-        return _AnalyticsDataTable(
+        final fuelAvgFootT = _fuelAvgForExpenseClassFooter(block, car, manualAll);
+        final tableCore = _AnalyticsDataTable(
           groups: groups,
           values: values,
           metricTitle: _metricTitle(l10n, block),
@@ -506,6 +962,43 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
           valueIsMoney: block.metric != AnalyticsValueMetric.orderCount,
           palette: palette,
         );
+        if (fuelAvgFootT == null) return tableCore;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            tableCore,
+            const SizedBox(height: 8),
+            Text(
+              l10n.analyticsFuelIntervalAvgLegend(fuelAvgFootT),
+              style: TextStyle(fontSize: 12, color: palette.textSecondary, height: 1.35),
+            ),
+          ],
+        );
+      case AnalyticsChartDisplay.spendingList:
+        final fuelAvgFootS = _fuelAvgForExpenseClassFooter(block, car, manualAll);
+        final listCore = _SpendingListCard(
+          groups: groups,
+          values: values,
+          metricTitle: _metricTitle(l10n, block),
+          valueIsMoney: block.metric != AnalyticsValueMetric.orderCount,
+          palette: palette,
+        );
+        if (fuelAvgFootS == null) return listCore;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            listCore,
+            const SizedBox(height: 8),
+            Text(
+              l10n.analyticsFuelIntervalAvgLegend(fuelAvgFootS),
+              style: TextStyle(fontSize: 12, color: palette.textSecondary, height: 1.35),
+            ),
+          ],
+        );
+      case AnalyticsChartDisplay.fuelConsumptionLine:
+      case AnalyticsChartDisplay.tripCostScales:
+      case AnalyticsChartDisplay.monthCompareCategories:
+        return const SizedBox.shrink();
     }
   }
 
@@ -528,6 +1021,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
       AnalyticsGroupBy.month => l10n.analyticsGroupByMonth,
       AnalyticsGroupBy.orgKind => l10n.analyticsGroupByOrgKind,
       AnalyticsGroupBy.serviceCategory => l10n.analyticsGroupByServiceCategoryHint,
+      AnalyticsGroupBy.expenseClass => l10n.analyticsGroupByExpenseClass,
     };
   }
 
@@ -586,6 +1080,8 @@ class _GroupBucket {
     required this.orders,
     this.extraKopecks,
     this.lineCount,
+    this.additiveKopecks = 0,
+    this.additiveCount = 0,
   });
 
   final String label;
@@ -594,6 +1090,9 @@ class _GroupBucket {
   final int? extraKopecks;
   /// Для группировки по категории: число позиций в каталоге.
   final int? lineCount;
+  /// Ручные расходы (заправки и прочее) в bucket: сумма коп. и число операций.
+  final int additiveKopecks;
+  final int additiveCount;
 }
 
 class _FiltersCard extends StatelessWidget {
@@ -602,6 +1101,7 @@ class _FiltersCard extends StatelessWidget {
     required this.block,
     this.catalogLoading = false,
     required this.kindCodes,
+    required this.chartDisplayLabel,
     required this.onUpdate,
   });
 
@@ -609,6 +1109,7 @@ class _FiltersCard extends StatelessWidget {
   final AnalyticsBlockConfig block;
   final bool catalogLoading;
   final List<String> kindCodes;
+  final String Function(AnalyticsChartDisplay value) chartDisplayLabel;
   final ValueChanged<AnalyticsBlockConfig> onUpdate;
 
   @override
@@ -702,6 +1203,10 @@ class _FiltersCard extends StatelessWidget {
                 value: AnalyticsGroupBy.serviceCategory,
                 child: Text(l10n.analyticsGroupByServiceCategory, maxLines: 2, overflow: TextOverflow.ellipsis),
               ),
+              DropdownMenuItem(
+                value: AnalyticsGroupBy.expenseClass,
+                child: Text(l10n.analyticsGroupByExpenseClass, maxLines: 2, overflow: TextOverflow.ellipsis),
+              ),
             ],
             onChanged: (v) {
               if (v != null) onUpdate(block.copyWith(groupBy: v));
@@ -712,6 +1217,13 @@ class _FiltersCard extends StatelessWidget {
             Text(
               l10n.analyticsCatalogLoading,
               style: TextStyle(fontSize: 12, color: p.textTertiary),
+            ),
+          ],
+          if (block.groupBy == AnalyticsGroupBy.expenseClass) ...[
+            const SizedBox(height: 8),
+            Text(
+              l10n.analyticsExpenseClassHistogramHint,
+              style: TextStyle(fontSize: 12, color: p.textTertiary, height: 1.35),
             ),
           ],
           const SizedBox(height: 14),
@@ -739,37 +1251,54 @@ class _FiltersCard extends StatelessWidget {
           const SizedBox(height: 14),
           Text(l10n.analyticsFormatLabel, style: TextStyle(fontSize: 12, color: p.textTertiary)),
           const SizedBox(height: 6),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final narrow = constraints.maxWidth < 340;
-              final segments = <ButtonSegment<AnalyticsChartDisplay>>[
-                ButtonSegment<AnalyticsChartDisplay>(
-                  value: AnalyticsChartDisplay.bar,
-                  tooltip: l10n.analyticsChartBars,
-                  label: Text(l10n.analyticsChartBarsShort),
-                  icon: Icon(Icons.bar_chart_rounded, size: narrow ? 20 : 18),
+          DropdownButtonFormField<AnalyticsChartDisplay>(
+            value: block.display,
+            isExpanded: true,
+            decoration: InputDecoration(
+              filled: true,
+              fillColor: p.background,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: p.border)),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            ),
+            items: [
+              for (final v in AnalyticsChartDisplay.values)
+                DropdownMenuItem(
+                  value: v,
+                  child: Text(chartDisplayLabel(v), maxLines: 2, overflow: TextOverflow.ellipsis),
                 ),
-                ButtonSegment<AnalyticsChartDisplay>(
-                  value: AnalyticsChartDisplay.pie,
-                  tooltip: l10n.analyticsChartPie,
-                  label: Text(l10n.analyticsChartPieShort),
-                  icon: Icon(Icons.pie_chart_rounded, size: narrow ? 20 : 18),
-                ),
-                ButtonSegment<AnalyticsChartDisplay>(
-                  value: AnalyticsChartDisplay.table,
-                  tooltip: l10n.analyticsChartTable,
-                  label: Text(l10n.analyticsChartTableShort),
-                  icon: Icon(Icons.table_rows_rounded, size: narrow ? 20 : 18),
-                ),
-              ];
-              return SegmentedButton<AnalyticsChartDisplay>(
-                showSelectedIcon: false,
-                segments: segments,
-                selected: {block.display},
-                onSelectionChanged: (s) => onUpdate(block.copyWith(display: s.first)),
-              );
+            ],
+            onChanged: (v) {
+              if (v != null) onUpdate(block.copyWith(display: v));
             },
           ),
+          if (block.display == AnalyticsChartDisplay.fuelConsumptionLine ||
+              block.display == AnalyticsChartDisplay.tripCostScales) ...[
+            const SizedBox(height: 8),
+            Text(
+              l10n.analyticsAdvancedFuelChartsHint,
+              style: TextStyle(fontSize: 12, color: p.textTertiary, height: 1.35),
+            ),
+          ],
+          if (block.display == AnalyticsChartDisplay.fuelConsumptionLine) ...[
+            const SizedBox(height: 10),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(l10n.analyticsOptionFuelAvgLine, style: TextStyle(fontSize: 14, color: p.textPrimary)),
+              subtitle: Text(
+                l10n.analyticsOptionFuelAvgLineSubtitle,
+                style: TextStyle(fontSize: 12, color: p.textTertiary, height: 1.35),
+              ),
+              value: block.showLifetimeFuelAverageLine,
+              onChanged: (v) => onUpdate(block.copyWith(showLifetimeFuelAverageLine: v)),
+            ),
+          ],
+          if (block.display == AnalyticsChartDisplay.monthCompareCategories) ...[
+            const SizedBox(height: 8),
+            Text(
+              l10n.analyticsMonthCompareHint,
+              style: TextStyle(fontSize: 12, color: p.textTertiary, height: 1.35),
+            ),
+          ],
         ],
       ),
     );
@@ -876,6 +1405,590 @@ class _MiniKpi extends StatelessWidget {
           Text(title, style: TextStyle(fontSize: 11, color: p.textTertiary)),
           const SizedBox(height: 4),
           Text(value, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: p.textPrimary, fontFamily: 'monospace')),
+        ],
+      ),
+    );
+  }
+}
+
+class _SpendingListCard extends StatelessWidget {
+  const _SpendingListCard({
+    required this.groups,
+    required this.values,
+    required this.metricTitle,
+    required this.valueIsMoney,
+    required this.palette,
+  });
+
+  final List<_GroupBucket> groups;
+  final List<int> values;
+  final String metricTitle;
+  final bool valueIsMoney;
+  final ClientPalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+      decoration: BoxDecoration(
+        color: palette.cardBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: palette.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(metricTitle, style: TextStyle(fontSize: 12, color: palette.textTertiary)),
+          const SizedBox(height: 8),
+          ...List.generate(groups.length, (i) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Text(
+                      groups[i].label,
+                      style: TextStyle(fontSize: 14, color: palette.textPrimary, height: 1.25),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    valueIsMoney ? Formatters.money(values[i]) : '${values[i]}',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: palette.textPrimary, fontFamily: 'monospace'),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+}
+
+class _ExpenseClassHorizontalBars extends StatelessWidget {
+  const _ExpenseClassHorizontalBars({
+    required this.labels,
+    required this.values,
+    required this.maxValue,
+    required this.valueLabel,
+    required this.colors,
+    required this.palette,
+  });
+
+  final List<String> labels;
+  final List<int> values;
+  final int maxValue;
+  final String valueLabel;
+  final List<Color> colors;
+  final ClientPalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    final maxV = maxValue <= 0 ? 1 : maxValue;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: palette.cardBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: palette.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(valueLabel, style: TextStyle(fontSize: 12, color: palette.textTertiary)),
+          const SizedBox(height: 14),
+          ...List.generate(labels.length, (i) {
+            final v = values[i];
+            final w = (v / maxV).clamp(0.0, 1.0);
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          labels[i],
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: palette.textPrimary),
+                          maxLines: 2,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        Formatters.money(v),
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          fontFamily: 'monospace',
+                          color: palette.textPrimary,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  LayoutBuilder(
+                    builder: (ctx, c) {
+                      final totalW = c.maxWidth;
+                      return Stack(
+                        children: [
+                          Container(
+                            height: 14,
+                            width: totalW,
+                            decoration: BoxDecoration(
+                              color: palette.background,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                          ),
+                          AnimatedContainer(
+                            duration: Duration(milliseconds: 260 + i * 30),
+                            height: 14,
+                            width: math.max(4.0, totalW * w),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(6),
+                              gradient: LinearGradient(
+                                colors: [
+                                  colors[i % colors.length],
+                                  colors[i % colors.length].withValues(alpha: 0.55),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+}
+
+class _FuelConsumptionLineCard extends StatelessWidget {
+  const _FuelConsumptionLineCard({
+    required this.l10n,
+    required this.palette,
+    required this.stats,
+    this.lifetimeMeanL100,
+    this.periodMeanL100,
+  });
+
+  final AppL10n l10n;
+  final ClientPalette palette;
+  final CarFuelRefuelStats? stats;
+  /// Среднее по всем интервалам (горизонтальная пунктирная линия).
+  final double? lifetimeMeanL100;
+  /// Среднее только по точкам на графике (выбранный период).
+  final double? periodMeanL100;
+
+  @override
+  Widget build(BuildContext context) {
+    final spots = <FlSpot>[];
+    final spotDates = <DateTime>[];
+    final spotIntervals = <({CarManualExpenseRecord a, CarManualExpenseRecord b, double? lPer100, int? kopecksPerKm})>[];
+    if (stats != null) {
+      var i = 0.0;
+      for (final iv in stats!.intervals) {
+        final y = iv.lPer100;
+        if (y == null) continue;
+        spots.add(FlSpot(i, y));
+        spotDates.add(iv.b.date);
+        spotIntervals.add(iv);
+        i += 1;
+      }
+    }
+    if (spots.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: palette.cardBg,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: palette.border),
+        ),
+        child: Text(l10n.analyticsFuelChartEmpty, style: TextStyle(color: palette.textSecondary)),
+      );
+    }
+    final ys = spots.map((s) => s.y).toList();
+    var yMin = ys.reduce(math.min);
+    var yMax = ys.reduce(math.max);
+    final pad = math.max(0.4, (yMax - yMin) * 0.12);
+    yMin = (yMin - pad).clamp(0.0, 500.0);
+    yMax = yMax + pad;
+    final life = lifetimeMeanL100;
+    if (life != null) {
+      yMax = math.max(yMax, life + pad * 0.5);
+      yMin = math.min(yMin, math.max(0.0, life - pad * 0.5));
+    }
+    final maxX = spots.map((s) => s.x).reduce(math.max);
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: palette.cardBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: palette.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            l10n.analyticsFuelChartTitle,
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: palette.textPrimary),
+          ),
+          if (periodMeanL100 != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                l10n.analyticsFuelIntervalAvgLegend(periodMeanL100!),
+                style: TextStyle(fontSize: 12, color: palette.textSecondary, height: 1.3),
+              ),
+            ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 220,
+            child: LineChart(
+              LineChartData(
+                minX: 0,
+                maxX: math.max(1, maxX),
+                minY: yMin,
+                maxY: yMax,
+                extraLinesData: ExtraLinesData(
+                  horizontalLines: [
+                    if (life != null)
+                      HorizontalLine(
+                        y: life,
+                        color: palette.warning.withValues(alpha: 0.9),
+                        strokeWidth: 2,
+                        dashArray: [7, 5],
+                        label: HorizontalLineLabel(
+                          show: true,
+                          alignment: Alignment.topRight,
+                          padding: const EdgeInsets.only(right: 6, bottom: 4),
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: palette.warning,
+                            fontWeight: FontWeight.w700,
+                          ),
+                          labelResolver: (line) => l10n.analyticsFuelLifetimeAvgLine(line.y),
+                        ),
+                      ),
+                  ],
+                ),
+                gridData: FlGridData(
+                  show: true,
+                  drawVerticalLine: false,
+                  horizontalInterval: math.max(0.5, ((yMax - yMin) / 4).clamp(0.5, 50.0)),
+                  getDrawingHorizontalLine: (v) =>
+                      FlLine(color: palette.border.withValues(alpha: 0.45), strokeWidth: 1),
+                ),
+                lineTouchData: LineTouchData(
+                  enabled: true,
+                  handleBuiltInTouches: true,
+                  touchTooltipData: LineTouchTooltipData(
+                    fitInsideHorizontally: true,
+                    fitInsideVertically: true,
+                    getTooltipItems: (touchedSpots) {
+                      return touchedSpots.map((s) {
+                        final idx = s.x.round().clamp(0, spotIntervals.length - 1);
+                        if (idx < 0 || idx >= spotIntervals.length) {
+                          return null;
+                        }
+                        final iv = spotIntervals[idx];
+                        final l100 = iv.lPer100;
+                        if (l100 == null) return null;
+                        final oa = iv.a.odometerKm;
+                        final ob = iv.b.odometerKm;
+                        final km = (oa != null && ob != null) ? (ob - oa) : null;
+                        final body = km != null
+                            ? '${l100.toStringAsFixed(1)} л/100 · $km км'
+                            : '${l100.toStringAsFixed(1)} л/100';
+                        return LineTooltipItem(
+                          body,
+                          TextStyle(
+                            color: palette.cardBg,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
+                          ),
+                        );
+                      }).toList();
+                    },
+                  ),
+                ),
+                titlesData: FlTitlesData(
+                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 36,
+                      getTitlesWidget: (v, m) => Text(
+                        v.toStringAsFixed(v == v.roundToDouble() ? 0 : 1),
+                        style: TextStyle(fontSize: 10, color: palette.textTertiary),
+                      ),
+                    ),
+                  ),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      interval: 1,
+                      getTitlesWidget: (v, m) {
+                        final idx = v.round();
+                        if (idx < 0 || idx >= spotDates.length) {
+                          return const SizedBox.shrink();
+                        }
+                        final dt = spotDates[idx];
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(
+                            DateFormat('d.MM', l10n.intlLocale).format(dt),
+                            style: TextStyle(fontSize: 9, color: palette.textTertiary),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                borderData: FlBorderData(show: false),
+                lineBarsData: [
+                  LineChartBarData(
+                    spots: spots,
+                    isCurved: false,
+                    color: palette.primary,
+                    barWidth: 2.5,
+                    dotData: FlDotData(
+                      show: true,
+                      getDotPainter: (s, p, b, i) => FlDotCirclePainter(
+                        radius: 4,
+                        color: palette.primary,
+                        strokeWidth: 1.5,
+                        strokeColor: palette.cardBg,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            l10n.analyticsFuelChartAxisHint,
+            style: TextStyle(fontSize: 11, color: palette.textTertiary, height: 1.3),
+          ),
+          if (life != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Row(
+                children: [
+                  Container(
+                    width: 18,
+                    height: 3,
+                    decoration: BoxDecoration(
+                      color: palette.warning.withValues(alpha: 0.9),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      l10n.analyticsFuelLifetimeAvgLine(life),
+                      style: TextStyle(fontSize: 11, color: palette.textSecondary, height: 1.3),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              l10n.analyticsFuelChartTouchHint,
+              style: TextStyle(fontSize: 11, color: palette.textTertiary, height: 1.3),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TripCostScalesCard extends StatelessWidget {
+  const _TripCostScalesCard({
+    required this.l10n,
+    required this.palette,
+    required this.stats,
+  });
+
+  final AppL10n l10n;
+  final ClientPalette palette;
+  final CarFuelRefuelStats? stats;
+
+  @override
+  Widget build(BuildContext context) {
+    final kpk = stats?.medianKopecksPerKm;
+    if (kpk == null || kpk <= 0) {
+      return Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: palette.cardBg,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: palette.border),
+        ),
+        child: Text(l10n.analyticsTripCostEmpty, style: TextStyle(color: palette.textSecondary)),
+      );
+    }
+    const scales = [1, 10, 100, 1000];
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: palette.cardBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: palette.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            l10n.analyticsTripCostTitle,
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: palette.textPrimary),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            l10n.analyticsTripCostSubtitle,
+            style: TextStyle(fontSize: 12, color: palette.textTertiary, height: 1.35),
+          ),
+          const SizedBox(height: 12),
+          ...scales.map((km) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      l10n.analyticsTripCostForKm(km),
+                      style: TextStyle(fontSize: 14, color: palette.textPrimary),
+                    ),
+                  ),
+                  Text(
+                    Formatters.money(kpk * km),
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, fontFamily: 'monospace', color: palette.textPrimary),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+}
+
+class _MonthCompareCategoriesCard extends StatelessWidget {
+  const _MonthCompareCategoriesCard({
+    required this.l10n,
+    required this.palette,
+    required this.thisMonthLabel,
+    required this.prevMonthLabel,
+    required this.thisMonthTotals,
+    required this.prevMonthTotals,
+  });
+
+  final AppL10n l10n;
+  final ClientPalette palette;
+  final String thisMonthLabel;
+  final String prevMonthLabel;
+  final Map<String, int> thisMonthTotals;
+  final Map<String, int> prevMonthTotals;
+
+  Widget _block(String title, Map<String, int> totals) {
+    final entries = totals.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: palette.background,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: palette.border.withValues(alpha: 0.6)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: palette.textPrimary),
+            ),
+            const SizedBox(height: 8),
+            if (entries.isEmpty)
+              Text(l10n.analyticsMonthCompareEmpty, style: TextStyle(fontSize: 12, color: palette.textTertiary))
+            else
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: [
+                      for (final e in entries)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: Text(e.key, style: TextStyle(fontSize: 12, color: palette.textPrimary, height: 1.25)),
+                              ),
+                              Text(
+                                Formatters.money(e.value),
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  fontFamily: 'monospace',
+                                  color: palette.textPrimary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 320,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: palette.cardBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: palette.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            l10n.analyticsMonthCompareTitle,
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: palette.textPrimary),
+          ),
+          const SizedBox(height: 10),
+          Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _block(prevMonthLabel, prevMonthTotals),
+                const SizedBox(width: 10),
+                _block(thisMonthLabel, thisMonthTotals),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -1132,6 +2245,200 @@ class _AnalyticsDataTable extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+double? _intervalL100ForRefuel(CarFuelRefuelStats? stats, String refuelId) {
+  if (stats == null) return null;
+  for (final iv in stats.intervals) {
+    if (iv.b.id == refuelId) return iv.lPer100;
+  }
+  return null;
+}
+
+class _AnalyticsManualBlock extends StatelessWidget {
+  const _AnalyticsManualBlock({
+    required this.l10n,
+    required this.records,
+    required this.fuelStats,
+    required this.onAdd,
+    required this.onDelete,
+  });
+
+  final AppL10n l10n;
+  final List<CarManualExpenseRecord> records;
+  final CarFuelRefuelStats? fuelStats;
+  final Future<void> Function() onAdd;
+  final void Function(String id) onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final sorted = [...records]..sort((a, b) => b.date.compareTo(a.date));
+    final l100s = fuelStats?.intervals.map((e) => e.lPer100).whereType<double>().toList() ?? const <double>[];
+    final meanL100 = l100s.isEmpty ? null : l100s.reduce((a, b) => a + b) / l100s.length;
+    final kpk = fuelStats?.medianKopecksPerKm;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: p.cardBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: p.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  l10n.analyticsManualSectionTitle,
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: p.textPrimary),
+                ),
+              ),
+              FilledButton.tonal(
+                onPressed: onAdd,
+                child: Text(l10n.analyticsManualAdd),
+              ),
+            ],
+          ),
+          if (meanL100 != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                l10n.analyticsManualFuelAvgL100(meanL100),
+                style: TextStyle(fontSize: 12, color: p.textSecondary, height: 1.3),
+              ),
+            ),
+          if (kpk != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                l10n.analyticsManualFuelKpk(kpk),
+                style: TextStyle(fontSize: 12, color: p.textSecondary, height: 1.3),
+              ),
+            ),
+          if (sorted.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text(l10n.analyticsManualEmpty, style: TextStyle(color: p.textTertiary, fontSize: 13)),
+            )
+          else
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (var i = 0; i < math.min(18, sorted.length); i++) ...[
+                  if (i > 0) Divider(height: 1, color: p.border),
+                  _ManualExpenseRow(
+                    l10n: l10n,
+                    r: sorted[i],
+                    intervalL100: sorted[i].isFuel ? _intervalL100ForRefuel(fuelStats, sorted[i].id) : null,
+                    onDelete: onDelete,
+                  ),
+                ],
+                if (sorted.length > 18)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      l10n.analyticsManualMoreCount(sorted.length - 18),
+                      style: TextStyle(fontSize: 12, color: p.textTertiary),
+                    ),
+                  ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ManualExpenseRow extends StatelessWidget {
+  const _ManualExpenseRow({
+    required this.l10n,
+    required this.r,
+    required this.onDelete,
+    this.intervalL100,
+  });
+
+  final AppL10n l10n;
+  final CarManualExpenseRecord r;
+  final void Function(String id) onDelete;
+  final double? intervalL100;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            r.isFuel ? Icons.local_gas_station_outlined : Icons.savings_outlined,
+            size: 20,
+            color: p.primary,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  r.groupLabelAppL10n(l10n),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: p.textPrimary),
+                ),
+                if (r.isFuel && (r.fuelType != null || r.liters != null || r.odometerKm != null))
+                  Text(
+                    _fuelSubtitle(l10n, r, intervalL100),
+                    style: TextStyle(fontSize: 12, color: p.textTertiary),
+                    maxLines: 2,
+                  )
+                else if (r.materialPriceKopecks != null &&
+                    r.laborPriceKopecks != null &&
+                    r.materialPriceKopecks! > 0 &&
+                    r.laborPriceKopecks! > 0)
+                  Text(
+                    '${Formatters.money(r.materialPriceKopecks!)} + ${Formatters.money(r.laborPriceKopecks!)}',
+                    style: TextStyle(fontSize: 12, color: p.textTertiary),
+                    maxLines: 1,
+                  )
+                else if (r.note != null && r.note!.isNotEmpty)
+                  Text(r.note!, style: TextStyle(fontSize: 12, color: p.textTertiary), maxLines: 1, overflow: TextOverflow.ellipsis),
+                Text(
+                  Formatters.dateShortYearRu(r.date),
+                  style: TextStyle(fontSize: 11, color: p.textTertiary),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            Formatters.money(r.priceKopecks),
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: p.textPrimary),
+          ),
+          IconButton(
+            tooltip: l10n.analyticsManualDelete,
+            onPressed: () => onDelete(r.id),
+            icon: Icon(Icons.delete_outline_rounded, size: 20, color: p.textSecondary),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _fuelSubtitle(AppL10n l10n, CarManualExpenseRecord r, double? intervalL100) {
+    final parts = <String>[];
+    if (r.fuelType != null) parts.add(r.fuelType!.label(l10n));
+    if (r.liters != null) parts.add('${r.liters!} ${l10n.isEn ? 'L' : 'л'}');
+    if (r.odometerKm != null) {
+      parts.add(Formatters.mileage(r.odometerKm!));
+    }
+    if (intervalL100 != null) {
+      parts.add(l10n.isEn ? '${intervalL100.toStringAsFixed(1)} L/100' : '${intervalL100.toStringAsFixed(1)} л/100 км');
+    }
+    return parts.join(' · ');
   }
 }
 

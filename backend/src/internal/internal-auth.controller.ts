@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { InternalAuthService, InternalLoginResult } from './internal-auth.service';
 import { InternalJwtAuthGuard } from './internal-jwt.guard';
 import { InternalCurrentOperator } from './internal-current-operator.decorator';
@@ -10,6 +11,8 @@ export class InternalAuthController {
   constructor(private auth: InternalAuthService) {}
 
   @Post('login')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 8, ttl: 120000 } })
   async login(@Body() body: InternalLoginDto): Promise<InternalLoginResult> {
     return this.auth.login(body.email.trim().toLowerCase(), body.password);
   }

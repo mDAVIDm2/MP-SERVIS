@@ -15,13 +15,27 @@ import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 import { MediaModule } from '../media/media.module';
 import { UsersModule } from '../users/users.module';
 import { UserClientHiddenCar } from '../users/user-client-hidden-car.entity';
+import { ClientCar } from '../users/client-car.entity';
+import { InventoryModule } from '../inventory/inventory.module';
+import { OrderInventoryLine } from './order-inventory-line.entity';
 
 @Module({
   imports: [
+    InventoryModule,
     MediaModule,
     UsersModule,
     SubscriptionsModule,
-    TypeOrmModule.forFeature([Order, OrderItem, OrderPhoto, StaffMember, Chat, ChatMessage, UserClientHiddenCar]),
+    TypeOrmModule.forFeature([
+      Order,
+      OrderItem,
+      OrderPhoto,
+      OrderInventoryLine,
+      StaffMember,
+      Chat,
+      ChatMessage,
+      UserClientHiddenCar,
+      ClientCar,
+    ]),
     ChatsModule,
     NotificationsModule,
     OrganizationsModule,

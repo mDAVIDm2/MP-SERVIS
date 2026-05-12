@@ -10,6 +10,9 @@ if [[ "${USE_LAN_API:-}" == "1" ]]; then
 else
   ARGS+=(--dart-define=MP_SERVIS_API_BASE_URL=https://api.mp-servis.ru/api/v1)
 fi
+if [[ -f config/partner_osago_define.json ]]; then
+  ARGS+=(--dart-define-from-file=config/partner_osago_define.json)
+fi
 if [[ -f config/firebase_define.json ]]; then
   ARGS+=(--dart-define-from-file=config/firebase_define.json)
 fi

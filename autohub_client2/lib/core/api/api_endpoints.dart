@@ -2,7 +2,7 @@ import '../config/app_config.dart';
 
 /// Все API endpoints экосистемы MP-Servis.
 /// Соответствует спецификации из промта (Часть 4: Backend API).
-/// Базовый URL задаётся в AppConfig (переменная окружения MP_SERVIS_API_HOST или defaultValue).
+/// Базовый URL — [AppConfig.baseUrl] (по умолчанию прод; см. `MP_SERVIS_API_BASE_URL` / `MP_SERVIS_API_HOST`).
 class ApiEndpoints {
   ApiEndpoints._();
 
@@ -34,6 +34,16 @@ class ApiEndpoints {
   static const String profileCars = '/profile/cars';
   static String profileCar(String carId) => '/profile/cars/$carId';
   static String profileCarPhoto(String carId) => '/profile/cars/$carId/photo';
+
+  /// Бывший владелец убирает авто из гаража (после передачи).
+  static String profileCarForgetFormer(String carId) => '/profile/cars/$carId/former';
+
+  static const String profileCarTransfers = '/profile/car-transfers';
+  static const String profileCarTransfersIncoming = '/profile/car-transfers/incoming';
+  static const String profileCarTransfersOutgoing = '/profile/car-transfers/outgoing';
+  static String profileCarTransferAccept(String id) => '/profile/car-transfers/$id/accept';
+  static String profileCarTransferReject(String id) => '/profile/car-transfers/$id/reject';
+  static String profileCarTransferCancel(String id) => '/profile/car-transfers/$id/cancel';
 
   // ═══════════════════════════════════════
   // CARS
@@ -73,6 +83,7 @@ class ApiEndpoints {
   // BOOKING
   // ═══════════════════════════════════════
   static const String bookingAvailableSlots = '/booking/available-slots';
+  static const String bookingNearestSlotsBatch = '/booking/nearest-slots-batch';
   static const String bookings = '/bookings';
   static String booking(String id) => '/bookings/$id';
 

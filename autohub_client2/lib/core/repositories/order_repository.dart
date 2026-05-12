@@ -58,6 +58,8 @@ abstract class OrderRepository {
     DateTime? dateTime,
     bool acceptProposed = true,
     String? approvalMessageId,
+    List<String>? approvedItemIds,
+    List<String>? rejectedItemIds,
   });
 
   /// Согласовать доп. работы. [carId] — при заказе «для всех машин» передаём активную машину из гаража.

@@ -18,6 +18,7 @@ import { Response } from 'express';
 import { AuthGuard } from '@nestjs/passport';
 import { User } from './user.entity';
 import { ClientCarsService, CreateClientCarBody, PatchClientCarBody } from './client-cars.service';
+import { CarTransferService } from './car-transfer.service';
 import { UsersService } from './users.service';
 
 @Controller('profile')
@@ -26,6 +27,7 @@ export class ClientCarsController {
   constructor(
     private readonly cars: ClientCarsService,
     private readonly users: UsersService,
+    private readonly carTransfers: CarTransferService,
   ) {}
 
   @Get('cars')
@@ -53,6 +55,12 @@ export class ClientCarsController {
     return { ok: true };
   }
 
+  /** Убрать авто из гаража у бывшего владельца (после передачи). */
+  @Delete('cars/:carId/former')
+  async forgetFormer(@Req() req: { user: User }, @Param('carId') carId: string) {
+    return this.carTransfers.forgetFormerCar(req.user, carId);
+  }
+
   @Post('cars/:carId/photo')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 8 * 1024 * 1024 } }))
   async uploadPhoto(
@@ -78,6 +86,8 @@ export class ClientCarsController {
       if (await this.cars.isCarHiddenFromClientApp(ownerId, carId)) {
         return res.status(404).send('Not found');
       }
+    } else if (await this.carTransfers.isFormerOwner(req.user.id, carId)) {
+      /* read-only доступ к фото после передачи */
     } else {
       const ok = await this.users.canStaffFetchClientAvatar(req.user, ownerId);
       if (!ok) {

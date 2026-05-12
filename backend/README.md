@@ -60,6 +60,6 @@ API: http://localhost:3000/api/v1
 
 Шаблоны **systemd**, **nginx**, пример `.env` для прода и пошаговая инструкция:
 
-- [`deploy/SETUP_SERVER_RU.md`](deploy/SETUP_SERVER_RU.md)
+- [`deploy/SETUP_SERVER_RU.md`](deploy/SETUP_SERVER_RU.md) — в том числе раздел **«Важно: каталог uploads/»**: при полной замене каталога API на сервере нужно **сохранить или слить** `uploads/` (фото пользователей и организаций не в БД, а на диске).
 
 Миграции на сервере без dev-зависимостей: `npm run build` затем `npm run migration:run:prod`.

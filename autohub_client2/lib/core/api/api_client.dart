@@ -123,6 +123,10 @@ class ApiClient {
       path,
       data: formData,
       onSendProgress: onSendProgress,
+      options: Options(
+        sendTimeout: const Duration(minutes: 3),
+        receiveTimeout: const Duration(minutes: 2),
+      ),
     );
   }
 

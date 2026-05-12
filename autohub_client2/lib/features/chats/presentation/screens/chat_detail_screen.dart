@@ -16,6 +16,7 @@ import '../../../../core/utils/formatters.dart';
 import '../../../../shared/models/chat_model.dart';
 import '../../../../shared/models/order_model.dart';
 import 'approval_slot_picker_screen.dart';
+import '../../../orders/presentation/widgets/client_service_booking_confirm_sheet.dart';
 import '../../../orders/presentation/screens/order_detail_screen.dart';
 import '../../../search/presentation/screens/sto_detail_screen.dart';
 import '../widgets/authenticated_chat_image.dart';
@@ -289,7 +290,8 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
     return lower.contains('требует подтвержден') ||
         lower.contains('требуется подтвержден') ||
         lower.contains('клиент создал заявку') ||
-        lower.contains('требует подтверждения');
+        lower.contains('требует подтверждения') ||
+        lower.contains('сервис создал');
   }
 
   /// Текст системного сообщения для клиента: по статусу заказа (подтверждена / отклонена / откорректирована / ожидание).
@@ -310,8 +312,10 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
       case OrderStatus.done:
         return 'Заявка подтверждена.';
       case OrderStatus.pendingConfirmation:
-      default:
-        return 'Заявка отправлена. Ожидайте подтверждения.';
+        if (order.clientMustConfirmPendingBooking) {
+          return 'Сервис оформил запись. Подтвердите состав и время в карточке ниже.';
+        }
+        return 'Заявка отправлена. Ожидайте подтверждения автосервиса.';
     }
   }
 
@@ -328,6 +332,9 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
     if (orderId.isEmpty) return false;
     final order = chatOrders.where((o) => o.id == orderId).firstOrNull;
     if (order == null) return false;
+    // Не дублируем: для записи от сервиса полный CTA в [_ClientOrderCreatedCard] (иначе мигание
+    // «подтвердите…» → примитивная «Заявка отправлена» после догрузки message_type=booking_card).
+    if (order.clientMustConfirmPendingBooking) return false;
     return order.status == OrderStatus.pendingConfirmation ||
         order.status == OrderStatus.pendingApproval;
   }
@@ -601,7 +608,8 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
                             ),
                             if (item.order!.status == OrderStatus.pendingConfirmation &&
                                 !_messages.any((m) => m.type == MessageType.approval && (m.orderId ?? '') == item.order!.id) &&
-                                !_messages.any((m) => m.type == MessageType.bookingCard && (m.orderId ?? '') == item.order!.id))
+                                (item.order!.clientMustConfirmPendingBooking ||
+                                    !_messages.any((m) => m.type == MessageType.bookingCard && (m.orderId ?? '') == item.order!.id)))
                               _ClientOrderCreatedCard(order: item.order!),
                           ],
                         ]
@@ -1006,7 +1014,7 @@ class _OrderTimelineCard extends StatelessWidget {
   static String _bookingTimeRange(Order order) {
     final start = order.plannedStartTime ?? order.dateTime;
     final end = order.plannedEndTime;
-    final durationMin = order.items.fold<int>(0, (s, i) => s + i.estimatedMinutes);
+    final durationMin = order.estimatedMinutesForDisplay;
     final endComputed = end ?? start.add(Duration(minutes: durationMin > 0 ? durationMin : 60));
     return '${Formatters.time(start)}–${Formatters.time(endComputed)}';
   }
@@ -1194,46 +1202,106 @@ class _BookingCard extends StatelessWidget {
   }
 }
 
-/// Карточка для клиента: заявка создана, ожидание подтверждения сервисом. Без кнопки «Подтвердить» — подтверждает только организация.
-class _ClientOrderCreatedCard extends StatelessWidget {
+/// Карточка: клиент оформил заявку, или сервис создал запись (тогда — кнопка подтверждения).
+class _ClientOrderCreatedCard extends ConsumerWidget {
   const _ClientOrderCreatedCard({required this.order});
   final Order order;
 
   @override
-  Widget build(BuildContext context) {
-    final displayItems = order.items.where((i) => i.isApproved && !i.isRejected).toList();
-    final totalKopecks = order.totalKopecks;
+  Widget build(BuildContext context, WidgetRef ref) {
+    final needClient = order.clientMustConfirmPendingBooking;
+    final displayItems = needClient
+        ? <OrderItem>[]
+        : order.itemsForDisplay.where((i) => i.isApproved && !i.isRejected).toList();
+    final totalKopecks = needClient ? 0 : order.totalKopecksForDisplay;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: context.palette.cardBg,
+        gradient: needClient
+            ? LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  context.palette.primary.withValues(alpha: 0.07),
+                  context.palette.cardBg,
+                ],
+              )
+            : null,
+        color: needClient ? null : context.palette.cardBg,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: context.palette.statusPending.withValues(alpha: 0.5)),
+        border: Border.all(
+          color: needClient
+              ? context.palette.primary.withValues(alpha: 0.45)
+              : context.palette.statusPending.withValues(alpha: 0.5),
+          width: needClient ? 1.5 : 1,
+        ),
+        boxShadow: needClient
+            ? [
+                BoxShadow(
+                  color: context.palette.primary.withValues(alpha: 0.10),
+                  blurRadius: 22,
+                  offset: const Offset(0, 8),
+                ),
+              ]
+            : null,
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (needClient)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: context.palette.primary.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    'Требуется ваше подтверждение',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.2,
+                      color: context.palette.primary,
+                    ),
+                  ),
+                ),
+              ),
+            ),
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.check_circle_outline_rounded, size: 20, color: context.palette.statusPending),
-              SizedBox(width: 8),
-              Text(
-                'Заявка отправлена',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: context.palette.textPrimary,
+              Icon(
+                needClient ? Icons.fact_check_outlined : Icons.check_circle_outline_rounded,
+                size: 24,
+                color: needClient ? context.palette.primary : context.palette.statusPending,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  needClient ? 'Подтвердите заявку от сервиса' : 'Заявка отправлена',
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                    color: context.palette.textPrimary,
+                    height: 1.2,
+                  ),
                 ),
               ),
             ],
           ),
-          SizedBox(height: 6),
+          const SizedBox(height: 8),
           Text(
-            'Ожидайте подтверждения. Мы свяжемся с вами.',
-            style: TextStyle(fontSize: 13, color: context.palette.textSecondary),
+            needClient
+                ? 'Сервис оформил запись на вас. Проверьте время, работы и цену — затем подтвердите или выберите другое время.'
+                : 'Ожидайте подтверждения. Мы свяжемся с вами.',
+            style: TextStyle(fontSize: 14, color: context.palette.textSecondary, height: 1.4),
           ),
-          SizedBox(height: 10),
+          const SizedBox(height: 10),
           Material(
             color: context.palette.primary.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(10),
@@ -1245,7 +1313,7 @@ class _ClientOrderCreatedCard extends StatelessWidget {
                 child: Row(
                   children: [
                     Icon(Icons.receipt_long_outlined, size: 18, color: context.palette.primary.withValues(alpha: 0.9)),
-                    SizedBox(width: 10),
+                    const SizedBox(width: 10),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1259,7 +1327,7 @@ class _ClientOrderCreatedCard extends StatelessWidget {
                               letterSpacing: 0.2,
                             ),
                           ),
-                          SizedBox(height: 2),
+                          const SizedBox(height: 2),
                           Text(
                             order.orderNumber,
                             style: TextStyle(
@@ -1281,49 +1349,88 @@ class _ClientOrderCreatedCard extends StatelessWidget {
               ),
             ),
           ),
-          if (order.plannedStartTime != null || order.plannedEndTime != null) ...[
-            SizedBox(height: 8),
-            Text(
-              order.plannedStartTime != null && order.plannedEndTime != null
-                  ? '${Formatters.dateShortRu(order.plannedStartTime!)} ${Formatters.time(order.plannedStartTime!)} – ${Formatters.time(order.plannedEndTime!)}'
-                  : order.plannedEndTime != null
-                      ? 'Ориентировочное окончание: ${Formatters.time(order.plannedEndTime!)} ${Formatters.dateShortRu(order.plannedEndTime!)}'
-                      : '${Formatters.dateShortRu(order.dateTime)} ${Formatters.time(order.dateTime)}',
-              style: TextStyle(fontSize: 13, color: context.palette.textSecondary),
-            ),
-          ] else ...[
-            SizedBox(height: 8),
-            Text(
-              '${Formatters.dateShortRu(order.dateTime)} ${Formatters.time(order.dateTime)}',
-              style: TextStyle(fontSize: 13, color: context.palette.textSecondary),
-            ),
-          ],
-          Divider(color: context.palette.border, height: 24),
-          Text('Перечень работ:', style: TextStyle(
-            fontSize: 13, fontWeight: FontWeight.w600, color: context.palette.textSecondary,
-          )),
-          SizedBox(height: 6),
-          ...displayItems.map((item) => _WorkRow(
-                name: item.name,
-                price: Formatters.money(item.priceKopecks),
-                duration: item.durationLabel,
-              )),
-          Divider(color: context.palette.border, height: 24),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text('Итого:', style: TextStyle(
-                fontSize: 16, fontWeight: FontWeight.w700, color: context.palette.textPrimary,
-              )),
+          if (!needClient) ...[
+            if (order.plannedStartTime != null || order.plannedEndTime != null) ...[
+              const SizedBox(height: 8),
               Text(
-                Formatters.money(totalKopecks),
-                style: TextStyle(
-                  fontSize: 18, fontWeight: FontWeight.w700,
-                  color: context.palette.primary, fontFamily: 'monospace',
-                ),
+                order.plannedStartTime != null && order.plannedEndTime != null
+                    ? '${Formatters.dateShortRu(order.plannedStartTime!)} ${Formatters.time(order.plannedStartTime!)} – ${Formatters.time(order.plannedEndTime!)}'
+                    : order.plannedEndTime != null
+                        ? 'Ориентировочное окончание: ${Formatters.time(order.plannedEndTime!)} ${Formatters.dateShortRu(order.plannedEndTime!)}'
+                        : '${Formatters.dateShortRu(order.dateTime)} ${Formatters.time(order.dateTime)}',
+                style: TextStyle(fontSize: 13, color: context.palette.textSecondary, height: 1.3),
+              ),
+            ] else ...[
+              const SizedBox(height: 8),
+              Text(
+                '${Formatters.dateShortRu(order.dateTime)} ${Formatters.time(order.dateTime)}',
+                style: TextStyle(fontSize: 13, color: context.palette.textSecondary, height: 1.3),
               ),
             ],
-          ),
+            Divider(color: context.palette.border, height: 24),
+            Text(
+              'Перечень работ',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: context.palette.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 6),
+            ...displayItems.map((item) => _WorkRow(
+                  name: item.name,
+                  price: Formatters.money(item.priceKopecks),
+                  duration: item.durationLabel,
+                )),
+            Divider(color: context.palette.border, height: 24),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Итого', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: context.palette.textPrimary)),
+                Text(
+                  Formatters.money(totalKopecks),
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: context.palette.primary,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ],
+            ),
+          ],
+          if (needClient) ...[
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: () {
+                HapticFeedback.mediumImpact();
+                showClientServiceBookingConfirmSheet(
+                  context,
+                  ref,
+                  order,
+                  onSuccess: () {
+                    ref.invalidate(orderByIdProvider(order.id));
+                  },
+                );
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: context.palette.primary,
+                foregroundColor: context.palette.onAccent,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                elevation: 0,
+              ),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  'Перейти к подтверждению',
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: context.palette.onAccent),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -1449,6 +1556,22 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
     if (order.status == OrderStatus.pendingApproval &&
         order.items.every((i) => !i.isAdditional)) return true;
     return false;
+  }
+
+  /// В сообщении согласования `car_id` часто пуст; в заказе с бэка уже есть `carId` + `carInfo` — не показываем «для всех машин».
+  String? _approvalCarLine(Order order) {
+    if (order.carId.trim().isNotEmpty) {
+      final info = order.carInfo?.trim() ?? '';
+      if (info.isNotEmpty) return info;
+      final v = order.vin?.trim() ?? '';
+      if (v.isNotEmpty) return 'VIN $v';
+      final p = order.licensePlate?.trim() ?? '';
+      if (p.isNotEmpty) return p;
+      return 'Автомобиль';
+    }
+    final msgId = widget.approvalMessage?.approvalCarId?.trim() ?? '';
+    if (msgId.isNotEmpty) return 'Автомобиль';
+    return null;
   }
 
   /// Список id для POST approval — как в [_handleApproval], по текущим галочкам.
@@ -1709,6 +1832,7 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
     final isNewOrderFromSto = originalItems.isEmpty &&
         (widget.approvalMessage?.originalApprovalItems == null || widget.approvalMessage!.originalApprovalItems!.isEmpty) &&
         (messageItems.isNotEmpty || newItems.isNotEmpty || editedItems.isEmpty);
+    final carLine = _approvalCarLine(order);
 
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
@@ -1789,17 +1913,28 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
               ),
             ),
           ),
-          if (widget.approvalMessage?.approvalCarId?.trim().isEmpty ?? true)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Row(
-                children: [
-                  Icon(Icons.directions_car_rounded, size: 14, color: context.palette.textSecondary),
-                  SizedBox(width: 6),
-                  Text('Для всех машин', style: TextStyle(fontSize: 12, color: context.palette.textSecondary, fontStyle: FontStyle.italic)),
-                ],
-              ),
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.directions_car_rounded, size: 14, color: context.palette.textSecondary),
+                SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    carLine ?? 'Для всех машин',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: context.palette.textSecondary,
+                      fontStyle: carLine == null ? FontStyle.italic : FontStyle.normal,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
             ),
+          ),
           Divider(color: context.palette.border, height: 24),
 
           // Новый заказ от сервиса (нет исходных позиций) — только список «Услуги». Иначе — исходный состав + изменения.
@@ -1933,7 +2068,9 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
             Builder(
               builder: (context) {
                 final effectiveStart = _draftSelectedTime ?? order.plannedStartTime ?? widget.approvalMessage?.proposedDateTime ?? order.dateTime;
-                final durationMin = widget.approvalMessage?.totalsAfterMinutes ?? widget.approvalMessage?.approvalTotalMinutes ?? order.items.fold<int>(0, (s, i) => s + i.estimatedMinutes);
+                final durationMin = widget.approvalMessage?.totalsAfterMinutes ??
+                    widget.approvalMessage?.approvalTotalMinutes ??
+                    order.estimatedMinutesForDisplay;
                 final duration = durationMin > 0 ? durationMin : 60;
                 final effectiveEnd = effectiveStart.add(Duration(minutes: duration));
                 return Row(
@@ -1948,7 +2085,7 @@ class _ApprovalCardState extends ConsumerState<_ApprovalCard> {
                       onPressed: _isConfirming ? null : () async {
                         final orderId = _effectiveOrderId;
                         if (orderId.isEmpty) return;
-                        final serviceIds = order.items
+                        final serviceIds = order.itemsForDisplay
                             .map((i) => i.serviceId)
                             .whereType<String>()
                             .where((id) => id.isNotEmpty)

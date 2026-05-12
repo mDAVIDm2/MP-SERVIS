@@ -7,6 +7,7 @@ import '../../../../core/l10n/l10n_scope.dart';
 import '../../../../core/l10n/maintenance_type_l10n.dart';
 import '../../../../core/theme/client_palette.dart';
 import '../../../../core/settings/maintenance_reminders_provider.dart';
+import '../../../../core/utils/formatters.dart';
 import '../../../../shared/models/car_model.dart';
 import '../widgets/add_maintenance_record_sheet.dart';
 
@@ -116,33 +117,46 @@ class _MaintenanceReminderDetailScreenState extends ConsumerState<MaintenanceRem
                   ),
                 ),
                 const Spacer(),
-                TextButton.icon(
-                  onPressed: () => showAddMaintenanceRecordSheet(
-                    context,
-                    ref,
-                    cars: [car],
-                    initialCar: car,
-                    initialType: type,
+                if (records.isNotEmpty)
+                  TextButton.icon(
+                    onPressed: () => showAddMaintenanceRecordSheet(
+                      context,
+                      ref,
+                      cars: [car],
+                      initialCar: car,
+                      initialType: type,
+                    ),
+                    icon: Icon(Icons.add_rounded, size: 20),
+                    label: Text(l10n.add),
                   ),
-                  icon: Icon(Icons.add_rounded, size: 20),
-                  label: Text(l10n.add),
-                ),
               ],
             ),
             SizedBox(height: 8),
             if (records.isEmpty)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: context.palette.cardBg,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: context.palette.border),
-                ),
-                child: Text(
-                  l10n.maintHistoryEmpty,
-                  style: TextStyle(fontSize: 13, color: context.palette.textSecondary, height: 1.4),
-                ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  FilledButton(
+                    onPressed: () => showAddMaintenanceRecordSheet(
+                      context,
+                      ref,
+                      cars: [car],
+                      initialCar: car,
+                      initialType: type,
+                    ),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size(double.infinity, 52),
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                    ),
+                    child: Text(l10n.maintHistoryAddBigButton, style: TextStyle(fontWeight: FontWeight.w600)),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    l10n.maintHistoryAddBigButtonSubtitle,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 13, color: context.palette.textSecondary, height: 1.35),
+                  ),
+                ],
               )
             else
               ...records.map(
@@ -312,16 +326,34 @@ class _SummaryCard extends StatelessWidget {
     final kmLine = cfg.useKmInterval && cfg.intervalKm > 0;
     final moLine = cfg.useMonthsInterval && cfg.intervalMonths > 0;
     final df = DateFormat('dd.MM.yyyy', l10n.locale.languageCode);
+    final sep = NumberFormat.decimalPattern(l10n.intlLocale);
 
     String fmtKm(int? k) {
       if (k == null) return '—';
       return l10n.mileageValue(k);
     }
 
-    String fmtDays(int? d) {
-      if (d == null) return '—';
-      if (d < 0) return l10n.overdueDays(-d);
-      return l10n.approxDays(d);
+    String remainingValue() {
+      if (last == null) return '—';
+      final parts = <String>[];
+      if (kmLine && snap.kmRemaining != null) {
+        final k = snap.kmRemaining!;
+        if (k < 0) {
+          parts.add(l10n.maintShortKmOverdue(sep.format(k)));
+        } else {
+          parts.add(l10n.maintShortKmLeft(sep.format(k)));
+        }
+      }
+      if (moLine && snap.daysRemaining != null) {
+        final d = snap.daysRemaining!;
+        if (d < 0) {
+          parts.add(l10n.maintShortDaysOverdue(sep.format(d)));
+        } else {
+          parts.add(l10n.maintShortDaysLeft(d));
+        }
+      }
+      if (parts.isEmpty) return '—';
+      return parts.join(' · ');
     }
 
     return Container(
@@ -377,13 +409,8 @@ class _SummaryCard extends StatelessWidget {
           SizedBox(height: 12),
           _line(
             context,
-            l10n.remaining,
-            last == null
-                ? '—'
-                : [
-                    if (kmLine && snap.kmRemaining != null) fmtKm(snap.kmRemaining),
-                    if (moLine && snap.daysRemaining != null) fmtDays(snap.daysRemaining),
-                  ].where((s) => s != '—').join(' · ').orDashIfEmpty(),
+            snap.overdue ? l10n.overdueStatusLabel : l10n.remaining,
+            last == null ? '—' : remainingValue().orDashIfEmpty(),
             snap.overdue ? context.palette.error : context.palette.textPrimary,
           ),
           SizedBox(height: 12),
@@ -430,15 +457,17 @@ extension _StrOr on String {
   String orDashIfEmpty() => isEmpty ? '—' : this;
 }
 
-const int _kKmIntervalMin = 1000;
-const int _kKmIntervalMax = 15000;
+const int _kKmIntervalMin = 100;
+const int _kKmIntervalMax = 500000;
 const int _kMonthsIntervalMin = 1;
-const int _kMonthsIntervalMax = 24;
+const int _kMonthsIntervalMax = 120;
 
-int _snapKmInterval(int v) {
-  final r = (v / 1000.0).round() * 1000;
-  return r.clamp(_kKmIntervalMin, _kKmIntervalMax);
-}
+/// Диапазон, который покрывает слайдер км (как раньше: с шагом 1000 от 1000 до 15000).
+const int _kKmSliderMin = 1000;
+const int _kKmSliderMax = 15000;
+
+int _clampKmInterval(int v) => v.clamp(_kKmIntervalMin, _kKmIntervalMax);
+int _clampMonthsInterval(int v) => v.clamp(_kMonthsIntervalMin, _kMonthsIntervalMax);
 
 class _IntervalsCard extends StatefulWidget {
   const _IntervalsCard({
@@ -465,8 +494,12 @@ class _IntervalsCardState extends State<_IntervalsCard> {
   @override
   void initState() {
     super.initState();
-    _kmCtrl = TextEditingController(text: '${_snapKmInterval(widget.config.intervalKm)}');
-    _monthsCtrl = TextEditingController(text: widget.config.intervalMonths > 0 ? '${widget.config.intervalMonths.clamp(_kMonthsIntervalMin, _kMonthsIntervalMax)}' : '12');
+    _kmCtrl = TextEditingController(text: '${_clampKmInterval(widget.config.intervalKm)}');
+    _monthsCtrl = TextEditingController(
+      text: widget.config.intervalMonths > 0
+          ? '${_clampMonthsInterval(widget.config.intervalMonths)}'
+          : '12',
+    );
     _kmCtrl.addListener(() => setState(() {}));
     _monthsCtrl.addListener(() => setState(() {}));
   }
@@ -475,10 +508,12 @@ class _IntervalsCardState extends State<_IntervalsCard> {
   void didUpdateWidget(covariant _IntervalsCard oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.config.intervalKm != widget.config.intervalKm) {
-      _kmCtrl.text = '${_snapKmInterval(widget.config.intervalKm)}';
+      _kmCtrl.text = '${_clampKmInterval(widget.config.intervalKm)}';
     }
     if (oldWidget.config.intervalMonths != widget.config.intervalMonths) {
-      _monthsCtrl.text = widget.config.intervalMonths > 0 ? '${widget.config.intervalMonths.clamp(_kMonthsIntervalMin, _kMonthsIntervalMax)}' : '12';
+      _monthsCtrl.text = widget.config.intervalMonths > 0
+          ? '${_clampMonthsInterval(widget.config.intervalMonths)}'
+          : '12';
     }
   }
 
@@ -510,10 +545,12 @@ class _IntervalsCardState extends State<_IntervalsCard> {
   /// Сохранить километраж и месяцы из полей (кнопка «Сохранить» снизу экрана).
   void commitIntervals() {
     final c = widget.config;
-    final nKm = int.tryParse(_kmCtrl.text.trim());
+    final nKm = int.tryParse(_kmCtrl.text.replaceAll(RegExp(r'\s'), ''));
     final nMo = int.tryParse(_monthsCtrl.text.trim());
-    final km = nKm != null ? _snapKmInterval(nKm) : _snapKmInterval(c.intervalKm);
-    final mo = nMo != null ? nMo.clamp(_kMonthsIntervalMin, _kMonthsIntervalMax) : c.intervalMonths.clamp(_kMonthsIntervalMin, _kMonthsIntervalMax);
+    final km = nKm != null ? _clampKmInterval(nKm) : _clampKmInterval(c.intervalKm);
+    final mo = nMo != null
+        ? _clampMonthsInterval(nMo)
+        : _clampMonthsInterval(c.intervalMonths > 0 ? c.intervalMonths : 12);
     widget.notifier.setConfig(MaintenanceConfig(
       carId: c.carId,
       typeKey: c.typeKey,
@@ -525,10 +562,19 @@ class _IntervalsCardState extends State<_IntervalsCard> {
     ));
   }
 
+  /// Значение км из поля: для подписи и сохранения (с учётом ручного ввода, без округления).
   int get _kmForSlider {
-    final n = int.tryParse(_kmCtrl.text.trim());
-    if (n == null) return _snapKmInterval(widget.config.intervalKm);
-    return _snapKmInterval(n);
+    final n = int.tryParse(_kmCtrl.text.replaceAll(RegExp(r'\s'), ''));
+    if (n == null) return _clampKmInterval(widget.config.intervalKm);
+    return _clampKmInterval(n);
+  }
+
+  /// 0…14: позиция слайдера по диапазону 1000–15000; значения <1000 или >15000 — у края (ручной ввод всё равно в поле).
+  int get _kmSliderStepIndex {
+    final km = _kmForSlider;
+    if (km < _kKmSliderMin) return 0;
+    if (km > _kKmSliderMax) return 14;
+    return ((km - _kKmSliderMin) / 1000).round().clamp(0, 14);
   }
 
   int get _monthsForSlider {
@@ -616,57 +662,69 @@ class _IntervalsCardState extends State<_IntervalsCard> {
   }
 
   Widget _kmSliderRow(BuildContext context, AppL10n l10n) {
-    final step = ((_kmForSlider - _kKmIntervalMin) ~/ 1000).clamp(0, 14);
+    final step = _kmSliderStepIndex;
     final pal = context.palette;
     return Padding(
       padding: const EdgeInsets.only(left: 4, right: 0, top: 2),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(
-            child: SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                trackHeight: 4,
-                activeTrackColor: pal.primary,
-                inactiveTrackColor: pal.border,
-                thumbColor: pal.primary,
-                overlayColor: pal.primary.withValues(alpha: 0.12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 4,
+                    activeTrackColor: pal.primary,
+                    inactiveTrackColor: pal.border,
+                    thumbColor: pal.primary,
+                    overlayColor: pal.primary.withValues(alpha: 0.12),
+                  ),
+                  child: Slider(
+                    value: step.toDouble(),
+                    min: 0,
+                    max: 14,
+                    divisions: 14,
+                    label: '$_kmForSlider',
+                    onChanged: (v) {
+                      final s = v.round().clamp(0, 14);
+                      final km = _kKmSliderMin + s * 1000;
+                      final t = '$km';
+                      if (_kmCtrl.text != t) {
+                        _kmCtrl.value = TextEditingValue(text: t, selection: TextSelection.collapsed(offset: t.length));
+                      }
+                      setState(() {});
+                    },
+                  ),
+                ),
               ),
-              child: Slider(
-                value: step.toDouble(),
-                min: 0,
-                max: 14,
-                divisions: 14,
-                label: '$_kmForSlider',
-                onChanged: (v) {
-                  final s = v.round().clamp(0, 14);
-                  final km = _kKmIntervalMin + s * 1000;
-                  final t = '$km';
-                  if (_kmCtrl.text != t) {
-                    _kmCtrl.value = TextEditingValue(text: t, selection: TextSelection.collapsed(offset: t.length));
-                  }
-                  setState(() {});
-                },
+              SizedBox(width: 2),
+              SizedBox(
+                width: 104,
+                child: TextField(
+                  controller: _kmCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: false, signed: false),
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  textAlign: TextAlign.end,
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                  decoration: InputDecoration(
+                    suffixText: l10n.kmBetween,
+                    suffixStyle: TextStyle(fontSize: 12, color: pal.textSecondary),
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
               ),
-            ),
+            ],
           ),
-          SizedBox(width: 2),
-          SizedBox(
-            width: 104,
-            child: TextField(
-              controller: _kmCtrl,
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              textAlign: TextAlign.end,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-              decoration: InputDecoration(
-                suffixText: l10n.kmBetween,
-                suffixStyle: TextStyle(fontSize: 12, color: pal.textSecondary),
-                border: const OutlineInputBorder(),
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-              ),
-              onChanged: (_) => setState(() {}),
+          Padding(
+            padding: const EdgeInsets.only(left: 4, top: 4),
+            child: Text(
+              l10n.maintIntervalKmHelper,
+              style: TextStyle(fontSize: 12, height: 1.3, color: pal.textTertiary),
             ),
           ),
         ],
@@ -675,7 +733,8 @@ class _IntervalsCardState extends State<_IntervalsCard> {
   }
 
   Widget _monthsSliderBlock(BuildContext context, AppL10n l10n) {
-    final m = _monthsForSlider.toDouble();
+    const sliderMax = 24;
+    final m = _monthsForSlider > sliderMax ? sliderMax.toDouble() : _monthsForSlider.toDouble();
     final pal = context.palette;
     final sliderTheme = SliderTheme.of(context).copyWith(
       trackHeight: 2.5,
@@ -688,53 +747,68 @@ class _IntervalsCardState extends State<_IntervalsCard> {
     );
     return Padding(
       padding: const EdgeInsets.only(left: 4, top: 2),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: FractionallySizedBox(
-                widthFactor: 0.78,
-                alignment: Alignment.centerLeft,
-                child: SliderTheme(
-                  data: sliderTheme,
-                  child: Slider(
-                    value: m,
-                    min: _kMonthsIntervalMin.toDouble(),
-                    max: _kMonthsIntervalMax.toDouble(),
-                    divisions: _kMonthsIntervalMax - _kMonthsIntervalMin,
-                    label: '$m',
-                    onChanged: (v) {
-                      final mo = v.round().clamp(_kMonthsIntervalMin, _kMonthsIntervalMax);
-                      final t = '$mo';
-                      if (_monthsCtrl.text != t) {
-                        _monthsCtrl.value = TextEditingValue(text: t, selection: TextSelection.collapsed(offset: t.length));
-                      }
-                      setState(() {});
-                    },
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: FractionallySizedBox(
+                    widthFactor: 0.78,
+                    alignment: Alignment.centerLeft,
+                    child: SliderTheme(
+                      data: sliderTheme,
+                      child: Slider(
+                        value: m,
+                        min: _kMonthsIntervalMin.toDouble(),
+                        max: sliderMax.toDouble(),
+                        divisions: sliderMax - _kMonthsIntervalMin,
+                        label: '$_monthsForSlider',
+                        onChanged: (v) {
+                          final mo = v.round().clamp(_kMonthsIntervalMin, _kMonthsIntervalMax);
+                          final t = '$mo';
+                          if (_monthsCtrl.text != t) {
+                            _monthsCtrl.value = TextEditingValue(
+                              text: t,
+                              selection: TextSelection.collapsed(offset: t.length),
+                            );
+                          }
+                          setState(() {});
+                        },
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
-          ),
-          SizedBox(width: 2),
-          SizedBox(
-            width: 62,
-            child: TextField(
-              controller: _monthsCtrl,
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-              decoration: InputDecoration(
-                suffixText: l10n.monthsBetween,
-                suffixStyle: TextStyle(fontSize: 11, color: pal.textSecondary),
-                border: const OutlineInputBorder(),
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+              SizedBox(width: 2),
+              SizedBox(
+                width: 62,
+                child: TextField(
+                  controller: _monthsCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: false, signed: false),
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                  decoration: InputDecoration(
+                    suffixText: l10n.monthsBetween,
+                    suffixStyle: TextStyle(fontSize: 11, color: pal.textSecondary),
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
               ),
-              onChanged: (_) => setState(() {}),
+            ],
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 4, top: 2),
+            child: Text(
+              l10n.maintIntervalMonthsHelper,
+              style: TextStyle(fontSize: 12, height: 1.3, color: pal.textTertiary),
             ),
           ),
         ],
@@ -774,6 +848,11 @@ class _RecordTile extends StatelessWidget {
                 ),
                 if (record.place != null && record.place!.isNotEmpty)
                   Text(record.place!, style: TextStyle(fontSize: 12, color: context.palette.textSecondary)),
+                if (record.priceKopecks != null && record.priceKopecks! > 0)
+                  Text(
+                    Formatters.money(record.priceKopecks!),
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: context.palette.textPrimary),
+                  ),
                 if (record.orderId != null)
                   Text(l10n.fromOrder, style: TextStyle(fontSize: 11, color: context.palette.textSecondary.withValues(alpha: 0.85))),
               ],

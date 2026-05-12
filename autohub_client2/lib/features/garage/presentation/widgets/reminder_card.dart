@@ -54,7 +54,7 @@ class ReminderCard extends ConsumerWidget {
     if (reminder.recommendedMileage > 0) {
       final diff = reminder.recommendedMileage - reminder.currentMileage;
       if (reminder.status == ReminderStatus.overdue) {
-        return l10n.reminderOverdueMileage(l10n.mileageValue(-diff));
+        return l10n.reminderOverdueMileage(l10n.mileageValue(diff));
       }
       if (reminder.status == ReminderStatus.upcoming && diff > 0) {
         return l10n.reminderLeftMileage(l10n.mileageValue(diff));
@@ -122,7 +122,9 @@ class ReminderCard extends ConsumerWidget {
                   _subtitle(context),
                   style: TextStyle(
                     fontSize: 13,
-                    color: context.palette.textSecondary,
+                    color: reminder.status == ReminderStatus.overdue
+                        ? context.palette.error
+                        : context.palette.textSecondary,
                     fontWeight: FontWeight.w500,
                   ),
                   maxLines: 1,

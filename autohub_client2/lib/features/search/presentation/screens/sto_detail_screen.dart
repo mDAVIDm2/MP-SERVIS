@@ -28,6 +28,10 @@ import '../../../../core/catalog/client_catalog_service_ids.dart';
 import '../../../orders/presentation/screens/order_detail_screen.dart';
 import '../../../chats/presentation/screens/chat_detail_screen.dart';
 import '../widgets/location_preview_card.dart';
+import '../widgets/sto_working_hours_block.dart';
+import '../widgets/sto_card_amenities_section.dart';
+import '../widgets/sto_card_about_section.dart';
+import '../widgets/sto_specialization_row.dart';
 
 int _packageDurationMinutes(STOPackage p, List<STOService> services, String? bodyType) {
   if (p.packageDurationMinutes > 0) return p.packageDurationMinutes;
@@ -65,21 +69,297 @@ int _packageBookingTotalKopecks(STOPackage p, Set<String> addonIds) {
   return t;
 }
 
-/// После [Navigator.pop] с экрана брони overlay ещё перестраивается — SnackBar в том же кадре даёт assert
-/// (`_elements.contains(element)` / `_owner != null`).
-void _showBookingCreatedSnackBar(String message) {
+/// Результат успешной записи — показываем лист с данными СТО и статусом заявки внизу.
+class _BookingSuccessPayload {
+  const _BookingSuccessPayload({
+    required this.sto,
+    required this.bookingRangeLine,
+    required this.durationLabel,
+  });
+
+  final STO sto;
+  final String bookingRangeLine;
+  final String durationLabel;
+}
+
+/// Нижний лист: информация об автосервисе + прокрутка к блоку «Заявка отправлена».
+class _BookingSuccessSheetBody extends StatefulWidget {
+  const _BookingSuccessSheetBody({required this.payload});
+
+  final _BookingSuccessPayload payload;
+
+  @override
+  State<_BookingSuccessSheetBody> createState() => _BookingSuccessSheetBodyState();
+}
+
+class _BookingSuccessSheetBodyState extends State<_BookingSuccessSheetBody> {
+  final ScrollController _scroll = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    void scrollToEnd() {
+      if (!mounted || !_scroll.hasClients) return;
+      _scroll.jumpTo(_scroll.position.maxScrollExtent);
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        scrollToEnd();
+        WidgetsBinding.instance.addPostFrameCallback((_) => scrollToEnd());
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.payload;
+    final sto = p.sto;
+    final sheetH = MediaQuery.sizeOf(context).height * 0.88;
+    return SafeArea(
+      top: false,
+      child: Container(
+        height: sheetH,
+        decoration: BoxDecoration(
+          color: context.palette.background,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 10, bottom: 6),
+              child: Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: context.palette.border,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Запись оформлена',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: context.palette.textPrimary,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: Icon(Icons.close_rounded, color: context.palette.textTertiary),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: SingleChildScrollView(
+                controller: _scroll,
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: context.palette.cardBg,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: context.palette.border),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            sto.name,
+                            style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w700,
+                              color: context.palette.textPrimary,
+                            ),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            sto.businessKindLabel,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: context.palette.textSecondary,
+                            ),
+                          ),
+                          SizedBox(height: 10),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(Icons.place_outlined, size: 18, color: context.palette.textTertiary),
+                              SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  sto.address,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    height: 1.35,
+                                    color: context.palette.textSecondary,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Icon(Icons.star_rounded, size: 18, color: context.palette.primary),
+                              SizedBox(width: 4),
+                              Text(
+                                Formatters.rating(sto.rating),
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: context.palette.textPrimary,
+                                ),
+                              ),
+                              Text(
+                                ' (${Formatters.reviewCount(sto.reviewCount)})',
+                                style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(height: 16),
+                    Text(
+                      'Параметры записи',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: context.palette.textSecondary,
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: context.palette.cardBg,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: context.palette.border),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Время',
+                            style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            p.bookingRangeLine,
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: context.palette.textPrimary,
+                              height: 1.35,
+                            ),
+                          ),
+                          SizedBox(height: 12),
+                          Text(
+                            'Длительность работ',
+                            style: TextStyle(fontSize: 12, color: context.palette.textTertiary),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            p.durationLabel,
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: context.palette.textPrimary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(height: 20),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: context.palette.success.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: context.palette.success.withValues(alpha: 0.45),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(Icons.mark_email_read_outlined, color: context.palette.success, size: 26),
+                              SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Заявка отправлена',
+                                      style: TextStyle(
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.w700,
+                                        color: context.palette.textPrimary,
+                                      ),
+                                    ),
+                                    SizedBox(height: 6),
+                                    Text(
+                                      'Организация получит заявку на запись. Статус заказа — в разделе «Заказы» и в чате с этим сервисом.',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        height: 1.4,
+                                        color: context.palette.textSecondary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// После [Navigator.pop] с экрана брони overlay ещё перестраивается — открываем лист на следующих кадрах.
+void _showBookingSuccessSheet(BuildContext context, _BookingSuccessPayload payload) {
   WidgetsBinding.instance.addPostFrameCallback((_) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final rootCtx = appRootNavigatorKey.currentContext;
-      if (rootCtx == null || !rootCtx.mounted) return;
-      final messenger = ScaffoldMessenger.maybeOf(rootCtx);
-      messenger?.hideCurrentSnackBar();
-      messenger?.showSnackBar(
-        SnackBar(
-          content: Text(message),
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 5),
-        ),
+      final ctx = appRootNavigatorKey.currentContext ?? context;
+      if (!ctx.mounted) return;
+      showModalBottomSheet<void>(
+        context: ctx,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (sheetCtx) => _BookingSuccessSheetBody(payload: payload),
       );
     });
   });
@@ -167,6 +447,8 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
   List<String> _pendingCatalogIds = const [];
   bool _didApplyInitialCatalog = false;
   final Map<String, GlobalKey> _serviceRowKeys = {};
+  /// Категории услуг (подпись) с раскрытым списком позиций.
+  final Set<String> _expandedServiceCategoryKeys = {};
 
   List<String> _normalizedInitialCatalogIds() {
     final raw = widget.initialServiceIds;
@@ -840,42 +1122,16 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
             distanceTrailing:
                 sto.distanceKm != null ? Formatters.distance(sto.distanceKm!) : null,
           ),
-          if (sto.workingHours != null)
-            _InfoRow(icon: Icons.access_time_rounded, text: sto.workingHours!),
+          StoWorkingHoursBlock(sto: sto),
           if (sto.phone != null)
             _InfoRow(
               icon: Icons.phone_rounded,
               text: Formatters.phone(sto.phone!),
             ),
-          SizedBox(height: 12),
-
-          // Specializations
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            children: sto.specializations
-                .map(
-                  (s) => Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: context.palette.nestedBg,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: context.palette.border),
-                    ),
-                    child: Text(
-                      s,
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: context.palette.textPrimary,
-                      ),
-                    ),
-                  ),
-                )
-                .toList(),
-          ),
+          SizedBox(height: 8),
+          StoCardAmenitiesSection(sto: sto),
+          const SizedBox(height: 2),
+          StoSpecializationRow(sto: sto),
           SizedBox(height: 12),
 
           // Action buttons
@@ -970,6 +1226,23 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
 
           SizedBox(height: 24),
 
+          if (sto.publicDescription != null && sto.publicDescription!.trim().isNotEmpty) ...[
+            Text(
+              'О нас',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: context.palette.textPrimary,
+              ),
+            ),
+            SizedBox(height: 8),
+            StoCardAboutSection(
+              text: sto.publicDescription!,
+              title: '',
+            ),
+            SizedBox(height: 20),
+          ],
+
           // Отзывы
           _buildReviewsSection(),
         ],
@@ -1019,7 +1292,7 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
               onTap: () {
                 HapticFeedback.selectionClick();
                 final ids = _packageBookingServiceIds(p, const []);
-                pushCupertino<String?>(
+                pushCupertino<_BookingSuccessPayload?>(
                   context,
                   _BookingScreen(
                     sto: widget.sto,
@@ -1028,9 +1301,9 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
                     packageContext: p,
                     initialAddonServiceIds: const [],
                   ),
-                ).then((msg) {
-                  if (msg == null || msg.isEmpty) return;
-                  _showBookingCreatedSnackBar(msg);
+                ).then((payload) {
+                  if (payload == null || !mounted) return;
+                  _showBookingSuccessSheet(context, payload);
                 });
               },
               borderRadius: BorderRadius.circular(12),
@@ -1134,6 +1407,111 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
     );
   }
 
+  Widget _buildSelectableServiceTile(
+    STOService service, {
+    required bool isLast,
+  }) {
+    final isSelected = _selectedServices.contains(service.id);
+    return KeyedSubtree(
+      key: _keyForServiceRow(service.id),
+      child: GestureDetector(
+        onTap: () {
+          HapticFeedback.selectionClick();
+          setState(() {
+            if (isSelected) {
+              _selectedServices.remove(service.id);
+            } else {
+              _selectedServices.add(service.id);
+            }
+          });
+        },
+        behavior: HitTestBehavior.opaque,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            border: isLast
+                ? null
+                : Border(
+                    bottom: BorderSide(
+                      color: context.palette.border,
+                      width: 0.5,
+                    ),
+                  ),
+          ),
+          child: Row(
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                width: 22,
+                height: 22,
+                decoration: BoxDecoration(
+                  color: isSelected ? context.palette.primary : Colors.transparent,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: isSelected
+                        ? context.palette.primary
+                        : context.palette.textTertiary,
+                    width: isSelected ? 0 : 1.5,
+                  ),
+                ),
+                child: isSelected
+                    ? Icon(
+                        Icons.check,
+                        size: 14,
+                        color: context.palette.onAccent,
+                      )
+                    : null,
+              ),
+              SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      service.name,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: isSelected
+                            ? context.palette.textPrimary
+                            : context.palette.textSecondary,
+                        fontWeight:
+                            isSelected ? FontWeight.w500 : FontWeight.w400,
+                      ),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      '⏱ ${Formatters.durationMinutes(service.effectiveDurationMinutes(_selectedCarBodyType()))}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isSelected
+                            ? context.palette.textSecondary
+                            : context.palette.textTertiary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                Formatters.money(
+                  service.effectivePriceKopecks(
+                    _selectedCarBodyType(),
+                  ),
+                ),
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: isSelected
+                      ? context.palette.primary
+                      : context.palette.textSecondary,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildServicesList(List<STOService> services) {
     if (services.isEmpty) {
       return Container(
@@ -1151,142 +1529,100 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
         ),
       );
     }
+    final q = _serviceSearchController.text.trim();
+    final forceExpand = q.isNotEmpty;
     final grouped = <String, List<STOService>>{};
     for (final s in services) {
-      grouped.putIfAbsent(s.category, () => []).add(s);
+      final raw = s.category.trim();
+      final cat = raw.isEmpty ? 'Прочее' : raw;
+      grouped.putIfAbsent(cat, () => []).add(s);
     }
+    final keys = grouped.keys.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
 
     return Column(
-      children: grouped.entries.map((entry) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(top: 8, bottom: 8),
-              child: Text(
-                entry.key,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: context.palette.textSecondary,
-                ),
-              ),
-            ),
-            Container(
-              decoration: BoxDecoration(
-                color: context.palette.cardBg,
+      children: keys.map((key) {
+        final list = grouped[key]!;
+        final expanded = forceExpand || _expandedServiceCategoryKeys.contains(key);
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Material(
+                color: context.palette.nestedBg,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: context.palette.border),
-              ),
-              child: Column(
-                children: entry.value.map((service) {
-                  final isSelected = _selectedServices.contains(service.id);
-                  return KeyedSubtree(
-                    key: _keyForServiceRow(service.id),
-                    child: GestureDetector(
-                    onTap: () {
-                      HapticFeedback.selectionClick();
-                      setState(() {
-                        if (isSelected) {
-                          _selectedServices.remove(service.id);
-                        } else {
-                          _selectedServices.add(service.id);
-                        }
-                      });
-                    },
-                    behavior: HitTestBehavior.opaque,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
-                      ),
-                      decoration: BoxDecoration(
-                        border: Border(
-                          bottom: BorderSide(
-                            color: context.palette.border,
-                            width: 0.5,
+                child: InkWell(
+                  onTap: forceExpand
+                      ? null
+                      : () {
+                          setState(() {
+                            if (_expandedServiceCategoryKeys.contains(key)) {
+                              _expandedServiceCategoryKeys.remove(key);
+                            } else {
+                              _expandedServiceCategoryKeys.add(key);
+                            }
+                          });
+                        },
+                  borderRadius: BorderRadius.circular(12),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            key,
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: context.palette.textPrimary,
+                            ),
                           ),
                         ),
-                      ),
-                      child: Row(
-                        children: [
-                          AnimatedContainer(
-                            duration: const Duration(milliseconds: 200),
-                            width: 22,
-                            height: 22,
-                            decoration: BoxDecoration(
-                              color: isSelected
-                                  ? context.palette.primary
-                                  : Colors.transparent,
-                              borderRadius: BorderRadius.circular(6),
-                              border: Border.all(
-                                color: isSelected
-                                    ? context.palette.primary
-                                    : context.palette.textTertiary,
-                                width: isSelected ? 0 : 1.5,
-                              ),
-                            ),
-                            child: isSelected
-                                ? Icon(
-                                    Icons.check,
-                                    size: 14,
-                                    color: context.palette.onAccent,
-                                  )
-                                : null,
+                        Text(
+                          '${list.length}',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: context.palette.textTertiary,
                           ),
-                          SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  service.name,
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: isSelected
-                                        ? context.palette.textPrimary
-                                        : context.palette.textSecondary,
-                                    fontWeight: isSelected
-                                        ? FontWeight.w500
-                                        : FontWeight.w400,
-                                  ),
-                                ),
-                                SizedBox(height: 2),
-                                Text(
-                                  '⏱ ${Formatters.durationMinutes(service.effectiveDurationMinutes(_selectedCarBodyType()))}',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: isSelected
-                                        ? context.palette.textSecondary
-                                        : context.palette.textTertiary,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Text(
-                            Formatters.money(
-                              service.effectivePriceKopecks(
-                                _selectedCarBodyType(),
-                              ),
-                            ),
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: isSelected
-                                  ? context.palette.primary
-                                  : context.palette.textSecondary,
-                            ),
+                        ),
+                        if (!forceExpand) ...[
+                          const SizedBox(width: 4),
+                          Icon(
+                            expanded
+                                ? Icons.expand_less_rounded
+                                : Icons.expand_more_rounded,
+                            size: 22,
+                            color: context.palette.textTertiary,
                           ),
                         ],
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              if (expanded) ...[
+                const SizedBox(height: 6),
+                Container(
+                  decoration: BoxDecoration(
+                    color: context.palette.cardBg,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: context.palette.border),
+                  ),
+                  child: Column(
+                    children: List.generate(
+                      list.length,
+                      (i) => _buildSelectableServiceTile(
+                        list[i],
+                        isLast: i == list.length - 1,
                       ),
                     ),
                   ),
-                  );
-                }).toList(),
-              ),
-            ),
-          ],
+                ),
+              ],
+            ],
+          ),
         );
       }).toList(),
     );
@@ -1595,16 +1931,16 @@ class _STODetailScreenState extends ConsumerState<STODetailScreen> {
               ),
               child: ElevatedButton(
                 onPressed: () {
-                  pushCupertino<String?>(
+                  pushCupertino<_BookingSuccessPayload?>(
                     context,
                     _BookingScreen(
                       sto: widget.sto,
                       selectedServiceIds: _selectedServices.toList(),
                       cars: ref.watch(carsProvider).valueOrNull ?? [],
                     ),
-                  ).then((msg) {
-                    if (msg == null || msg.isEmpty) return;
-                    _showBookingCreatedSnackBar(msg);
+                  ).then((payload) {
+                    if (payload == null || !mounted) return;
+                    _showBookingSuccessSheet(context, payload);
                   });
                 },
                 style: ElevatedButton.styleFrom(
@@ -3400,9 +3736,14 @@ class _BookingScreenState extends ConsumerState<_BookingScreen>
         final range = (start != null && end != null)
             ? Formatters.bookingRangeLabel(start, end)
             : '${Formatters.dateFullRu(_selectedDate)}, $slot';
-        final detail = '${widget.sto.name} · $range · ≈ ${Formatters.durationMinutes(_totalDuration)}';
         // Не вызывать setState перед pop — лишний rebuild + снятие маршрута даёт сбои Overlay (`_elements.contains`).
-        Navigator.of(context).pop<String?>('Запись создана!\n$detail');
+        Navigator.of(context).pop<_BookingSuccessPayload>(
+          _BookingSuccessPayload(
+            sto: widget.sto,
+            bookingRangeLine: range,
+            durationLabel: '≈ ${Formatters.durationMinutes(_totalDuration)}',
+          ),
+        );
       },
       failure: (e) {
         if (mounted) setState(() => _isSubmitting = false);

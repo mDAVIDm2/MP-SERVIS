@@ -12,6 +12,9 @@ export type OrderStatus =
   | 'done'
   | 'cancelled';
 
+/** Кто подтверждает «запись» (pending_confirmation → дальше). */
+export type OrderConfirmationRequiredFrom = 'client' | 'organization';
+
 @Entity('orders')
 export class Order {
   @PrimaryGeneratedColumn('uuid')
@@ -62,11 +65,26 @@ export class Order {
   previousStatus: string | null;
 
   /**
+   * Кто должен подтвердить бронь в pending_confirmation:
+   * - organization — заявка от клиента, подтверждает СТО;
+   * - client — запись создала организация, подтверждает клиент.
+   */
+  @Column({ name: 'confirmation_required_from', type: 'varchar', length: 20, default: 'organization' })
+  confirmationRequiredFrom: OrderConfirmationRequiredFrom;
+
+  /**
    * Первый момент, когда заказ вышел из ожидания подтверждения записи (в confirmed или in_progress).
    * Используется для лимита тарифа по числу подтверждённых заказов за месяц (часовой пояс организации).
    */
   @Column({ name: 'first_confirmed_at', type: 'timestamptz', nullable: true })
   firstConfirmedAt: Date | null;
+
+  /**
+   * СТО подтвердило бронь за клиента при создании (например, согласие по телефону).
+   * Клиент получает push с формулировкой «подтверждение оформлено от имени сервиса».
+   */
+  @Column({ name: 'org_confirmed_on_behalf_of_client', type: 'boolean', default: false })
+  orgConfirmedOnBehalfOfClient: boolean;
 
   @Column({ name: 'date_time', type: 'timestamptz' })
   dateTime: Date;

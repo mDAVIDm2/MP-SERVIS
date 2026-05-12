@@ -61,6 +61,7 @@ class OrderApiService {
     int? mileage,
     String? engineType,
     String? bayId,
+    bool confirmForClient = false,
   }) async {
     try {
       final body = {
@@ -85,6 +86,7 @@ class OrderApiService {
         if (mileage != null) 'mileage': mileage,
         if (engineType != null && engineType.isNotEmpty) 'engine_type': engineType,
         if (bayId != null && bayId.isNotEmpty) 'bay_id': bayId,
+        if (confirmForClient) 'confirm_for_client': true,
       };
       final res = await _client.post(ApiEndpoints.orders, data: body);
       final data = res.data;
@@ -187,6 +189,28 @@ class OrderApiService {
       if (data is! Map<String, dynamic>) return Result.failure(const ApiException(code: ApiErrorCode.internal, message: 'Неверный формат ответа'));
       final orderMap = data['order'] as Map<String, dynamic>? ?? data['data'] as Map<String, dynamic>? ?? data;
       return Result.success(Order.fromJson(Map<String, dynamic>.from(orderMap)));
+    } on DioException catch (e) {
+      return Result.failure(ApiException.fromDioError(e));
+    }
+  }
+
+  /// Привязка материала склада к заказу (план; резерв при подтверждённом заказе — на бэкенде).
+  Future<Result<void>> addOrderInventoryLine(
+    String orderId, {
+    required String inventoryItemId,
+    required double quantity,
+    String? unit,
+    String? orderItemId,
+  }) async {
+    try {
+      final body = <String, dynamic>{
+        'inventory_item_id': inventoryItemId,
+        'quantity': quantity,
+        if (unit != null && unit.trim().isNotEmpty) 'unit': unit.trim(),
+        if (orderItemId != null && orderItemId.trim().isNotEmpty) 'order_item_id': orderItemId.trim(),
+      };
+      await _client.post(ApiEndpoints.orderInventoryLines(orderId), data: body);
+      return Result.success(null);
     } on DioException catch (e) {
       return Result.failure(ApiException.fromDioError(e));
     }

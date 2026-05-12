@@ -56,11 +56,14 @@ dependencies:
   pdf: ^3.11.1
   printing: ^5.13.3
   equatable: ^2.0.7
+  fl_chart: ^0.69.2
   json_annotation: ^4.9.0
   freezed_annotation: ^2.4.4
   firebase_core: ^4.5.0
   firebase_messaging: ^16.1.2
   flutter_local_notifications: ^21.0.0
+  flutter_image_compress: ^2.4.0
+  http_parser: ^4.1.2
 
 dev_dependencies:
   flutter_test:

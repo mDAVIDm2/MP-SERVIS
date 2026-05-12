@@ -5,9 +5,11 @@ import 'package:flutter/foundation.dart';
 import '../../../shared/models/external_poi.dart';
 
 /// Публичные зеркала Overpass (при 429/перегрузке пробуем следующее).
+/// Без User-Agent часть зеркал отвечает 429/HTML вместо JSON.
 const _overpassUrls = <String>[
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.openstreetmap.fr/api/interpreter',
 ];
 
 /// Сервис поиска организаций (автосервис, мойки, шиномонтаж) по видимой области через Overpass API (OSM).
@@ -25,7 +27,19 @@ String _carWashSubtypeLabel(Map<String, dynamic> tags, String name) {
 }
 
 class OverpassPoiService {
-  OverpassPoiService([Dio? dio]) : _dio = dio ?? Dio();
+  OverpassPoiService([Dio? dio])
+      : _dio = dio ??
+            Dio(
+              BaseOptions(
+                connectTimeout: const Duration(seconds: 45),
+                sendTimeout: const Duration(seconds: 45),
+                receiveTimeout: const Duration(seconds: 45),
+                headers: <String, dynamic>{
+                  'User-Agent': 'MP-Servis-Client/1.0 (+https://mpservis.ru; Flutter)',
+                  'Accept': 'application/json, text/plain, */*',
+                },
+              ),
+            );
 
   final Dio _dio;
 
@@ -58,7 +72,6 @@ class OverpassPoiService {
 out center;
 ''';
 
-    const connectTimeout = Duration(seconds: 45);
     for (var urlIdx = 0; urlIdx < _overpassUrls.length; urlIdx++) {
       final url = _overpassUrls[urlIdx];
       for (var attempt = 0; attempt < 3; attempt++) {
@@ -66,15 +79,20 @@ out center;
           final response = await _dio.post<String>(
             url,
             data: body,
-            options: Options(
-              contentType: 'text/plain; charset=utf-8',
-              sendTimeout: connectTimeout,
-              receiveTimeout: connectTimeout,
-            ),
+            options: Options(contentType: 'text/plain; charset=utf-8'),
           );
           if (response.statusCode == 200 && response.data != null) {
+            final raw = response.data!.trimLeft();
+            if (raw.isEmpty ||
+                (!raw.startsWith('{') && !raw.startsWith('['))) {
+              if (kDebugMode) {
+                debugPrint('[Overpass POI] $url — не JSON (HTML/ошибка), попытка ${attempt + 1}');
+              }
+              await Future<void>.delayed(Duration(seconds: 1 + attempt));
+              continue;
+            }
             final list = _parseResponse(response.data!);
-            if (kDebugMode && list.isNotEmpty) {
+            if (kDebugMode) {
               debugPrint('[Overpass POI] $url — найдено: ${list.length}');
             }
             return list;
@@ -111,6 +129,10 @@ out center;
   List<ExternalPOI> _parseResponse(String jsonStr) {
     try {
       final data = jsonDecode(jsonStr) as Map<String, dynamic>?;
+      final remark = data?['remark']?.toString() ?? '';
+      if (remark.isNotEmpty && kDebugMode) {
+        debugPrint('[Overpass POI] remark: $remark');
+      }
       final elements = data?['elements'] as List<dynamic>?;
       if (elements == null) return [];
 

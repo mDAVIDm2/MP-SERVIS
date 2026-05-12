@@ -283,24 +283,31 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> with Widget
       outgoing.add(ChatOutgoingImage(bytes: b, filename: name));
     }
     final text = _controller.text.trim();
-    final ok = await ref.read(chatRepositoryProvider.notifier).sendMessageWithMedia(
+    final err = await ref.read(chatRepositoryProvider.notifier).sendMessageWithMedia(
           widget.chatId,
           text: text,
           images: outgoing,
         );
     if (!mounted) return;
-    if (ok) {
+    if (err == null) {
       _controller.clear();
       _scrollToBottom();
     } else {
+      final lower = err.toLowerCase();
+      final showTariff = lower.contains('тариф') ||
+          lower.contains('подписк') ||
+          lower.contains('лимит') ||
+          lower.contains('изображен');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('Не удалось отправить фото. Проверьте сеть и лимит тарифа.'),
-          duration: const Duration(seconds: 6),
-          action: SnackBarAction(
-            label: 'Подробнее',
-            onPressed: () => openSubscriptionTariffScreen(context),
-          ),
+          content: Text(err),
+          duration: const Duration(seconds: 8),
+          action: showTariff
+              ? SnackBarAction(
+                  label: 'Тариф',
+                  onPressed: () => openSubscriptionTariffScreen(context),
+                )
+              : null,
         ),
       );
     }
@@ -1203,8 +1210,10 @@ class _ApprovalOrderListPanelState extends State<_ApprovalOrderListPanel> {
                     border: Border.all(color: order.status.color.withValues(alpha: 0.4)),
                   ),
                   child: Text(
-                    order.status.label,
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: order.status.color),
+                    order.stoDisplayStatusLabel,
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: order.status.color, height: 1.2),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 if (isActive) ...[
@@ -1649,6 +1658,7 @@ class _OrderTimelineCard extends StatelessWidget {
     final textPrimary = isDesktop ? AppColorsDesktop.textPrimary : AppColors.textPrimary;
     final textTertiary = isDesktop ? AppColorsDesktop.textTertiary : AppColors.textTertiary;
     final statusColor = order.status.color;
+    final isAwaitingClientApproval = order.status == OrderStatus.pendingApproval;
     const radius = 24.0;
     final range = _bookingTimeRange(order);
     return Padding(
@@ -1663,13 +1673,53 @@ class _OrderTimelineCard extends StatelessWidget {
               constraints: BoxConstraints(maxWidth: isDesktop ? 440 : 320),
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               decoration: BoxDecoration(
-                color: statusColor.withValues(alpha: 0.12),
+                color: isAwaitingClientApproval
+                    ? (isDesktop ? AppColorsDesktop.statusApproval : AppColors.statusApproval).withValues(alpha: 0.10)
+                    : statusColor.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(radius),
-                border: Border.all(color: statusColor.withValues(alpha: 0.4)),
+                border: Border.all(
+                  color: isAwaitingClientApproval
+                      ? (isDesktop ? AppColorsDesktop.statusApproval : AppColors.statusApproval).withValues(alpha: 0.55)
+                      : statusColor.withValues(alpha: 0.4),
+                  width: isAwaitingClientApproval ? 1.5 : 1,
+                ),
+                boxShadow: isAwaitingClientApproval
+                    ? [
+                        BoxShadow(
+                          color: (isDesktop ? AppColorsDesktop.statusApproval : AppColors.statusApproval)
+                              .withValues(alpha: 0.12),
+                          blurRadius: 18,
+                          offset: const Offset(0, 6),
+                        ),
+                      ]
+                    : null,
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  if (isAwaitingClientApproval) ...[
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.send_rounded,
+                          size: 18,
+                          color: isDesktop ? AppColorsDesktop.statusApproval : AppColors.statusApproval,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Ожидает ответа клиента',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.2,
+                            color: isDesktop ? AppColorsDesktop.textTertiary : AppColors.textTertiary,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                  ],
                   Center(
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -1679,9 +1729,10 @@ class _OrderTimelineCard extends StatelessWidget {
                         border: Border.all(color: statusColor.withValues(alpha: 0.45)),
                       ),
                       child: Text(
-                        order.status.label,
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: statusColor),
-                        maxLines: 1,
+                        order.stoDisplayStatusLabel,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: statusColor, height: 1.2),
+                        maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
@@ -1832,8 +1883,10 @@ class _OrderFullCard extends StatelessWidget {
                                 border: Border.all(color: statusColor.withValues(alpha: 0.4)),
                               ),
                               child: Text(
-                                order.status.label,
-                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: statusColor),
+                                order.stoDisplayStatusLabel,
+                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: statusColor, height: 1.2),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
                           ],
@@ -2139,13 +2192,19 @@ class _ApprovalCard extends ConsumerWidget {
                       ),
                       const SizedBox(height: 12),
                       Text(
-                        'Отправлено на согласование клиенту',
+                        'Запрос на согласование отправлен',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w700,
                           color: textPrimary,
                         ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Клиент увидит предложение и сможет подтвердить или выбрать другое время',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 12, color: textTertiary, height: 1.35),
                       ),
                     ],
                   ),

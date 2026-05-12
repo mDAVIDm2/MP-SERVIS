@@ -1899,7 +1899,7 @@ class _DesktopScheduleOrderCardState extends ConsumerState<_DesktopScheduleOrder
               border: Border.all(color: accent.withValues(alpha: 0.4), width: 1),
             ),
             child: Text(
-              order.status.label,
+              order.stoDisplayStatusLabel,
               style: TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: accent),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -2140,7 +2140,7 @@ class _DesktopScheduleOrderCardState extends ConsumerState<_DesktopScheduleOrder
               border: Border.all(color: accent.withValues(alpha: 0.4), width: 1),
             ),
             child: Text(
-              order.status.label,
+              order.stoDisplayStatusLabel,
               style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: accent),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,

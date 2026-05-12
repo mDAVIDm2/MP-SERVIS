@@ -144,9 +144,11 @@ export class AuthOtpService {
       expires_in: Math.floor(ttlMs / 1000),
       resend_after: Math.floor(RESEND_COOLDOWN_MS / 1000),
     };
-    const debugFlag = (this.config.get<string>('OTP_DEBUG_RETURN_CODE') || '').trim().toLowerCase();
-    if (debugFlag === '1' || debugFlag === 'true' || debugFlag === 'yes') {
-      return { ...base, debug_otp: code };
+    if (process.env.NODE_ENV !== 'production') {
+      const debugFlag = (this.config.get<string>('OTP_DEBUG_RETURN_CODE') || '').trim().toLowerCase();
+      if (debugFlag === '1' || debugFlag === 'true' || debugFlag === 'yes') {
+        return { ...base, debug_otp: code };
+      }
     }
     return base;
   }

@@ -3,6 +3,7 @@ import '../api_client.dart';
 import '../api_endpoints.dart';
 import '../api_exceptions.dart';
 import '../../../shared/models/settings_models.dart';
+import '../../../shared/models/sto_amenity_catalog.dart';
 
 /// API настроек организации (услуги, слоты, шаблоны и т.д.).
 class SettingsApiService {
@@ -54,6 +55,15 @@ class SettingsApiService {
             ?.map((e) => e as String)
             .toList() ??
         [];
+    final rawAmenities = data['amenity_ids'] as List<dynamic>? ?? data['amenityIds'] as List<dynamic>?;
+    final amenityIds = rawAmenities == null
+        ? <String>[]
+        : rawAmenities
+            .map((e) => e.toString())
+            .where((id) => StoAmenityCatalog.ids.contains(id))
+            .toList();
+    final publicDescription =
+        (data['public_description'] as String? ?? data['publicDescription'] as String? ?? '').trim();
     final slotsRaw =
         data['slots'] as Map<String, dynamic>? ?? <String, dynamic>{};
     final slots = SlotsSettings.fromJson(slotsRaw);
@@ -70,6 +80,8 @@ class SettingsApiService {
       services: services,
       packages: packages,
       carBrands: carBrands,
+      amenityIds: amenityIds,
+      publicDescription: publicDescription,
       slotsSettings: slots,
       notificationSettings: notifications,
       messageTemplates: messageTemplates,
@@ -132,6 +144,8 @@ class SettingsApiService {
             )
             .toList(),
         'car_brands': state.carBrands,
+        'amenity_ids': state.amenityIds,
+        'public_description': state.publicDescription,
         'slots': {
           'slot_duration_minutes': state.slotsSettings.slotDurationMinutes,
           'confirmation_timeout_minutes':

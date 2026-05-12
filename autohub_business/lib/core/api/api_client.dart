@@ -100,7 +100,15 @@ class ApiClient {
     required FormData formData,
     void Function(int, int)? onSendProgress,
   }) =>
-      _dio.post<T>(path, data: formData, onSendProgress: onSendProgress);
+      _dio.post<T>(
+        path,
+        data: formData,
+        onSendProgress: onSendProgress,
+        options: Options(
+          sendTimeout: const Duration(minutes: 3),
+          receiveTimeout: const Duration(minutes: 2),
+        ),
+      );
 
   /// GET с ответом в виде байтов (корректная склейка URL для путей с ведущим `/`).
   Future<Result<List<int>>> getBytes(String path, {CancelToken? cancelToken}) async {

@@ -176,7 +176,7 @@ class _TaskCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
-                    order.status.label,
+                    order.stoDisplayStatusLabel,
                     style: TextStyle(fontSize: 12, color: order.status.color),
                   ),
                 ),

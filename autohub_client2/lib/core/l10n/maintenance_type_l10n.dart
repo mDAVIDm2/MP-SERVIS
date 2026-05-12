@@ -9,8 +9,17 @@ List<({String title, List<MaintenanceType> types})> maintenanceTypeSections(AppL
           MaintenanceType.oil,
           MaintenanceType.airFilter,
           MaintenanceType.antifreeze,
+          MaintenanceType.brakeFluid,
+          MaintenanceType.atf,
           MaintenanceType.timingBelt,
           MaintenanceType.sparkPlugs,
+        ],
+      ),
+      (
+        title: l.maintSectionFilters,
+        types: [
+          MaintenanceType.cabinFilter,
+          MaintenanceType.fuelFilter,
         ],
       ),
       (
@@ -27,6 +36,7 @@ List<({String title, List<MaintenanceType> types})> maintenanceTypeSections(AppL
         types: [
           MaintenanceType.battery,
           MaintenanceType.inspection,
+          MaintenanceType.wiperBlades,
           MaintenanceType.general,
         ],
       ),
@@ -61,6 +71,16 @@ extension MaintenanceTypeL10n on MaintenanceType {
         return 'Wheel alignment';
       case MaintenanceType.general:
         return 'General maintenance';
+      case MaintenanceType.cabinFilter:
+        return 'Cabin air filter';
+      case MaintenanceType.fuelFilter:
+        return 'Fuel filter replacement';
+      case MaintenanceType.brakeFluid:
+        return 'Brake fluid replacement';
+      case MaintenanceType.atf:
+        return 'Automatic transmission fluid (ATF) replacement';
+      case MaintenanceType.wiperBlades:
+        return 'Wiper blades replacement';
     }
   }
 
@@ -73,6 +93,10 @@ extension MaintenanceTypeL10n on MaintenanceType {
       case MaintenanceType.antifreeze:
       case MaintenanceType.timingBelt:
       case MaintenanceType.sparkPlugs:
+      case MaintenanceType.cabinFilter:
+      case MaintenanceType.fuelFilter:
+      case MaintenanceType.brakeFluid:
+      case MaintenanceType.atf:
       case MaintenanceType.general:
         return 'Per manufacturer schedule';
       case MaintenanceType.brakes:
@@ -86,6 +110,8 @@ extension MaintenanceTypeL10n on MaintenanceType {
         return 'Annual';
       case MaintenanceType.alignment:
         return 'After tires or suspension work';
+      case MaintenanceType.wiperBlades:
+        return 'Wear and season';
     }
   }
 }

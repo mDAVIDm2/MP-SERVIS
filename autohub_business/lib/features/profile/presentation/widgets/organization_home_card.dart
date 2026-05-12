@@ -9,6 +9,7 @@ import 'create_organization_flow.dart';
 import '../screens/staff_screen.dart';
 import '../../../clients/presentation/screens/clients_screen.dart';
 import '../../../cars/presentation/screens/profile_cars_screen.dart';
+import '../../../inventory/presentation/screens/inventory_mobile_screen.dart';
 
 /// Блок «Мой автосервис» на профиле: шапка → карточка сервиса; ниже только строки переходов (как на десктопе).
 class OrganizationHomeCard extends ConsumerWidget {
@@ -22,6 +23,7 @@ class OrganizationHomeCard extends ConsumerWidget {
     final showClients = user.role.canSeeClients;
     /// Персонал и приглашения — только владелец, админ, самозанятый (не мастер).
     final canOpenStaff = user.role.canInviteStaff;
+    final canOpenWarehouse = user.role != BusinessRole.master;
     final canOrgHub = user.effectiveCanManageOrgSettings;
     final soloHint = user.role == BusinessRole.solo;
     final orgAsync = ref.watch(organizationProvider);
@@ -136,6 +138,17 @@ class OrganizationHomeCard extends ConsumerWidget {
               MaterialPageRoute<void>(builder: (_) => const ProfileCarsScreen()),
             ),
           ),
+          if (canOpenWarehouse)
+            ListTile(
+              leading: Icon(Icons.warehouse_rounded, color: iconC),
+              title: const Text('Склад'),
+              subtitle: const Text('Остатки, движения, закупки'),
+              trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textSecondary),
+              onTap: () => Navigator.push<void>(
+                context,
+                MaterialPageRoute<void>(builder: (_) => const InventoryMobileScreen()),
+              ),
+            ),
           if (canOpenStaff)
             ListTile(
               leading: Icon(Icons.groups_rounded, color: iconC),

@@ -34,13 +34,19 @@ import { OtpDeliveryAggregator } from './otp-delivery/otp-delivery.aggregator';
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
-      useFactory: (config: ConfigService) => ({
-        secret: config.get<string>('JWT_SECRET') || 'dev-secret',
-        signOptions: {
-          expiresIn:
-            config.get<string>('JWT_ACCESS_EXPIRES_IN') || config.get<string>('JWT_EXPIRES_IN') || '15m',
-        },
-      }),
+      useFactory: (config: ConfigService) => {
+        const secret = config.get<string>('JWT_SECRET')?.trim();
+        if (process.env.NODE_ENV === 'production' && !secret) {
+          throw new Error('JWT_SECRET is required when NODE_ENV=production');
+        }
+        return {
+          secret: secret || 'dev-secret',
+          signOptions: {
+            expiresIn:
+              config.get<string>('JWT_ACCESS_EXPIRES_IN') || config.get<string>('JWT_EXPIRES_IN') || '15m',
+          },
+        };
+      },
       inject: [ConfigService],
     }),
   ],

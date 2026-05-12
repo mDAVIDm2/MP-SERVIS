@@ -10,6 +10,7 @@ import {
   ALLOWED_ORDER_IMAGE_MIMES,
   MAX_ORDER_IMAGE_UPLOAD_BYTES,
   processOrderImageUpload,
+  resolveOrderUploadMime,
 } from './order-image.processor';
 
 @Injectable()
@@ -43,16 +44,16 @@ export class MediaService {
     created_at: string;
   }> {
     const { orderId, organizationId, file, uploadedByUserId } = params;
-    const mime = String(file.mimetype || '').toLowerCase().split(';')[0].trim();
-    if (!ALLOWED_ORDER_IMAGE_MIMES.has(mime)) {
-      throw new BadRequestException('Допустимы только изображения JPEG, PNG или WebP.');
-    }
     const raw = file.buffer?.length ? file.buffer : null;
     if (!raw || raw.length === 0) {
       throw new BadRequestException('Пустой файл');
     }
     if (raw.length > MAX_ORDER_IMAGE_UPLOAD_BYTES) {
       throw new BadRequestException('Файл слишком большой (максимум 25 МБ до сжатия).');
+    }
+    const mime = resolveOrderUploadMime(file.mimetype, file.originalname, raw);
+    if (!ALLOWED_ORDER_IMAGE_MIMES.has(mime)) {
+      throw new BadRequestException('Допустимы только изображения JPEG, PNG, WebP, HEIC.');
     }
 
     let processed;
@@ -174,16 +175,16 @@ export class MediaService {
     const { messageId, chatId, organizationId, files, uploadedByUserId } = params;
     let sortOrder = 0;
     for (const file of files) {
-      const mime = String(file.mimetype || '').toLowerCase().split(';')[0].trim();
-      if (!ALLOWED_ORDER_IMAGE_MIMES.has(mime)) {
-        throw new BadRequestException('Допустимы только изображения JPEG, PNG или WebP.');
-      }
       const raw = file.buffer?.length ? file.buffer : null;
       if (!raw || raw.length === 0) {
         throw new BadRequestException('Пустой файл');
       }
       if (raw.length > MAX_ORDER_IMAGE_UPLOAD_BYTES) {
         throw new BadRequestException('Файл слишком большой (максимум 25 МБ до сжатия).');
+      }
+      const mime = resolveOrderUploadMime(file.mimetype, file.originalname, raw);
+      if (!ALLOWED_ORDER_IMAGE_MIMES.has(mime)) {
+        throw new BadRequestException('Допустимы только изображения JPEG, PNG, WebP, HEIC.');
       }
       let processed;
       try {

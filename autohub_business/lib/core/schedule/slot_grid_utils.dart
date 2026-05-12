@@ -1,6 +1,54 @@
 import '../../shared/models/order_model.dart';
 import '../../shared/models/settings_models.dart';
 
+/// Занятый интервал в минутах от полуночи [start, end).
+class BusyMinutesRange {
+  final int startMinutes;
+  final int endMinutes;
+  const BusyMinutesRange(this.startMinutes, this.endMinutes);
+}
+
+/// Пересечения с [busy] (другие заказы на этот день).
+bool isCalendarMinutesIntervalFree({
+  required int startMinutes,
+  required int durationMinutes,
+  required List<BusyMinutesRange> busy,
+}) {
+  if (durationMinutes <= 0) return true;
+  final endM = startMinutes + durationMinutes;
+  return !busy.any((b) => startMinutes < b.endMinutes && endM > b.startMinutes);
+}
+
+/// Занятость по заказам на календарный день (локальное время).
+///
+/// Важно: [day] и сетка слотов — в локальном календаре. Поля заказа с API часто в UTC
+/// (`...Z`); без [orderStartWallClock] часы/дни смешиваются и занятость рисуется не в тех ячейках.
+List<BusyMinutesRange> busyMinuteRangesForOrdersDay(
+  List<Order> orders,
+  DateTime day, {
+  String? masterId,
+}) {
+  final dayStart = DateTime(day.year, day.month, day.day);
+  final out = <BusyMinutesRange>[];
+  for (final o in orders) {
+    if (masterId != null && masterId.isNotEmpty) {
+      final om = o.masterId;
+      if (om != null && om.isNotEmpty && om != masterId) continue;
+    }
+    final raw = o.plannedStartTime ?? o.dateTime;
+    if (raw == null) continue;
+    final wall = orderStartWallClock(raw);
+    if (wall == null) continue;
+    final d = DateTime(wall.year, wall.month, wall.day);
+    if (d != dayStart) continue;
+    final startM = wall.hour * 60 + wall.minute;
+    final dur = o.items.fold<int>(0, (s, i) => s + i.estimatedMinutes);
+    final useDur = dur > 0 ? dur : 60;
+    out.add(BusyMinutesRange(startM, startM + useDur));
+  }
+  return out;
+}
+
 /// Параметры сетки «время записи» (шаг и границы дня).
 class SlotGridDimensions {
   final int slotDurationMinutes;

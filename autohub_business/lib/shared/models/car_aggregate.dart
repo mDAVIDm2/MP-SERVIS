@@ -74,6 +74,22 @@ class CarView {
     return nearest;
   }
 
+  /// URL фото для карточки заказа: сначала с самого заказа, иначе — с любого другого заказа по тому же [Order.carId]
+  /// (как в клиентском приложении: снимок в гараже может быть только на части заказов).
+  static String? resolveCarPhotoUrlForOrder(Order order, List<Order> allOrders) {
+    final direct = order.carPhotoUrl?.trim();
+    if (direct != null && direct.isNotEmpty) return direct;
+    final cid = order.carId.trim();
+    if (cid.isEmpty || cid == 'unknown') return null;
+    for (final o in allOrders) {
+      if (o.id == order.id) continue;
+      if (o.carId.trim() != cid) continue;
+      final u = o.carPhotoUrl?.trim();
+      if (u != null && u.isNotEmpty) return u;
+    }
+    return null;
+  }
+
   /// Собирает уникальные автомобили из списка заказов (по carId или carInfo+vin).
   static List<CarView> fromOrders(List<Order> orders) {
     final byKey = <String, List<Order>>{};

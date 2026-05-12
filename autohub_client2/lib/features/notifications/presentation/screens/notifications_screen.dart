@@ -96,6 +96,12 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
               builder: (_) => AddCarScreen(editCarId: cid),
             ),
           );
+        } else if (item.type == NotificationType.carTransferRequest ||
+            item.type == NotificationType.carTransferResult) {
+          ref.invalidate(incomingCarTransfersProvider);
+          ref.invalidate(outgoingCarTransfersProvider);
+          await ref.read(carsProvider.notifier).loadCars(silent: true);
+          if (context.mounted) Navigator.pop(context);
         } else if (context.mounted) {
           Navigator.pop(context);
         }

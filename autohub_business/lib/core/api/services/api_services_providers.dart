@@ -14,6 +14,8 @@ import 'reference_api_service.dart';
 import '../../../shared/models/car_reference_models.dart';
 import '../../../core/utils/russian_plate_utils.dart';
 import 'notifications_api_service.dart';
+import 'inventory_api_service.dart';
+import '../../../shared/models/inventory_models.dart';
 
 final apiClientProvider = Provider<ApiClient>((ref) {
   return ApiClient();
@@ -112,4 +114,20 @@ final quickOrderCatalogPicksProvider = FutureProvider<List<QuickRefCarPick>>((re
 
 final notificationsApiServiceProvider = Provider<NotificationsApiService>((ref) {
   return NotificationsApiService(ref.watch(apiClientProvider));
+});
+
+final inventoryApiServiceProvider = Provider<InventoryApiService>((ref) {
+  return InventoryApiService(ref.watch(apiClientProvider));
+});
+
+final inventoryItemsProvider = FutureProvider.autoDispose<List<InventoryItemModel>>((ref) async {
+  final api = ref.watch(inventoryApiServiceProvider);
+  final r = await api.listItems();
+  return r.when(success: (d) => d, failure: (e) => throw e);
+});
+
+final inventoryMovementsProvider = FutureProvider.autoDispose<List<InventoryMovementModel>>((ref) async {
+  final api = ref.watch(inventoryApiServiceProvider);
+  final r = await api.listRecentMovements();
+  return r.when(success: (d) => d, failure: (e) => throw e);
 });

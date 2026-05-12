@@ -4,9 +4,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/config/platform_utils.dart';
 import '../../../../core/pdf/order_worksheet_pdf.dart';
+import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_colors_desktop.dart';
 import '../../../../core/theme/desktop_design_system.dart';
 import '../../../../shared/models/order_model.dart';
+import '../../../../shared/models/car_aggregate.dart';
 import '../../../../shared/models/chat_model.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../core/auth/auth_provider.dart';
@@ -22,9 +24,94 @@ import '../screens/confirm_correct_order_screen.dart';
 import '../../../chats/presentation/screens/chat_detail_screen.dart';
 import '../../../chats/presentation/widgets/authenticated_profile_avatar.dart';
 import '../../../../shared/widgets/authenticated_api_image.dart';
+import '../../../cars/presentation/widgets/car_transfer_insight_banner.dart';
+import 'order_inventory_lines_card.dart';
 
 /// Ширина правой панели деталей заказа (desktop).
 const double kOrderDetailPanelWidth = 465.0; // ~7% уже 500
+
+/// Мягкий блок-напоминание: согласование у клиента в приложении; кнопка «Подтвердить…» уведомит его.
+class StoApprovalCooperationBanner extends StatelessWidget {
+  const StoApprovalCooperationBanner({super.key, this.isDesktop = true});
+
+  final bool isDesktop;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = isDesktop ? AppColorsDesktop.statusApproval : AppColors.statusApproval;
+    final bg = isDesktop ? AppColorsDesktop.nestedBg : AppColors.nestedBg;
+    final textPri = isDesktop ? AppColorsDesktop.textPrimary : AppColors.textPrimary;
+    final textSec = isDesktop ? AppColorsDesktop.textSecondary : AppColors.textSecondary;
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(isDesktop ? 14 : 12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            accent.withValues(alpha: 0.11),
+            bg,
+            accent.withValues(alpha: 0.04),
+          ],
+        ),
+        border: Border.all(color: accent.withValues(alpha: 0.32)),
+        boxShadow: [
+          BoxShadow(
+            color: accent.withValues(alpha: 0.10),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(9),
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(
+              Icons.mark_chat_read_rounded,
+              color: accent,
+              size: isDesktop ? 22 : 20,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Клиент видит перечень в приложении',
+                  style: TextStyle(
+                    fontSize: isDesktop ? 14 : 13,
+                    fontWeight: FontWeight.w700,
+                    height: 1.25,
+                    color: textPri,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  'Согласовали устно? Нажмите кнопку ниже — клиент получит уведомление в приложении и в чате.',
+                  style: TextStyle(
+                    fontSize: isDesktop ? 12.5 : 12,
+                    height: 1.4,
+                    color: textSec,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 /// Индикатор услуги: пустой круг → выполнено: зелёный круг с галочкой (центрируется в [Row] с `CrossAxisAlignment.center`).
 Widget _orderServiceCompletionLeading(bool completed, {double size = 22}) {
@@ -221,7 +308,7 @@ class OrderDetailHeader extends StatelessWidget {
                           borderRadius: BorderRadius.circular(DesktopDesignSystem.radiusBadge),
                         ),
                         child: Text(
-                          order.status.label,
+                          order.stoDisplayStatusLabel,
                           style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: statusColor),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
@@ -613,6 +700,8 @@ class OrderVehicleCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final allOrders = ref.watch(orderRepositoryProvider);
+    final carPhoto = CarView.resolveCarPhotoUrlForOrder(order, allOrders);
     final plate = order.licensePlate?.trim();
     final vin = order.vin?.trim();
     final hasPrimaryIds =
@@ -626,9 +715,10 @@ class OrderVehicleCard extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (order.carPhotoUrl != null && order.carPhotoUrl!.trim().isNotEmpty) ...[
+          CarTransferInsightBanner(carId: order.carId, dense: true),
+          if (carPhoto != null && carPhoto.isNotEmpty) ...[
             AuthenticatedApiImage(
-              imageUrl: order.carPhotoUrl,
+              imageUrl: carPhoto,
               width: kOrderDetailPanelWidth - 32,
               height: 120,
               borderRadius: 12,
@@ -1060,9 +1150,6 @@ class OrderServicesCard extends ConsumerWidget {
   }
 
   static Widget _approvalItemRow(BuildContext context, ApprovalItem item, bool canSeePrices) {
-    final durationLabel = item.estimatedMinutes >= 60
-        ? '${item.estimatedMinutes ~/ 60} ч ${item.estimatedMinutes % 60} мин'
-        : '${item.estimatedMinutes} мин';
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
@@ -1081,10 +1168,6 @@ class OrderServicesCard extends ConsumerWidget {
                     fontSize: 13,
                     color: AppColorsDesktop.textPrimary,
                   ),
-                ),
-                Text(
-                  durationLabel,
-                  style: DesktopDesignSystem.meta,
                 ),
               ],
             ),
@@ -1132,10 +1215,6 @@ class OrderServicesCard extends ConsumerWidget {
                         color: AppColorsDesktop.textPrimary,
                         decoration: item.isCompleted ? TextDecoration.lineThrough : null,
                       ),
-                    ),
-                    Text(
-                      item.durationLabel,
-                      style: DesktopDesignSystem.meta,
                     ),
                   ],
                 ),
@@ -1448,13 +1527,49 @@ class OrderActionsBar extends ConsumerWidget {
         style: _primaryBtnStyle,
         child: const Text('Изменить состав заказа'),
       );
-      secondaryButtons.add(
-        OutlinedButton(
-          onPressed: () => setStatus(OrderStatus.confirmed, 'Заказ подтверждён без изменений'),
-          style: _secondaryBtnStyle,
-          child: const Text('Подтвердить без изменений'),
-        ),
-      );
+      if (order.clientMustConfirmPending) {
+        secondaryButtons.add(
+          FilledButton.tonal(
+            onPressed: () async {
+              final result = await repo.confirmOrderByPhone(orderId);
+              if (!context.mounted) return;
+              if (result.errorOrNull == null) {
+                await ref.read(orderRepositoryProvider.notifier).refreshOrder(orderId);
+                if (!context.mounted) return;
+                showMessage('Готово. Клиент получит уведомление и системное сообщение в чате');
+              } else {
+                showMessage(result.errorOrNull!.message);
+              }
+            },
+            style: FilledButton.styleFrom(
+              minimumSize: const Size(double.infinity, 44),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(DesktopDesignSystem.radiusButton),
+              ),
+            ),
+            child: const Text('Подтвердить от лица клиента'),
+          ),
+        );
+        secondaryButtons.add(
+          Padding(
+            padding: const EdgeInsets.only(top: 4, bottom: 4),
+            child: Text(
+              'Если запись согласована устно или по телефону. Статус заказа обновится, клиент увидит подтверждение в приложении.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColorsDesktop.textSecondary, fontSize: 12, height: 1.35),
+            ),
+          ),
+        );
+      } else {
+        secondaryButtons.add(
+          OutlinedButton(
+            onPressed: () => setStatus(OrderStatus.confirmed, 'Заказ подтверждён без изменений'),
+            style: _secondaryBtnStyle,
+            child: const Text('Подтвердить без изменений'),
+          ),
+        );
+      }
     }
 
     if (order.status == OrderStatus.confirmed) {
@@ -1501,20 +1616,21 @@ class OrderActionsBar extends ConsumerWidget {
     }
 
     if (order.status == OrderStatus.pendingApproval) {
-      primaryButton = FilledButton(
+      primaryButton = FilledButton.icon(
         onPressed: () async {
           final result = await repo.confirmOrderByPhone(orderId);
           if (!context.mounted) return;
           if (result.errorOrNull == null) {
             await ref.read(orderRepositoryProvider.notifier).refreshOrder(orderId);
             if (!context.mounted) return;
-            showMessage('Подтверждено по телефону');
+            showMessage('Готово. Клиент получит уведомление о подтверждении');
           } else {
             showMessage(result.errorOrNull!.message);
           }
         },
         style: _primaryBtnStyle,
-        child: const Text('Подтвердить по телефону'),
+        icon: const Icon(Icons.notifications_active_rounded, size: 20),
+        label: const Text('Подтвердить и уведомить клиента'),
       );
     }
 
@@ -1565,6 +1681,10 @@ class OrderActionsBar extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (order.status == OrderStatus.pendingApproval) ...[
+            const StoApprovalCooperationBanner(isDesktop: true),
+            const SizedBox(height: 16),
+          ],
           if (primaryButton != null) ...[
             primaryButton,
             const SizedBox(height: 12),
@@ -1975,6 +2095,8 @@ class _OrderDetailPanelState extends ConsumerState<OrderDetailPanel> {
                           }
                         : null,
                   ),
+                  const SizedBox(height: DesktopDesignSystem.blockSpacing),
+                  OrderInventoryLinesCard(orderId: widget.orderId, order: order),
                   const SizedBox(height: DesktopDesignSystem.blockSpacing),
                   OrderScheduleCard(
                     order: order,

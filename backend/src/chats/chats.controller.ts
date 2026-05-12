@@ -131,7 +131,11 @@ export class ChatsController {
   }
 
   @Post(':id/messages/with-media')
-  @UseInterceptors(FilesInterceptor('files', 20))
+  @UseInterceptors(
+    FilesInterceptor('files', 20, {
+      limits: { fileSize: 30 * 1024 * 1024 },
+    }),
+  )
   async sendMessageWithMedia(
     @Param('id') id: string,
     @Req() req: Request & { user: { organizationId?: string | null; phone?: string; id?: string } },

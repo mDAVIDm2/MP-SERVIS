@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'core/onboarding/garage_first_car_tutorial_layer.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -185,7 +186,20 @@ class _MpServisAppState extends ConsumerState<MpServisApp> with WidgetsBindingOb
       themeMode: themeMode,
       locale: locale,
       navigatorKey: showKey ? appRootNavigatorKey : null,
-      builder: (context, child) => L10nScope(l10n: l10n, child: child ?? const SizedBox.shrink()),
+      builder: (context, child) => L10nScope(
+        l10n: l10n,
+        child: Consumer(
+          builder: (context, ref, _) {
+            return Stack(
+              alignment: Alignment.bottomCenter,
+              children: [
+                child ?? const SizedBox.shrink(),
+                const GarageFirstCarTutorialLayer(),
+              ],
+            );
+          },
+        ),
+      ),
       home: home,
     );
   }

@@ -14,6 +14,7 @@ import '../../../../shared/widgets/authenticated_api_image.dart';
 import '../../../orders/presentation/screens/order_detail_screen.dart';
 import '../../../orders/presentation/widgets/order_detail_panel.dart';
 import '../providers/cars_providers.dart';
+import '../widgets/car_transfer_insight_banner.dart';
 
 class CarDetailScreen extends ConsumerWidget {
   const CarDetailScreen({
@@ -72,6 +73,7 @@ class CarDetailScreen extends ConsumerWidget {
                 child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  CarTransferInsightBanner(carId: car.id),
                   _CarInfoCard(car: car, canSeePrices: canSeePrices, isDesktop: true),
                   const SizedBox(height: DesktopDesignSystem.blockSpacing),
                   _CarOrdersSection(
@@ -101,6 +103,7 @@ class CarDetailScreen extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          CarTransferInsightBanner(carId: car.id),
           _CarInfoCard(car: car, canSeePrices: canSeePrices, isDesktop: false),
           const SizedBox(height: 24),
           _CarOrdersSection(
@@ -440,7 +443,7 @@ class _OrderTile extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      order.status.label,
+                      order.stoDisplayStatusLabel,
                       style: TextStyle(fontSize: 12, color: order.status.color),
                     ),
                     if (order.masterName != null && order.masterName!.isNotEmpty)

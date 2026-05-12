@@ -139,7 +139,9 @@ final effectiveFavoriteStoIdsProvider = Provider<Set<String>>((ref) {
   final filterByCar = ref.watch(filterByCarSettingProvider);
   final selectedId = ref.watch(selectedCarIdProvider);
   if (filterByCar && selectedId != null) {
-    return state.perCarIds[selectedId] ?? {};
+    final per = state.perCarIds[selectedId];
+    if (per != null && per.isNotEmpty) return per;
+    return state.globalIds;
   }
   return state.globalIds;
 });

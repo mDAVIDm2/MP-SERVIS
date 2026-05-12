@@ -20,12 +20,68 @@ import '../../../../shared/models/sto_model.dart';
 import '../../../../shared/org_business_kind.dart';
 import '../../../../shared/widgets/common_widgets.dart';
 import '../../../chats/presentation/screens/chat_detail_screen.dart';
+import '../widgets/client_service_booking_confirm_sheet.dart';
 import '../widgets/order_avatars.dart';
 import '../../../search/presentation/screens/sto_detail_screen.dart';
 
 class OrderDetailScreen extends ConsumerStatefulWidget {
   final Order order;
   const OrderDetailScreen({super.key, required this.order});
+
+  /// Открыть чат по заказу (карточка в гараже, кнопка «Перейти в чат»).
+  static Future<void> openChatForOrder(BuildContext context, WidgetRef ref, Order order) async {
+    final orderApi = ref.read(orderApiServiceProvider);
+    final chatIdResult = await orderApi.getChatIdForOrder(order.id);
+    final resolvedChatId = chatIdResult.dataOrNull;
+    if (resolvedChatId == null || resolvedChatId.isEmpty) {
+      if (context.mounted) {
+        final l10n = L10nScope.of(context);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(() {
+            final e = chatIdResult.errorOrNull;
+            if (e == null) return l10n.chatByOrderNotFound;
+            return e.message.toString();
+          }()),
+          backgroundColor: context.palette.error,
+        ));
+      }
+      return;
+    }
+    if (kDebugMode) {
+      debugPrint('[open_chat_from_order] orderId=${order.id}, resolvedChatId=$resolvedChatId, stoId=${order.stoId}');
+    }
+    await ref.read(chatsProvider.notifier).loadChats();
+    if (!context.mounted) return;
+    final chats = ref.read(chatsProvider).valueOrNull ?? [];
+    Chat? chat;
+    for (final c in chats) {
+      if (c.id == resolvedChatId) {
+        chat = c;
+        break;
+      }
+    }
+    if (chat == null) {
+      final oneResult = await ref.read(chatsProvider.notifier).getChatById(resolvedChatId);
+      chat = oneResult.dataOrNull;
+      if (chat == null) {
+        if (context.mounted) {
+          final l10n = L10nScope.of(context);
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(() {
+              final e = oneResult.errorOrNull;
+              if (e == null) return l10n.openChatFailed;
+              return e.message.toString();
+            }()),
+            backgroundColor: context.palette.error,
+          ));
+        }
+        return;
+      }
+    }
+    if (context.mounted) {
+      pushCupertino(context, ChatDetailScreen(chat: chat, currentOrderId: order.id));
+    }
+  }
 
   /// Вызов построения маршрута до точки (используется из OrderCard и др.).
   static Future<void> openRouteToSto(BuildContext context, WidgetRef ref, STO sto) async {
@@ -66,58 +122,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
 
   /// Открыть чат по заказу: GET /orders/:orderId/chat → chat_id, затем открыть тот же chatId, куда Business пишет approval.
   Future<void> _openChat(BuildContext context, WidgetRef ref, Order order) async {
-    final orderApi = ref.read(orderApiServiceProvider);
-    final chatIdResult = await orderApi.getChatIdForOrder(order.id);
-    final resolvedChatId = chatIdResult.dataOrNull;
-    if (resolvedChatId == null || resolvedChatId.isEmpty) {
-      if (context.mounted) {
-        final l10n = L10nScope.of(context);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(() {
-            final e = chatIdResult.errorOrNull;
-            if (e == null) return l10n.chatByOrderNotFound;
-            return e.message.toString();
-          }()),
-          backgroundColor: context.palette.error,
-        ));
-      }
-      return;
-    }
-    if (kDebugMode) {
-      debugPrint('[open_chat_from_order] orderId=${order.id}, resolvedChatId=$resolvedChatId, stoId=${order.stoId}');
-    }
-    await ref.read(chatsProvider.notifier).loadChats();
-    if (!context.mounted) return;
-    final chats = ref.read(chatsProvider).valueOrNull ?? [];
-    Chat? chat;
-    for (final c in chats) {
-      if (c.id == resolvedChatId) {
-        chat = c;
-        break;
-      }
-    }
-    // Не создаём stub: при отсутствии чата в списке запрашиваем GET /chats/:id (реальный чат с историей).
-    if (chat == null) {
-      final oneResult = await ref.read(chatsProvider.notifier).getChatById(resolvedChatId);
-      chat = oneResult.dataOrNull;
-      if (chat == null) {
-        if (context.mounted) {
-          final l10n = L10nScope.of(context);
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(() {
-              final e = oneResult.errorOrNull;
-              if (e == null) return l10n.openChatFailed;
-              return e.message.toString();
-            }()),
-            backgroundColor: context.palette.error,
-          ));
-        }
-        return;
-      }
-    }
-    if (context.mounted) {
-      pushCupertino(context, ChatDetailScreen(chat: chat, currentOrderId: order.id));
-    }
+    await OrderDetailScreen.openChatForOrder(context, ref, order);
   }
 
   @override
@@ -175,6 +180,14 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _buildStatusBanner(context, order, l10n),
+          if (order.orgConfirmedOnBehalfOfClient) ...[
+            SizedBox(height: 10),
+            _buildOrgConfirmedOnBehalfBanner(context, l10n),
+          ],
+          if (order.clientMustConfirmPendingBooking) ...[
+            SizedBox(height: 12),
+            _buildClientMustConfirmPanel(context, ref, order, l10n),
+          ],
           SizedBox(height: 16),
 
           if (order.status == OrderStatus.pendingApproval)
@@ -349,6 +362,30 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     );
   }
 
+  Widget _buildOrgConfirmedOnBehalfBanner(BuildContext context, AppL10n l10n) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: context.palette.nestedBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: context.palette.border),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.info_outline_rounded, size: 20, color: context.palette.textSecondary),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              l10n.orderOrgConfirmedOnBehalfNote,
+              style: TextStyle(fontSize: 13, height: 1.35, color: context.palette.textSecondary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   int _statusStep(Order order) {
     switch (order.status) {
       case OrderStatus.pendingConfirmation: return 0;
@@ -359,6 +396,44 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
       case OrderStatus.done: return 4;
       case OrderStatus.cancelled: return 0;
     }
+  }
+
+  Widget _buildClientMustConfirmPanel(BuildContext context, WidgetRef ref, Order order, AppL10n l10n) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: context.palette.primary.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: context.palette.primary.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(l10n.orderPendingYouMustConfirmTitle, style: TextStyle(
+            fontSize: 16, fontWeight: FontWeight.w600, color: context.palette.textPrimary,
+          )),
+          const SizedBox(height: 6),
+          Text(l10n.orderPendingYouMustConfirmSubtitle, style: TextStyle(
+            fontSize: 14, color: context.palette.textSecondary, height: 1.35,
+          )),
+          const SizedBox(height: 12),
+          GoldButton(
+            text: l10n.orderConfirmBookingButton,
+            onPressed: () {
+              HapticFeedback.lightImpact();
+              showClientServiceBookingConfirmSheet(
+                context,
+                ref,
+                order,
+                onSuccess: () {
+                  ref.invalidate(orderByIdProvider(order.id));
+                },
+              );
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildApprovalBanner(BuildContext context, WidgetRef ref, Order order, AppL10n l10n) {

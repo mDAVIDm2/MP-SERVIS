@@ -57,12 +57,17 @@ class _ApprovalSlotPickerScreenState extends ConsumerState<ApprovalSlotPickerScr
     );
   }
 
+  /// API отдаёт total_minutes по service_ids из прайса; в заказе длительность позиций может быть меньше (1ч→30мин).
+  /// Для визуала и «продолжения» визита по сетке важна фактическая длительность из заказа.
   int get _jobDurationMinutes {
+    final o = _orderFromList(ref.read(ordersProvider).valueOrNull ?? []);
+    if (o != null) {
+      final m = o.estimatedMinutesForDisplay;
+      if (m > 0) return m.clamp(15, 24 * 60);
+    }
     final fromApi = _slotsResult?.totalMinutes ?? 0;
     if (fromApi > 0) return fromApi;
-    final o = _orderFromList(ref.read(ordersProvider).valueOrNull ?? []);
-    if (o == null) return 60;
-    return o.items.fold<int>(0, (s, i) => s + i.estimatedMinutes).clamp(15, 24 * 60);
+    return 60;
   }
 
   DateTime? get _draftJobStart {
@@ -140,13 +145,30 @@ class _ApprovalSlotPickerScreenState extends ConsumerState<ApprovalSlotPickerScr
     _selectedTimeSlotIndex = 0;
   }
 
+  /// Минуты и id из заказа — бэкенд тогда не суммирует `duration_minutes` из прайса (120), а честные 30 из заказа.
+  List<SlotAvailabilityItem>? _itemsFromOrder(Order? o) {
+    if (o == null) return null;
+    final rows = <SlotAvailabilityItem>[];
+    for (final i in o.items.where((x) => !x.isRejected)) {
+      final sid = i.serviceId?.trim();
+      rows.add(SlotAvailabilityItem(
+        estimatedMinutes: i.estimatedMinutes.clamp(1, 24 * 60),
+        serviceId: sid != null && sid.isNotEmpty ? sid : null,
+      ));
+    }
+    if (rows.isEmpty) return null;
+    return rows;
+  }
+
   Future<void> _loadSlots() async {
     setState(() => _slotsResult = null);
     final repo = ref.read(stoRepositoryProvider);
+    final ord = _orderFromList(ref.read(ordersProvider).valueOrNull ?? []);
     final result = await repo.getAvailableSlots(
       widget.stoId,
       _selectedDate,
       widget.serviceIds,
+      items: _itemsFromOrder(ord),
     );
     if (!mounted) return;
     result.when(

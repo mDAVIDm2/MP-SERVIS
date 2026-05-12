@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../shared/models/settings_models.dart';
 import '../../shared/models/service_catalog_models.dart';
+import '../../shared/models/sto_amenity_catalog.dart';
 import '../api/services/api_services_providers.dart';
 import '../api/services/settings_api_service.dart';
 import '../auth/auth_provider.dart';
@@ -15,6 +16,8 @@ const _kBrandsPrefix = 'settings_brands_';
 const _kSlotsPrefix = 'settings_slots_';
 const _kNotificationsPrefix = 'settings_notifications_';
 const _kTemplatesPrefix = 'settings_templates_';
+const _kAmenitiesPrefix = 'settings_amenities_';
+const _kPublicDescPrefix = 'settings_public_desc_';
 
 /// Репозиторий настроек: загрузка с API (GET), сохранение через API (PATCH) после каждой мутации + кэш в prefs по orgId.
 class SettingsRepository extends StateNotifier<SettingsState> {
@@ -43,6 +46,8 @@ class SettingsRepository extends StateNotifier<SettingsState> {
         categories: _defaultCategories(),
         services: _defaultServices(),
         carBrands: _defaultBrands(),
+        amenityIds: const [],
+        publicDescription: '',
         packages: const [],
         slotsSettings: const SlotsSettings(),
         notificationSettings: const NotificationSettings(),
@@ -55,15 +60,37 @@ class SettingsRepository extends StateNotifier<SettingsState> {
     final slots = _loadSlots(prefs, orgId);
     final notifications = _loadNotifications(prefs, orgId);
     final templates = _loadTemplates(prefs, orgId);
+    final amenityIds = _loadAmenityIds(prefs, orgId);
+    final publicDescription = _loadPublicDescription(prefs, orgId);
     return SettingsState(
       categories: categories,
       services: services,
       packages: packages,
       carBrands: brands,
+      amenityIds: amenityIds,
+      publicDescription: publicDescription,
       slotsSettings: slots,
       notificationSettings: notifications,
       messageTemplates: templates,
     );
+  }
+
+  static List<String> _loadAmenityIds(SharedPreferences prefs, String orgId) {
+    final raw = prefs.getString(_kAmenitiesPrefix + orgId);
+    if (raw == null) return [];
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      return list
+          .map((e) => e.toString())
+          .where((id) => StoAmenityCatalog.ids.contains(id))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  static String _loadPublicDescription(SharedPreferences prefs, String orgId) {
+    return prefs.getString(_kPublicDescPrefix + orgId) ?? '';
   }
 
   static List<ServiceCategory> _loadCategories(
@@ -268,6 +295,18 @@ class SettingsRepository extends StateNotifier<SettingsState> {
       );
   }
 
+  void _saveAmenityIds() {
+    if (_orgId != null) {
+      _prefs.setString(_key(_kAmenitiesPrefix), jsonEncode(state.amenityIds));
+    }
+  }
+
+  void _savePublicDescription() {
+    if (_orgId != null) {
+      _prefs.setString(_key(_kPublicDescPrefix), state.publicDescription);
+    }
+  }
+
   /// Загрузить настройки: при наличии orgId — GET API, иначе или при ошибке — из prefs.
   Future<void> load(String? orgId) async {
     _orgId = orgId;
@@ -287,6 +326,8 @@ class SettingsRepository extends StateNotifier<SettingsState> {
       _saveSlots();
       _saveNotifications();
       _saveTemplates();
+      _saveAmenityIds();
+      _savePublicDescription();
     } else {
       state = _loadFromPrefs(_prefs, orgId);
     }
@@ -306,7 +347,34 @@ class SettingsRepository extends StateNotifier<SettingsState> {
       _saveSlots();
       _saveNotifications();
       _saveTemplates();
+      _saveAmenityIds();
+      _savePublicDescription();
     }
+  }
+
+  /// Удобства для карточки в приложении клиента (только id из [StoAmenityCatalog]).
+  void setAmenityIds(List<String> ids) {
+    final next = ids.where((id) => StoAmenityCatalog.ids.contains(id)).toList();
+    state = state.copyWith(amenityIds: next);
+    _saveAmenityIds();
+    _patchApi();
+  }
+
+  void toggleAmenity(String id) {
+    if (!StoAmenityCatalog.byId.containsKey(id)) return;
+    final list = List<String>.from(state.amenityIds);
+    if (list.contains(id)) {
+      list.remove(id);
+    } else {
+      list.add(id);
+    }
+    setAmenityIds(list);
+  }
+
+  void setPublicDescription(String text) {
+    state = state.copyWith(publicDescription: text.trim());
+    _savePublicDescription();
+    _patchApi();
   }
 
   // Categories
@@ -369,6 +437,32 @@ class SettingsRepository extends StateNotifier<SettingsState> {
     );
     _saveCategories();
     _patchApi();
+  }
+
+  /// Переставить категории в списке (удержание «ТО и обслуживание» первой при наличии).
+  void reorderCategories(int oldIndex, int newIndex) {
+    final sorted = sortedServiceCategoriesForDisplay(state.categories);
+    if (oldIndex < 0 || oldIndex >= sorted.length) return;
+    var ni = newIndex;
+    if (ni > oldIndex) ni -= 1;
+    if (ni < 0 || ni >= sorted.length) return;
+    final moved = sorted.removeAt(oldIndex);
+    sorted.insert(ni, moved);
+    final ensured = _ensureToCategoryFirst(sorted);
+    final renumbered = <ServiceCategory>[];
+    for (var i = 0; i < ensured.length; i++) {
+      renumbered.add(ensured[i].copyWith(order: i));
+    }
+    state = state.copyWith(categories: renumbered);
+    _saveCategories();
+    _patchApi();
+  }
+
+  static List<ServiceCategory> _ensureToCategoryFirst(List<ServiceCategory> list) {
+    final idx = list.indexWhere((c) => c.name.trim().toLowerCase() == kToServiceCategoryName.toLowerCase());
+    if (idx <= 0) return list;
+    final t = list.removeAt(idx);
+    return [t, ...list];
   }
 
   void deleteCategory(String id) {

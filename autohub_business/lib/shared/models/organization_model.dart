@@ -1,5 +1,7 @@
 import 'organization_business_kind.dart';
+import 'organization_hours_exception.dart';
 import 'organization_subscription_usage.dart';
+import 'organization_working_hours_week.dart';
 
 /// Профиль организации (точка для клиента).
 class OrganizationInfo {
@@ -7,6 +9,10 @@ class OrganizationInfo {
   final String address;
   final String phone;
   final String workingHours;
+  /// Пн–вс, с бэкенда `working_hours_week`; при сохранении пересчитывается [workingHours] на сервере.
+  final OrganizationWorkingHoursWeek? workingHoursWeek;
+  /// Разовые выходные или сокращённые дни (`working_hours_exceptions`).
+  final List<OrganizationHoursException>? workingHoursExceptions;
   /// Вид бизнеса (sto, car_wash, …) — для подписей у клиентов, например в чате.
   final String businessKind;
   /// `staff_based` | `bay_based` — с бэкенда; для назначения постов в расписании нужен `bay_based`.
@@ -25,6 +31,8 @@ class OrganizationInfo {
     this.address = '',
     this.phone = '',
     this.workingHours = 'Пн–Пт 9:00–19:00, Сб 10:00–16:00',
+    this.workingHoursWeek,
+    this.workingHoursExceptions,
     this.businessKind = OrganizationBusinessKindCodes.sto,
     this.schedulingMode = 'staff_based',
     this.photoUrls = const [],
@@ -38,6 +46,8 @@ class OrganizationInfo {
     String? address,
     String? phone,
     String? workingHours,
+    OrganizationWorkingHoursWeek? workingHoursWeek,
+    List<OrganizationHoursException>? workingHoursExceptions,
     String? businessKind,
     String? schedulingMode,
     List<String>? photoUrls,
@@ -50,6 +60,8 @@ class OrganizationInfo {
       address: address ?? this.address,
       phone: phone ?? this.phone,
       workingHours: workingHours ?? this.workingHours,
+      workingHoursWeek: workingHoursWeek ?? this.workingHoursWeek,
+      workingHoursExceptions: workingHoursExceptions ?? this.workingHoursExceptions,
       businessKind: businessKind != null
           ? OrganizationBusinessKindCodes.normalize(businessKind)
           : this.businessKind,
@@ -73,6 +85,9 @@ class OrganizationInfo {
       address: j['address'] as String? ?? '',
       phone: j['phone'] as String? ?? '',
       workingHours: j['working_hours'] as String? ?? j['workingHours'] as String? ?? 'Пн–Пт 9:00–19:00, Сб 10:00–16:00',
+      workingHoursWeek: OrganizationWorkingHoursWeek.tryParseJson(j['working_hours_week']),
+      workingHoursExceptions:
+          OrganizationHoursException.tryParseList(j['working_hours_exceptions']),
       businessKind: OrganizationBusinessKindCodes.normalize(
         j['business_kind']?.toString() ?? j['businessKind']?.toString(),
       ),

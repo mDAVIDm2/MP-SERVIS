@@ -8,6 +8,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_colors_desktop.dart';
 import '../../../../core/theme/desktop_light_theme.dart';
 import '../../../../shared/models/order_model.dart';
+import '../../../../shared/models/car_aggregate.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../core/auth/auth_provider.dart';
 import '../../../../core/repositories/chat_repository.dart';
@@ -22,6 +23,7 @@ import '../../../chats/presentation/screens/chat_detail_screen.dart';
 import '../../../chats/presentation/widgets/authenticated_profile_avatar.dart';
 import '../../../../shared/widgets/authenticated_api_image.dart';
 import '../widgets/order_detail_panel.dart';
+import '../../../cars/presentation/widgets/car_transfer_insight_banner.dart';
 
 Widget _mobileServiceCompletionLeading(bool completed) {
   if (completed) {
@@ -64,6 +66,33 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     // Всегда обновляем заказ при открытии экрана (актуальные items после подтверждения согласования и т.д.).
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(orderRepositoryProvider.notifier).refreshOrder(widget.orderId);
+    });
+  }
+
+  Future<void> _openOrderChatWithContext(BuildContext context) async {
+    final orderApi = ref.read(orderApiServiceProvider);
+    final chatResult = await orderApi.getChatForOrder(widget.orderId);
+    if (!context.mounted) return;
+    final chatId = chatResult.dataOrNull;
+    if (chatId == null || chatId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(chatResult.errorOrNull?.message ?? 'Чат по заказу не найден'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+    await ensureChatDataLoaded(ref, chatId, refValid: () => context.mounted);
+    if (!context.mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!context.mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => ChatDetailScreen(chatId: chatId, currentOrderId: widget.orderId),
+        ),
+      );
     });
   }
 
@@ -132,6 +161,8 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     }
 
     final hasBays = ref.watch(settingsRepositoryProvider).slotsSettings.hasNamedBays;
+    final allOrders = ref.watch(orderRepositoryProvider);
+    final resolvedCarPhoto = CarView.resolveCarPhotoUrlForOrder(order, allOrders);
     final mainItems = order.itemsForDisplay.where((i) => !i.isAdditional).toList();
     final addItems = order.itemsForDisplay.where((i) => i.isAdditional).toList();
     return Scaffold(
@@ -151,8 +182,12 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
         padding: const EdgeInsets.fromLTRB(14, 10, 14, 24),
         children: [
           _MobileOrderHeaderCard(order: order),
+          if (order.carId.trim().isNotEmpty && order.carId != 'unknown') ...[
+            const SizedBox(height: 12),
+            CarTransferInsightBanner(carId: order.carId),
+          ],
           if (order.carInfo.trim().isNotEmpty ||
-              (order.carPhotoUrl != null && order.carPhotoUrl!.trim().isNotEmpty)) ...[
+              (resolvedCarPhoto != null && resolvedCarPhoto.isNotEmpty)) ...[
             const SizedBox(height: 12),
             _MobileSheet(child: _MobileCarBlock(order: order)),
           ],
@@ -194,35 +229,51 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
                   ),
                   if (order.clientPhone != null) ...[
                     const SizedBox(height: 8),
-                    InkWell(
-                      onTap: () {
-                        final uri = Uri(
-                          scheme: 'tel',
-                          path: order.clientPhone!.replaceAll(RegExp(r'[^\d+]'), ''),
-                        );
-                        launchUrl(uri);
-                      },
-                      borderRadius: BorderRadius.circular(10),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: Row(
-                          children: [
-                            Icon(Icons.phone_in_talk_rounded,
-                                color: AppColors.primary.withValues(alpha: 0.95), size: 18),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: SelectableText(
-                                order.clientPhone!,
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w500,
-                                  color: AppColors.primary,
-                                ),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Expanded(
+                          child: InkWell(
+                            onTap: () {
+                              final uri = Uri(
+                                scheme: 'tel',
+                                path: order.clientPhone!.replaceAll(RegExp(r'[^\d+]'), ''),
+                              );
+                              launchUrl(uri);
+                            },
+                            borderRadius: BorderRadius.circular(10),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.phone_in_talk_rounded,
+                                      color: AppColors.primary.withValues(alpha: 0.95), size: 18),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: SelectableText(
+                                      order.clientPhone!,
+                                      style: const TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w500,
+                                        color: AppColors.primary,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                          ],
+                          ),
                         ),
-                      ),
+                        if (order.status.isActive) ...[
+                          const SizedBox(width: 4),
+                          IconButton(
+                            tooltip: 'Чат с клиентом',
+                            onPressed: () => _openOrderChatWithContext(context),
+                            icon: Icon(Icons.chat_bubble_outline_rounded,
+                                color: AppColors.primary.withValues(alpha: 0.95), size: 22),
+                          ),
+                        ],
+                      ],
                     ),
                   ],
                 ],
@@ -601,7 +652,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
   }
 }
 
-/// Компактная шапка: номер, дата/время, статус (акцент на статусе цветом).
+/// Шапка мобильной карточки: сверху статус строкой; ниже — номер слева, дата/время записи справа.
 class _MobileOrderHeaderCard extends StatelessWidget {
   const _MobileOrderHeaderCard({required this.order});
 
@@ -610,6 +661,7 @@ class _MobileOrderHeaderCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = order.status.color;
+    final start = order.plannedStartTime ?? order.dateTime;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
@@ -618,48 +670,50 @@ class _MobileOrderHeaderCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AppColors.border.withValues(alpha: 0.55)),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Text(
+                order.stoDisplayStatusLabel,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: c,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                  height: 1.25,
+                ),
+              ),
+            ),
+          ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Expanded(
+                child: Text(
                   order.displayNumber,
                   style: const TextStyle(
-                    fontSize: 20,
+                    fontSize: 18,
                     fontWeight: FontWeight.w700,
-                    letterSpacing: -0.4,
+                    letterSpacing: -0.35,
                     height: 1.15,
                     color: AppColors.textPrimary,
                   ),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  formatDateTimeOrNull(order.dateTime),
-                  style: const TextStyle(fontSize: 12, height: 1.25, color: AppColors.textTertiary),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: c.withValues(alpha: 0.18),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: c.withValues(alpha: 0.45)),
-            ),
-            child: Text(
-              order.status.label,
-              style: TextStyle(
-                color: c,
-                fontWeight: FontWeight.w700,
-                fontSize: 12,
-                height: 1.15,
               ),
-            ),
+              Text(
+                formatDateTimeOrNull(start),
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textSecondary,
+                ),
+                textAlign: TextAlign.right,
+              ),
+            ],
           ),
         ],
       ),
@@ -720,15 +774,17 @@ class _MobileCarBlock extends ConsumerWidget {
   final Order order;
 
   @override
-  Widget build(BuildContext context, WidgetRef _) {
-    final hasPhoto = order.carPhotoUrl != null && order.carPhotoUrl!.trim().isNotEmpty;
+  Widget build(BuildContext context, WidgetRef ref) {
+    final allOrders = ref.watch(orderRepositoryProvider);
+    final photo = CarView.resolveCarPhotoUrlForOrder(order, allOrders);
+    final hasPhoto = photo != null && photo.isNotEmpty;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Center(
           child: hasPhoto
               ? AuthenticatedApiImage(
-                  imageUrl: order.carPhotoUrl,
+                  imageUrl: photo,
                   width: 112,
                   height: 112,
                   borderRadius: 56,
@@ -1217,10 +1273,37 @@ class _Actions extends ConsumerWidget {
             child: const Text('Изменить состав заказа'),
           ),
           const SizedBox(height: 8),
-          OutlinedButton(
-            onPressed: () => setStatus(OrderStatus.confirmed, 'Заказ подтверждён без изменений'),
-            child: const Text('Подтвердить без изменений'),
-          ),
+          if (order.clientMustConfirmPending) ...[
+            FilledButton.tonal(
+              onPressed: () async {
+                final result = await repo.confirmOrderByPhone(orderId);
+                if (!context.mounted) return;
+                if (result.errorOrNull == null) {
+                  await ref.read(orderRepositoryProvider.notifier).refreshOrder(orderId);
+                  if (!context.mounted) return;
+                  showMessage('Готово. Клиент получит уведомление и системное сообщение в чате');
+                } else {
+                  showMessage(result.errorOrNull!.message);
+                }
+              },
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(double.infinity, 46),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: const Text('Подтвердить от лица клиента'),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Если запись согласована устно или по телефону. Статус обновится, клиент увидит подтверждение в приложении.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, height: 1.35, color: AppColors.textSecondary.withValues(alpha: 0.9)),
+            ),
+          ] else
+            OutlinedButton(
+              onPressed: () => setStatus(OrderStatus.confirmed, 'Заказ подтверждён без изменений'),
+              child: const Text('Подтвердить без изменений'),
+            ),
         ],
         if (order.status == OrderStatus.confirmed) ...[
           OutlinedButton(
@@ -1258,19 +1341,26 @@ class _Actions extends ConsumerWidget {
           ),
         ],
         if (order.status == OrderStatus.pendingApproval) ...[
-          ElevatedButton(
+          const StoApprovalCooperationBanner(isDesktop: false),
+          const SizedBox(height: 12),
+          FilledButton.icon(
             onPressed: () async {
               final result = await repo.confirmOrderByPhone(orderId);
               if (!context.mounted) return;
               if (result.errorOrNull == null) {
                 await ref.read(orderRepositoryProvider.notifier).refreshOrder(orderId);
                 if (!context.mounted) return;
-                showMessage('Подтверждено по телефону');
+                showMessage('Готово. Клиент получит уведомление о подтверждении');
               } else {
                 showMessage(result.errorOrNull!.message);
               }
             },
-            child: const Text('Подтвердить по телефону'),
+            icon: const Icon(Icons.notifications_active_rounded, size: 20),
+            label: const Text('Подтвердить и уведомить клиента'),
+            style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
           ),
         ],
         if (order.status == OrderStatus.completed) ...[

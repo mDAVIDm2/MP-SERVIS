@@ -49,7 +49,7 @@
 	<string>Чтобы прикрепить фото к сообщению в чате с клиентом.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Чтобы сделать фото для чата с клиентом.</string>
-	<!-- Dev: HTTP к LAN IP (например 192.168.1.187:3000). В проде — только HTTPS. -->
+	<!-- Dev: HTTP к локальному Nest (LAN IP или 10.0.2.2 в эмуляторе). Прод: HTTPS api.mp-servis.ru -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

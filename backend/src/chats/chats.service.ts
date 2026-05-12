@@ -567,6 +567,7 @@ export class ChatsService {
     let n = pending.length;
     for (const m of sorted) {
       if (m.isFromClient) continue;
+      if (m.isSystem) continue;
       if (pendingIds.has(m.id)) continue;
       const at = m.at instanceof Date ? m.at : new Date(m.at as any);
       if (at > lastRead) n++;

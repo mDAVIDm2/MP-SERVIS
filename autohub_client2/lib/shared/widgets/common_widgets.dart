@@ -211,6 +211,7 @@ class SectionHeader extends StatelessWidget {
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: 16, vertical: compact ? 10 : 14),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Expanded(
             child: FittedBox(
@@ -230,25 +231,22 @@ class SectionHeader extends StatelessWidget {
           ),
           if (actionText != null) ...[
             SizedBox(width: 8),
-            Flexible(
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: onAction,
-                  borderRadius: BorderRadius.circular(8),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                    child: Text(
-                      actionText!,
-                      style: TextStyle(
-                        fontSize: compact ? 13 : 15,
-                        fontWeight: FontWeight.w500,
-                        color: p.textSecondary,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.end,
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onAction,
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+                  child: Text(
+                    actionText!,
+                    style: TextStyle(
+                      fontSize: compact ? 13 : 15,
+                      fontWeight: FontWeight.w500,
+                      color: p.textSecondary,
                     ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ),

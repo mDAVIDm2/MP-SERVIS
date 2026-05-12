@@ -12,6 +12,17 @@ bool stoMatchesCarBrand(List<String> specializations, String carBrand) {
   return false;
 }
 
+/// Строка из [specializations] с оформлением, совпадающим с [carBrand] (как в списке, регистр сохраняется).
+String? matchingSpecializationLabel(List<String> specializations, String? carBrand) {
+  if (carBrand == null || carBrand.trim().isEmpty) return null;
+  if (specializations.isEmpty) return null;
+  final b = carBrand.trim().toLowerCase();
+  for (final s in specializations) {
+    if (s.trim().toLowerCase() == b) return s;
+  }
+  return null;
+}
+
 class STOService {
   final String id;
   final String name;
@@ -83,6 +94,89 @@ class STOPackageAddon {
   });
 }
 
+/// Текущий статус «открыто/закрыто» с сервера (`hours_live`).
+class StoHoursLive {
+  const StoHoursLive({
+    required this.state,
+    this.closeHm,
+    this.nextOpenHm,
+    this.nextOpenDate,
+  });
+
+  final String state;
+  final String? closeHm;
+  final String? nextOpenHm;
+  /// yyyy-MM-dd в зоне организации
+  final String? nextOpenDate;
+
+  bool get isPositiveNow => state == 'open' || state == 'open_until';
+
+  static StoHoursLive? tryParse(dynamic raw) {
+    if (raw is! Map) return null;
+    final m = Map<String, dynamic>.from(raw);
+    final state = m['state']?.toString();
+    if (state == null || state.isEmpty) return null;
+    return StoHoursLive(
+      state: state,
+      closeHm: m['close_hm']?.toString(),
+      nextOpenHm: m['next_open_hm']?.toString(),
+      nextOpenDate: m['next_open_date']?.toString(),
+    );
+  }
+}
+
+/// Исключение из графика (дата в локальной зоне организации).
+class StoWorkingHoursException {
+  const StoWorkingHoursException({
+    required this.date,
+    this.closed = false,
+    this.open,
+    this.close,
+  });
+
+  final String date;
+  final bool closed;
+  final String? open;
+  final String? close;
+
+  static List<StoWorkingHoursException>? tryParseList(dynamic raw) {
+    if (raw is! List) return null;
+    final out = <StoWorkingHoursException>[];
+    for (final e in raw) {
+      if (e is! Map) continue;
+      final m = Map<String, dynamic>.from(e);
+      final date = m['date']?.toString() ?? '';
+      if (!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date)) continue;
+      if (m['closed'] == true) {
+        out.add(StoWorkingHoursException(date: date, closed: true));
+        continue;
+      }
+      final open = m['open']?.toString();
+      final close = m['close']?.toString();
+      if (open != null &&
+          close != null &&
+          open.isNotEmpty &&
+          close.isNotEmpty) {
+        out.add(StoWorkingHoursException(date: date, open: open, close: close));
+      }
+    }
+    return out.isEmpty ? [] : out;
+  }
+}
+
+/// Один день (пн…вс) для графика СТО с API.
+class StoDaySchedule {
+  const StoDaySchedule({
+    required this.open,
+    required this.close,
+    this.closed = false,
+  });
+
+  final String open;
+  final String close;
+  final bool closed;
+}
+
 class STOPackage {
   final String id;
   final String name;
@@ -117,6 +211,18 @@ class STO {
   final double? distanceKm;
   final bool isOpen;
   final String? workingHours;
+  /// Пн…вс (7), если с API пришёл `working_hours_week`.
+  final List<StoDaySchedule>? workingHoursWeek;
+  /// IANA, например Europe/Moscow.
+  final String timezone;
+  final List<StoWorkingHoursException>? workingHoursExceptions;
+  final StoHoursLive? hoursLive;
+  /// ISO UTC первого свободного слота (после batch nearest-slots).
+  final String? nearestSlotStartIso;
+  /// Ключи удобств из `amenity_ids` (см. [StoAmenityCatalog] в клиенте).
+  final List<String> amenityIds;
+  /// Текст «О сервисе» из настроек организации.
+  final String? publicDescription;
   final List<String> specializations;
   final String? logoUrl;
   final List<String> photoUrls;
@@ -163,6 +269,13 @@ class STO {
     this.distanceKm,
     required this.isOpen,
     this.workingHours,
+    this.workingHoursWeek,
+    this.timezone = 'Europe/Moscow',
+    this.workingHoursExceptions,
+    this.hoursLive,
+    this.nearestSlotStartIso,
+    this.amenityIds = const [],
+    this.publicDescription,
     this.specializations = const [],
     this.logoUrl,
     this.photoUrls = const [],
@@ -195,6 +308,13 @@ class STO {
     double? distanceKm,
     bool? isOpen,
     String? workingHours,
+    List<StoDaySchedule>? workingHoursWeek,
+    String? timezone,
+    List<StoWorkingHoursException>? workingHoursExceptions,
+    StoHoursLive? hoursLive,
+    String? nearestSlotStartIso,
+    List<String>? amenityIds,
+    String? publicDescription,
     List<String>? specializations,
     String? logoUrl,
     List<String>? photoUrls,
@@ -223,6 +343,13 @@ class STO {
       distanceKm: distanceKm ?? this.distanceKm,
       isOpen: isOpen ?? this.isOpen,
       workingHours: workingHours ?? this.workingHours,
+      workingHoursWeek: workingHoursWeek ?? this.workingHoursWeek,
+      timezone: timezone ?? this.timezone,
+      workingHoursExceptions: workingHoursExceptions ?? this.workingHoursExceptions,
+      hoursLive: hoursLive ?? this.hoursLive,
+      nearestSlotStartIso: nearestSlotStartIso ?? this.nearestSlotStartIso,
+      amenityIds: amenityIds ?? this.amenityIds,
+      publicDescription: publicDescription ?? this.publicDescription,
       specializations: specializations ?? this.specializations,
       logoUrl: logoUrl ?? this.logoUrl,
       photoUrls: photoUrls ?? this.photoUrls,

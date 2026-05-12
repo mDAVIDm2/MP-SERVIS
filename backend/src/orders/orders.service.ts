@@ -1,6 +1,12 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Brackets, Repository } from 'typeorm';
 import { QueryFailedError } from 'typeorm';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -19,10 +25,21 @@ import { normalizeOrganizationBusinessKind } from '../organizations/organization
 import { normalizeSchedulingMode } from '../organizations/organization-scheduling';
 import { bayNameMapFromSlots, effectiveBayCountFromSlots, normalizeOrgBays } from '../organizations/bay-settings.util';
 import { UsersService } from '../users/users.service';
+import { CarTransferService } from '../users/car-transfer.service';
 import { UserClientHiddenCar } from '../users/user-client-hidden-car.entity';
+import { ClientCar } from '../users/client-car.entity';
 import { normalizeOptionalVin } from '../common/vin.util';
+import { InventoryOrderReservationService } from '../inventory/inventory-order-reservation.service';
 
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads', 'order-photos');
+
+/** Контекст для проверки, что пользователь — участник заказа (клиент по телефону/авто или сотрудник СТО). */
+export interface OrderAccessParticipantContext {
+  userId?: string;
+  organizationId?: string | null;
+  phoneRaw?: string | null;
+  isClientApp: boolean;
+}
 
 @Injectable()
 export class OrdersService {
@@ -39,8 +56,68 @@ export class OrdersService {
     private subscriptionQuota: SubscriptionQuotaService,
     private readonly mediaService: MediaService,
     private readonly usersService: UsersService,
+    private readonly carTransferService: CarTransferService,
     @InjectRepository(UserClientHiddenCar) private readonly hiddenCarRepo: Repository<UserClientHiddenCar>,
+    @InjectRepository(ClientCar) private readonly clientCarRepo: Repository<ClientCar>,
+    private readonly inventoryOrderReservation: InventoryOrderReservationService,
   ) {}
+
+  private async afterOrderPersistedInventoryHook(
+    orderId: string,
+    previousStatus: string,
+    newStatus: string,
+  ): Promise<void> {
+    if (previousStatus === newStatus) return;
+    const row = await this.orderRepo.findOne({ where: { id: orderId }, select: ['organizationId'] as any });
+    if (!row) return;
+    const orgId = String((row as any).organizationId || '').trim();
+    if (!orgId) return;
+    try {
+      await this.inventoryOrderReservation.afterOrderStatusPersisted(orderId, orgId, previousStatus, newStatus);
+    } catch (e) {
+      console.warn('[OrdersService] inventory hook failed', orderId, e);
+    }
+  }
+
+  /**
+   * Строка материала склада к заказу (план → резерв при подтверждённом заказе).
+   */
+  async addOrderInventoryLine(
+    orderId: string,
+    organizationId: string,
+    body: {
+      inventory_item_id?: string;
+      quantity?: number;
+      unit?: string | null;
+      order_item_id?: string | null;
+    },
+  ) {
+    if (!body?.inventory_item_id || String(body.inventory_item_id).trim() === '') {
+      throw new BadRequestException('Укажите inventory_item_id');
+    }
+    await this.assertStaffCanManageOrder(orderId, organizationId);
+    if (body.order_item_id != null && String(body.order_item_id).trim() !== '') {
+      const oid = String(body.order_item_id).trim();
+      const oi = await this.itemRepo.findOne({ where: { id: oid, orderId } });
+      if (!oi) throw new BadRequestException('Позиция заказа не найдена');
+    }
+    const line = await this.inventoryOrderReservation.createPlannedLine(orderId, organizationId, {
+      inventory_item_id: String(body.inventory_item_id).trim(),
+      quantity: Number(body.quantity),
+      unit: body.unit ?? null,
+      order_item_id: body.order_item_id ?? null,
+    });
+    return {
+      id: line.id,
+      order_id: line.orderId,
+      inventory_item_id: line.inventoryItemId,
+      order_item_id: line.orderItemId,
+      quantity_planned: line.quantityPlanned,
+      quantity_reserved: line.quantityReserved,
+      unit: line.unit,
+      status: line.status,
+    };
+  }
 
   /**
    * Id строки прайса организации и/или общего каталога. Не задают цену: фактические суммы и сроки — в полях позиции.
@@ -70,6 +147,34 @@ export class OrdersService {
     return new Set(rows.map((r) => r.carId));
   }
 
+  private async loadOwnedCarIdsForClientUser(userId: string): Promise<string[]> {
+    const rows = await this.clientCarRepo
+      .createQueryBuilder('c')
+      .select('c.id', 'id')
+      .where('c.user_id = :uid', { uid: userId })
+      .getRawMany();
+    return rows.map((r: { id?: string }) => String(r.id || '').trim()).filter(Boolean);
+  }
+
+  /** Доступ к заказу по машине из гаража (новый владелец после передачи). */
+  async clientCanAccessOrderByOwnedCar(
+    clientUserId: string,
+    orderJson: { car_id?: string | null; date_time?: string | null },
+  ): Promise<boolean> {
+    const carId = String(orderJson?.car_id ?? '').trim();
+    if (!carId) return false;
+    const row = await this.clientCarRepo.findOne({ where: { id: carId, userId: clientUserId } });
+    if (!row) return false;
+    if (await this.isCarHiddenForClient(clientUserId, carId)) return false;
+    const cutoff = await this.carTransferService.getOrderHistoryCutoffForCar(clientUserId, carId);
+    if (cutoff) {
+      const raw = orderJson?.date_time;
+      const dt = raw ? new Date(raw) : null;
+      if (dt && !Number.isNaN(dt.getTime()) && dt < cutoff) return false;
+    }
+    return true;
+  }
+
   /** Скрытое у клиента авто: не показывать в гараже и в списке/карточке заказов. */
   async isCarHiddenForClient(userId: string, carId: string | null | undefined): Promise<boolean> {
     if (!carId || String(carId).trim() === '') return false;
@@ -77,6 +182,61 @@ export class OrdersService {
       where: { userId, carId: String(carId).trim() },
     });
     return !!row;
+  }
+
+  /**
+   * Сотрудник СТО (JWT с organizationId) может менять заказ только своей организации.
+   * Используется для статуса, времени, мастера, позиций.
+   */
+  async assertStaffCanManageOrder(orderId: string, organizationId: string | null | undefined): Promise<Order> {
+    if (organizationId == null || String(organizationId).trim() === '') {
+      throw new ForbiddenException('Нет доступа к заказу');
+    }
+    const order = await this.orderRepo.findOne({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('Order not found');
+    if (String((order as any).organizationId ?? '') !== String(organizationId).trim()) {
+      throw new ForbiddenException('Нет доступа к заказу');
+    }
+    return order;
+  }
+
+  /**
+   * Участник заказа: клиент (приложение client / телефон + авто из гаража) или сотрудник своей организации.
+   * Для просмотра/загрузки фото.
+   */
+  async assertParticipantCanAccessOrder(
+    orderId: string,
+    ctx: OrderAccessParticipantContext,
+  ): Promise<Order> {
+    const order = await this.orderRepo.findOne({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('Order not found');
+
+    const orgId = ctx.organizationId ?? null;
+    const userPhone = ctx.phoneRaw ? this.normalizePhoneForCompare(String(ctx.phoneRaw)) : '';
+    const clientMode = ctx.isClientApp;
+    const clientLike = clientMode || (!orgId && !!ctx.phoneRaw?.trim());
+
+    if (clientLike) {
+      const orderPhone = this.normalizePhoneForCompare(String((order as any).clientPhone || ''));
+      const phoneOk = !!(userPhone && orderPhone === userPhone);
+      const carOk = ctx.userId
+        ? await this.clientCanAccessOrderByOwnedCar(ctx.userId, {
+            car_id: (order as any).carId,
+            date_time: (order as any).dateTime,
+          })
+        : false;
+      if (!phoneOk && !carOk) throw new ForbiddenException('Нет доступа к заказу');
+      return order;
+    }
+
+    if (orgId != null && String(orgId).trim() !== '') {
+      if (String((order as any).organizationId ?? '') !== String(orgId).trim()) {
+        throw new ForbiddenException('Нет доступа к заказу');
+      }
+      return order;
+    }
+
+    throw new ForbiddenException('Нет доступа к заказу');
   }
 
   /** Аватары клиентских аккаунтов по ключу телефона (для списка/карточки заказа без запроса чатов). */
@@ -128,6 +288,120 @@ export class OrdersService {
     return { ...updates, firstConfirmedAt: new Date() };
   }
 
+  /** «Предложенное» сервисом время: planned_start, иначе date_time. */
+  private getServiceProposedStartForCompare(order: Order): Date {
+    return new Date(
+      (order as any).plannedStartTime != null ? (order as any).plannedStartTime : (order as any).dateTime,
+    );
+  }
+
+  /** Подпись номера в системных сообщениях чата: «№123» или пусто. */
+  private orderNumberForChatLine(order: Order): string {
+    const raw = String((order as any).orderNumber ?? '')
+      .trim()
+      .replace(/^#+/, '');
+    return raw;
+  }
+
+  /**
+   * Тип точки в творительном падеже для «заявка подтверждена …».
+   * (автосервисом, мойкой, детейлингом и т.д.)
+   */
+  private businessKindInstrumentalRu(kind: string | null | undefined): string {
+    const k = normalizeOrganizationBusinessKind(String(kind ?? 'sto'));
+    const map: Record<string, string> = {
+      sto: 'автосервисом',
+      car_wash: 'мойкой',
+      detailing: 'детейлингом',
+      car_audio: 'сервисом автозвука',
+      tire_service: 'шиномонтажом',
+      body_shop: 'кузовным сервисом',
+      glass: 'сервисом стёкол',
+      tuning: 'тюнинг-ателье',
+      ev_service: 'EV-сервисом',
+      other: 'сервисом',
+    };
+    return map[k] ?? 'сервисом';
+  }
+
+  /** true, если момент заметно отличается от предложенного (не то же «слот на стене»). */
+  private clientChoseDifferentTimeThanProposed(serviceProposed: Date, newDateTime?: string | null): boolean {
+    if (!newDateTime) return false;
+    const a = serviceProposed.getTime();
+    const b = new Date(newDateTime).getTime();
+    if (Number.isNaN(b)) return true;
+    return Math.abs(b - a) > 90_000;
+  }
+
+  /**
+   * Клиент снял согласие с части позиций (запись оформлена сервисом). Позиции удаляются; пересчитан planned_end.
+   */
+  private async applyServiceBookingItemSelectionByClient(
+    orderId: string,
+    order: Order,
+    _approvedItemIds: string[] | undefined,
+    rejectedItemIds: string[] | null | undefined,
+  ): Promise<{ changed: boolean }> {
+    if (!rejectedItemIds || rejectedItemIds.length === 0) return { changed: false };
+    const rows =
+      ((order as any).items as OrderItem[] | undefined) ?? (await this.itemRepo.find({ where: { orderId } }));
+    const byId = new Set(rows.map((r) => r.id).filter((id) => id != null && String(id).length > 0));
+    for (const raw of rejectedItemIds) {
+      const id = String(raw);
+      if (!id || !byId.has(id)) {
+        throw new BadRequestException('Состав заказа изменился. Обновите экран и выберите услуги снова.');
+      }
+    }
+    for (const raw of rejectedItemIds) {
+      await this.itemRepo.delete({ id: String(raw), orderId } as any);
+    }
+    const after = await this.itemRepo.find({ where: { orderId } });
+    if (after.length === 0) {
+      throw new BadRequestException('В заказе не осталось работ. Оставьте хотя бы одну позицию.');
+    }
+    const start = (order as any).plannedStartTime != null ? (order as any).plannedStartTime : (order as any).dateTime;
+    const startMs = new Date(start).getTime();
+    const totalMin = after.reduce((s, i) => s + (i.estimatedMinutes || 0), 0);
+    await this.orderRepo.update(orderId, {
+      plannedEndTime: new Date(startMs + Math.max(1, totalMin) * 60 * 1000),
+    } as any);
+    return { changed: true };
+  }
+
+  /**
+   * СТО нажимает «подтвердить за клиента», когда [pending_confirmation, confirmation_required_from=client].
+   * Статус → confirmed, клиенту — push и системная строка в чат.
+   */
+  async confirmPendingBookingOnBehalfOfClient(orderId: string, organizationId: string) {
+    const order = await this.orderRepo.findOne({ where: { id: orderId } });
+    if (!order) return null;
+    if ((order as any).organizationId !== organizationId) return null;
+    const status = (order as any).status;
+    if (status !== 'pending_confirmation') return null;
+    const party = String((order as any).confirmationRequiredFrom || 'organization');
+    if (party !== 'client') return null;
+    const updates = await this.mergeFirstBillingConfirmation(order, status, {
+      status: 'confirmed' as any,
+      orgConfirmedOnBehalfOfClient: true,
+    });
+    await this.orderRepo.update(orderId, updates);
+    const nextInv = String((updates as any).status ?? 'confirmed');
+    await this.afterOrderPersistedInventoryHook(orderId, status, nextInv);
+    const chat = await this.chats.getChatByOrderId(orderId);
+    if (chat) {
+      const orgRow = await this.orgService.findOne(organizationId);
+      const kindPh = this.businessKindInstrumentalRu((orgRow as any)?.businessKind);
+      const on = this.orderNumberForChatLine(order);
+      const line = on
+        ? `Заявка №${on} подтверждена ${kindPh} (оформлено от имени сервиса, например по телефону).`
+        : `Заявка подтверждена ${kindPh} (оформлено от имени сервиса, например по телефону).`;
+      await this.chats.sendMessage(chat.id, { text: line, is_system: true }, false);
+    }
+    const forPush = (await this.orderRepo.findOne({ where: { id: orderId } }))!;
+    await this.notifyClientOrderOrgConfirmedOnBehalf(forPush);
+    return this.findOne(orderId);
+  }
+
   async findAll(organizationId: string) {
     const orders = await this.orderRepo.find({
       where: { organizationId },
@@ -158,25 +432,45 @@ export class OrdersService {
   async findForClient(clientPhoneNorm: string) {
     const norm = this.normalizePhoneForCompare(clientPhoneNorm);
     const userId = await this.usersService.findIdByNormalizedPhone(norm, 'client');
+    const historyCutoffs = userId ? await this.carTransferService.getCarOrderHistoryCutoffMap(userId) : new Map<string, Date>();
     const hidden = userId ? await this.loadHiddenCarIdsForClientUser(userId) : new Set<string>();
     const digitsExpr = "REGEXP_REPLACE(COALESCE(order.client_phone, ''), '\\D', '', 'g')";
     const normalizedExpr = `CASE WHEN LENGTH(${digitsExpr}) = 11 AND LEFT(${digitsExpr}, 1) = '8' THEN '7' || SUBSTRING(${digitsExpr} FROM 2) ELSE ${digitsExpr} END`;
-    const orders = await this.orderRepo
+    const ownedIds = userId ? await this.loadOwnedCarIdsForClientUser(userId) : [];
+
+    const qb = this.orderRepo
       .createQueryBuilder('order')
       .leftJoinAndSelect('order.items', 'items')
       .leftJoinAndSelect('order.master', 'master')
-      .leftJoinAndSelect('order.organization', 'organization')
-      .where(`${normalizedExpr} = :phone`, { phone: norm })
-      .orderBy('order.date_time', 'DESC')
-      .getMany();
-    const visible =
-      hidden.size === 0
-        ? orders
-        : orders.filter((o) => {
-            const cid = (o as any).carId;
-            if (cid == null || String(cid).trim() === '') return true;
-            return !hidden.has(String(cid).trim());
+      .leftJoinAndSelect('order.organization', 'organization');
+
+    if (ownedIds.length > 0) {
+      qb.where(
+        new Brackets((q) => {
+          q.where(`${normalizedExpr} = :phone`, { phone: norm }).orWhere('order.car_id IN (:...ownedIds)', {
+            ownedIds,
           });
+        }),
+      );
+    } else {
+      qb.where(`${normalizedExpr} = :phone`, { phone: norm });
+    }
+
+    const orders = await qb.orderBy('order.date_time', 'DESC').getMany();
+    const visible = orders.filter((o) => {
+      const cid = (o as any).carId;
+      const cidStr = cid != null && String(cid).trim() !== '' ? String(cid).trim() : '';
+      if (cidStr && hidden.has(cidStr)) return false;
+      if (this.normalizePhoneForCompare(String((o as any).clientPhone || '')) === norm && norm.length > 0) {
+        return true;
+      }
+      if (!cidStr) return true;
+      const cu = historyCutoffs.get(cidStr);
+      if (!cu) return true;
+      const dt = (o as any).dateTime as Date | undefined;
+      if (!dt) return true;
+      return dt >= cu;
+    });
     const bayCache = new Map<string, Map<string, string>>();
     const avatarMap = await this.buildClientAvatarMapForOrders(visible);
     const items = await Promise.all(visible.map((o) => this.toOrderJsonWithApprovalPreview(o, bayCache, avatarMap)));
@@ -238,6 +532,7 @@ export class OrdersService {
       clientPhone,
       carPhotoUrl: (lastOrder as any)?.carPhotoUrl ?? null,
       status: 'pending_confirmation',
+      confirmationRequiredFrom: 'client',
       previousStatus: null,
       dateTime,
       plannedStartTime: dateTime,
@@ -284,7 +579,34 @@ export class OrdersService {
     return null;
   }
 
-  async create(organizationId: string, dto: any) {
+  /**
+   * Актуальный телефон/имя владельца по записи гаража [ClientCar] — чтобы СТО не отправляло заказ на номер из кэша
+   * после смены владельца или устаревших данных формы.
+   */
+  private async resolveClientContactFromClientCarId(carId: unknown): Promise<{ phone: string; name: string } | null> {
+    const cid = String(carId ?? '').trim();
+    if (!cid || cid === 'unknown') return null;
+    const car = await this.clientCarRepo.findOne({ where: { id: cid } });
+    if (!car) return null;
+    const user = await this.usersService.findById(car.userId);
+    if (!user?.phone) return null;
+    const phone = this.normalizePhoneForCompare(String(user.phone));
+    if (phone.length < 10) return null;
+    const name = String(user.name || '').trim() || 'Клиент';
+    return { phone, name };
+  }
+
+  /**
+   * @param initiator кто создал заявку: client — из клиентского приложения; organization — из бизнес-приложения СТО.
+   *        Определяет, кто обязан подтвердить бронь (см. confirmationRequiredFrom).
+   */
+  async create(organizationId: string, dto: any, initiator: 'client' | 'organization' = 'client') {
+    const confirmForClient =
+      initiator === 'organization' &&
+      (dto?.confirm_for_client === true ||
+        dto?.confirm_for_client === 'true' ||
+        dto?.confirmForClient === true);
+    const confirmationRequiredFrom: 'client' | 'organization' = initiator === 'client' ? 'organization' : 'client';
     const dateTime = new Date(dto.date_time);
     const itemDtos = Array.isArray(dto.items) ? dto.items : [];
     const totalMinutes = itemDtos.reduce((sum: number, i: any) => sum + (Number(i.estimated_minutes) ?? Number(i.estimatedMinutes) ?? 60), 0);
@@ -365,8 +687,20 @@ export class OrdersService {
       }
     }
 
+    if (confirmForClient) {
+      await this.subscriptionQuota.assertCanConsumeConfirmedOrderSlot(organizationId);
+    }
+
     const orderNumber = await this.nextOrderNumber(organizationId);
     const vinNorm = normalizeOptionalVin(dto.vin);
+    let clientName: string | null = dto.client_name != null ? String(dto.client_name) : null;
+    let clientPhone: string | null = dto.client_phone != null ? String(dto.client_phone) : null;
+    const resolved = await this.resolveClientContactFromClientCarId(dto.car_id);
+    if (resolved) {
+      clientPhone = resolved.phone;
+      clientName = resolved.name;
+    }
+    const nowConfirmed = new Date();
     const order = this.orderRepo.create({
       organizationId,
       orderNumber,
@@ -378,10 +712,13 @@ export class OrdersService {
       color: dto.color ?? null,
       mileage: dto.mileage != null ? Number(dto.mileage) : null,
       engineType: dto.engine_type ?? null,
-      clientName: dto.client_name,
-      clientPhone: dto.client_phone,
+      clientName,
+      clientPhone,
       carPhotoUrl: this.sanitizeCarPhotoUrl(dto.car_photo_url ?? dto.carPhotoUrl),
-      status: 'pending_confirmation',
+      status: (confirmForClient ? 'confirmed' : 'pending_confirmation') as any,
+      confirmationRequiredFrom,
+      firstConfirmedAt: confirmForClient ? nowConfirmed : null,
+      orgConfirmedOnBehalfOfClient: confirmForClient,
       dateTime,
       plannedStartTime: dateTime,
       plannedEndTime,
@@ -418,22 +755,71 @@ export class OrdersService {
       await this.itemRepo.save(item);
     }
     const chat = await this.chats.createForOrder(order.id);
-    await this.chats.addSystemMessage(chat.id, 'Клиент создал заявку. Требуется подтверждение/проверка.', order.id);
+    const systemLine = confirmForClient
+      ? 'Сервис подтвердило запись за клиента. Клиенту придёт уведомление, что подтверждение оформлено от имени сервиса (например, после согласования по телефону).'
+      : initiator === 'organization'
+        ? 'Сервис создал запись на клиента. Клиенту нужно подтвердить в приложении.'
+        : 'Клиент создал заявку. Требуется подтверждение/проверка со стороны сервиса.';
+    await this.chats.addSystemMessage(chat.id, systemLine, order.id);
     const itemsForCard = itemDtos.map((i: any) => ({
       name: i.name ?? '',
       price_kopecks: i.price_kopecks ?? null,
       estimated_minutes: i.estimated_minutes ?? 60,
     }));
     await this.chats.addOrderCardMessage(chat.id, order.id, itemsForCard, order.dateTime);
-    return this.findOne(order.id)!;
+    if (confirmForClient) {
+      await this.notifyClientOrderOrgConfirmedOnBehalf(order);
+    } else if (initiator === 'organization' && (order as any).clientPhone) {
+      const { kind, name } = await this.serviceKindAndNameForClientCopy(order);
+      const on = this.orderNumberForChatLine(order);
+      await this.notifyClientOpenOrderChat(
+        order,
+        'Новая запись от сервиса',
+        on
+          ? `Заказ №${on}. ${kind} «${name}» ждёт подтверждения. Нажмите, чтобы открыть чат.`
+          : `${kind} «${name}» — новая запись. Откройте чат, чтобы подтвердить.`,
+      );
+    }
+    if (confirmForClient) {
+      await this.afterOrderPersistedInventoryHook(order.id, 'pending_confirmation', 'confirmed');
+    }
+    return (await this.findOne(order.id))!;
   }
 
-  async updateStatus(id: string, status: string) {
-    const order = await this.orderRepo.findOne({ where: { id } });
-    if (!order) return null;
+  private async notifyClientOrderOrgConfirmedOnBehalf(order: Order) {
+    const phone = this.normalizePhoneForCompare((order as any).clientPhone || '');
+    if (!phone) return;
+    const num = String((order as any).orderNumber || '').trim();
+    const numClean = num.replace(/^#+/, '');
+    const body = numClean
+      ? `СТО оформило и подтвердило запись за вас (согласие вне приложения, например по телефону). Заказ №${numClean}.`
+      : 'СТО оформило и подтвердило запись за вас (согласие вне приложения, например по телефону).';
+    await this.notifications.createForClientPhone(phone, {
+      carId: (order as any).carId,
+      type: 'order',
+      title: 'Сервис подтвердил запись',
+      body,
+      payload: {
+        order_id: order.id,
+        target_type: 'order',
+        target_id: order.id,
+      },
+    });
+  }
+
+  async updateStatus(id: string, status: string, organizationId: string | null | undefined) {
+    const order = await this.assertStaffCanManageOrder(id, organizationId);
     const current = (order as any).status;
     if (status === 'in_progress' && current === 'pending_approval') {
       throw new BadRequestException('Нельзя перевести в работу: ожидается подтверждение клиента');
+    }
+    const party = String((order as any).confirmationRequiredFrom || 'organization') as 'client' | 'organization';
+    if (
+      current === 'pending_confirmation' &&
+      (status === 'confirmed' || status === 'in_progress') &&
+      party === 'client'
+    ) {
+      throw new BadRequestException('Сначала должен подтвердить запись клиент');
     }
     const updates: Record<string, unknown> = { status: status as any };
     if (status === 'in_progress' && !(order as any).actualStartTime) {
@@ -443,8 +829,29 @@ export class OrdersService {
       updates.actualEndTime = new Date();
     }
     const merged = await this.mergeFirstBillingConfirmation(order, current, updates);
+    const effectiveNext = (merged as any).status != null ? String((merged as any).status) : String(status);
     await this.orderRepo.update(id, merged);
-    await this.notifyClientOrderIfNeeded(order, current, status);
+    await this.afterOrderPersistedInventoryHook(id, current, effectiveNext);
+    await this.notifyClientOrderIfNeeded(order, current, effectiveNext);
+    if (
+      current === 'pending_confirmation' &&
+      (status === 'confirmed' || status === 'in_progress') &&
+      party === 'organization'
+    ) {
+      const orgId = (order as any).organizationId;
+      if (orgId) {
+        const orgRow = await this.orgService.findOne(orgId);
+        const kindPh = this.businessKindInstrumentalRu((orgRow as any)?.businessKind);
+        const on = this.orderNumberForChatLine(order);
+        const line = on
+          ? `Заявка №${on} подтверждена ${kindPh}.`
+          : `Заявка подтверждена ${kindPh}.`;
+        const chat = await this.chats.getChatByOrderId(id);
+        if (chat) {
+          await this.chats.sendMessage(chat.id, { text: line, is_system: true }, false);
+        }
+      }
+    }
     return this.findOne(id);
   }
 
@@ -472,28 +879,75 @@ export class OrdersService {
     };
     const title = titles[newStatus] || 'Обновление заказа';
     const num = (order as any).orderNumber || '';
+    const chat = await this.chats.getChatByOrderId(order.id);
+    const chatPayload =
+      chat != null
+        ? { target_type: 'chat' as const, target_id: chat.id, chat_id: chat.id, order_id: order.id }
+        : { order_id: order.id, target_type: 'order' as const, target_id: order.id };
     await this.notifications.createForClientPhone(phone, {
       carId: (order as any).carId,
       type: 'order',
       title,
-      body: num ? `Заказ №${num}` : undefined,
+      body: num ? `Заказ №${String(num).replace(/^#+/, '')}` : undefined,
+      payload: chatPayload,
+    });
+  }
+
+  /** Текст: тип точки (СТО, Мойка) и имя организации — для пушей «сервис изменил заказ». */
+  private async serviceKindAndNameForClientCopy(order: Order): Promise<{ kind: string; name: string }> {
+    const orgId = (order as any).organizationId;
+    if (!orgId) return { kind: 'Сервис', name: '' };
+    const org = await this.orgService.findOne(orgId);
+    const name = String((org as any)?.name ?? '').trim() || 'Сервис';
+    const kind = this.orgService.businessKindLabelRu((org as any)?.businessKind);
+    return { kind, name };
+  }
+
+  /**
+   * Лента + тап в клиентском приложении — открыть чат с этой организацией по заказу.
+   */
+  private async notifyClientOpenOrderChat(order: Order, title: string, body: string): Promise<void> {
+    const phone = this.normalizePhoneForCompare((order as any).clientPhone || '');
+    if (!phone) return;
+    const chat = await this.chats.getChatByOrderId((order as any).id);
+    if (!chat) return;
+    await this.notifications.createForClientPhone(phone, {
+      carId: (order as any).carId,
+      type: 'order',
+      title,
+      body,
       payload: {
+        target_type: 'chat',
+        target_id: chat.id,
+        chat_id: chat.id,
         order_id: order.id,
-        target_type: 'order',
-        target_id: order.id,
       },
     });
   }
 
   /** Ручная корректировка планового времени (Администратор). */
-  async updateTime(id: string, dto: { planned_start_time?: string; planned_end_time?: string }) {
-    const order = await this.orderRepo.findOne({ where: { id } });
-    if (!order) return null;
+  async updateTime(
+    id: string,
+    dto: { planned_start_time?: string; planned_end_time?: string },
+    organizationId: string | null | undefined,
+  ) {
+    const order = await this.assertStaffCanManageOrder(id, organizationId);
     const updates: Record<string, unknown> = {};
     if (dto.planned_start_time != null) updates.plannedStartTime = new Date(dto.planned_start_time);
     if (dto.planned_end_time != null) updates.plannedEndTime = new Date(dto.planned_end_time);
     if (Object.keys(updates).length === 0) return this.findOne(id);
     await this.orderRepo.update(id, updates);
+    if ((order as any).clientPhone) {
+      const { kind, name } = await this.serviceKindAndNameForClientCopy(order);
+      const on = this.orderNumberForChatLine(order);
+      await this.notifyClientOpenOrderChat(
+        order,
+        'Время записи изменено',
+        on
+          ? `«${name}» (${kind}) обновил(а) время по заказу №${on}. Откройте чат.`
+          : `«${name}» (${kind}) обновил(а) время записи. Откройте чат.`,
+      );
+    }
     return this.findOne(id);
   }
 
@@ -502,6 +956,41 @@ export class OrdersService {
     const digits = String(phone || '').replace(/\D/g, '');
     if (digits.length === 11 && digits.startsWith('8')) return '7' + digits.slice(1);
     return digits;
+  }
+
+  /**
+   * IANA TZ организации (поле organizations.timezone), иначе Europe/Moscow.
+   * Нужен для отображения момента времён в пушах/чате, а не в TZ процесса Node (часто UTC).
+   */
+  private async getOrganizationIanaTimeZone(organizationId: string | null | undefined): Promise<string> {
+    if (!organizationId || !String(organizationId).trim()) return 'Europe/Moscow';
+    const org = await this.orgService.findOne(String(organizationId).trim());
+    const z = (org as { timezone?: string } | null)?.timezone;
+    return z && String(z).trim() ? String(z).trim() : 'Europe/Moscow';
+  }
+
+  /**
+   * Русскоязычные дата и время «на стене часов» в указанном часовом поясе.
+   * Без option `timeZone` Date форматируется в локали процесса (на сервере в облаке = UTC → неверно для РФ).
+   */
+  private formatInstantRuInTimeZone(
+    instant: Date,
+    ianaTimeZone: string,
+  ): { dateStr: string; timeStr: string } {
+    const zone =
+      ianaTimeZone && String(ianaTimeZone).trim() ? String(ianaTimeZone).trim() : 'Europe/Moscow';
+    const dateStr = instant.toLocaleDateString('ru-RU', {
+      timeZone: zone,
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    });
+    const timeStr = instant.toLocaleTimeString('ru-RU', {
+      timeZone: zone,
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    return { dateStr, timeStr };
   }
 
   /** Push в Business-приложение: сотрудники с user_id, если включены пуши по заказам. */
@@ -572,6 +1061,8 @@ export class OrdersService {
     acceptProposed?: boolean,
     filterHiddenForClientUserId?: string | null,
   ) {
+    const beforeRow = await this.orderRepo.findOne({ where: { id: orderId } });
+    const prevSt = beforeRow ? String((beforeRow as any).status) : '';
     const updates: Record<string, unknown> = {};
     if (newDateTime) {
       const dt = new Date(newDateTime);
@@ -583,16 +1074,21 @@ export class OrdersService {
     }
     if (acceptProposed === false && newDateTime) {
       updates.status = 'pending_confirmation';
+      (updates as any).confirmationRequiredFrom = 'organization';
     }
     if (Object.keys(updates).length > 0) {
       await this.orderRepo.update(orderId, updates);
     }
+    const afterRow = await this.orderRepo.findOne({ where: { id: orderId } });
+    const nextSt = afterRow ? String((afterRow as any).status) : prevSt;
+    await this.afterOrderPersistedInventoryHook(orderId, prevSt, nextSt);
     if (newDateTime) {
       const chat = await this.chats.getChatByOrderId(orderId);
       if (chat) {
+        const orderRow = await this.orderRepo.findOne({ where: { id: orderId } });
+        const tz = await this.getOrganizationIanaTimeZone((orderRow as { organizationId?: string })?.organizationId);
         const dt = new Date(newDateTime);
-        const dateStr = dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
-        const timeStr = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+        const { dateStr, timeStr } = this.formatInstantRuInTimeZone(dt, tz);
         const text =
           acceptProposed !== false
             ? `Клиент подтвердил запись на ${dateStr} в ${timeStr}.`
@@ -616,9 +1112,11 @@ export class OrdersService {
     newDateTime?: string,
     acceptProposed?: boolean,
     approvalMessageId?: string | null,
+    itemSelection?: { approvedItemIds?: string[]; rejectedItemIds?: string[] } | null,
   ) {
-    const order = await this.orderRepo.findOne({ where: { id: orderId }, relations: ['items'] });
+    let order = await this.orderRepo.findOne({ where: { id: orderId }, relations: ['items'] });
     if (!order) return null;
+    const serviceProposedTimeAtStart = this.getServiceProposedStartForCompare(order);
     const orderPhone = this.normalizePhoneForCompare((order as any).clientPhone);
     const userPhone = this.normalizePhoneForCompare(clientPhoneNorm);
     if (orderPhone !== userPhone) return null;
@@ -626,11 +1124,40 @@ export class OrdersService {
     if (clientUserId && (await this.isCarHiddenForClient(clientUserId, (order as any).carId))) {
       return null;
     }
-    const status = (order as any).status;
+    let status = (order as any).status;
     if (status === 'confirmed' || status === 'in_progress') {
       return this.applyClientTimeConfirmAfterApproval(orderId, newDateTime, acceptProposed, clientUserId);
     }
     if (status !== 'pending_confirmation' && status !== 'pending_approval') return null;
+
+    if (status === 'pending_confirmation') {
+      const party = String((order as any).confirmationRequiredFrom || 'organization') as 'client' | 'organization';
+      const itemCount = (order as any).items?.length ?? 0;
+      if (party === 'organization' && itemCount > 0) {
+        throw new BadRequestException('Сейчас подтверждение ожидается от автосервиса.');
+      }
+    }
+
+    let serviceBookingItemSelectionChanged = false;
+    if (status === 'pending_confirmation' && (order as any).confirmationRequiredFrom === 'client') {
+      const rej = itemSelection?.rejectedItemIds;
+      if (Array.isArray(rej) && rej.length > 0) {
+        const { changed: itemsTouched } = await this.applyServiceBookingItemSelectionByClient(
+          orderId,
+          order,
+          itemSelection?.approvedItemIds,
+          rej,
+        );
+        serviceBookingItemSelectionChanged = itemsTouched;
+        if (itemsTouched) {
+          const rel = await this.orderRepo.findOne({ where: { id: orderId }, relations: ['items'] });
+          if (rel) {
+            order = rel;
+            status = (order as any).status;
+          }
+        }
+      }
+    }
 
     // Новый заказ от СТО (без позиций): применяем услуги из последнего approval-сообщения и переводим в confirmed.
     if (status === 'pending_confirmation' && ((order as any).items?.length ?? 0) === 0) {
@@ -671,11 +1198,13 @@ export class OrdersService {
         }
         const mergedEmptyItems = await this.mergeFirstBillingConfirmation(order, status, updates);
         await this.orderRepo.update(orderId, mergedEmptyItems);
+        const nextStEmpty = String((mergedEmptyItems as any).status ?? 'confirmed');
+        await this.afterOrderPersistedInventoryHook(orderId, status, nextStEmpty);
         const chat = await this.chats.getChatByOrderId(orderId);
         if (chat && newDateTime) {
           const dt = new Date(newDateTime);
-          const dateStr = dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
-          const timeStr = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+          const tz = await this.getOrganizationIanaTimeZone((order as { organizationId?: string }).organizationId);
+          const { dateStr, timeStr } = this.formatInstantRuInTimeZone(dt, tz);
           const line = `Клиент подтвердил запись на ${dateStr} в ${timeStr}.`;
           await this.chats.sendMessage(chat.id, { text: line, is_system: true }, false);
           await this.notifyOrgStaffClientBookingSystemLine(orderId, line);
@@ -700,17 +1229,19 @@ export class OrdersService {
           const updates: Record<string, unknown> = {
             dateTime: new Date(newDateTime),
             status: 'pending_confirmation',
+            confirmationRequiredFrom: 'organization',
           };
           const items = await this.itemRepo.find({ where: { orderId } });
           const totalMin = items.reduce((s: number, i: any) => s + (i.estimatedMinutes || 0), 0);
           updates.plannedStartTime = new Date(newDateTime);
           updates.plannedEndTime = new Date(new Date(newDateTime).getTime() + totalMin * 60 * 1000);
           await this.orderRepo.update(orderId, updates);
+          await this.afterOrderPersistedInventoryHook(orderId, 'pending_approval', 'pending_confirmation');
           const chat = await this.chats.getChatByOrderId(orderId);
           if (chat) {
             const dt = new Date(newDateTime);
-            const dateStr = dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
-            const timeStr = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+            const tz = await this.getOrganizationIanaTimeZone((order as { organizationId?: string }).organizationId);
+            const { dateStr, timeStr } = this.formatInstantRuInTimeZone(dt, tz);
             const line = `Клиент перенёс время на ${dateStr} в ${timeStr}.`;
             await this.chats.sendMessage(chat.id, { text: line, is_system: true }, false);
             await this.notifyOrgStaffClientBookingSystemLine(orderId, line);
@@ -722,6 +1253,24 @@ export class OrdersService {
       }
     }
 
+    const clientParty = String((order as any).confirmationRequiredFrom || 'organization') === 'client';
+    const timeDiffersFromProposed = this.clientChoseDifferentTimeThanProposed(serviceProposedTimeAtStart, newDateTime);
+    const needServiceSignOff =
+      clientParty &&
+      (serviceBookingItemSelectionChanged ||
+        timeDiffersFromProposed ||
+        (acceptProposed === false && Boolean(newDateTime)));
+    const clientInitiatedFlow = !clientParty;
+    const pendingByClientTimeChoice = clientInitiatedFlow && acceptProposed === false && Boolean(newDateTime);
+    const nextStatus =
+      clientParty
+        ? needServiceSignOff
+          ? 'pending_confirmation'
+          : 'confirmed'
+        : pendingByClientTimeChoice
+          ? 'pending_confirmation'
+          : 'confirmed';
+
     const updates: Record<string, unknown> = {};
     if (newDateTime) {
       const dt = new Date(newDateTime);
@@ -731,25 +1280,47 @@ export class OrdersService {
       updates.plannedStartTime = dt;
       updates.plannedEndTime = new Date(dt.getTime() + totalMin * 60 * 1000);
     }
-    if (acceptProposed === false && newDateTime) {
-      updates.status = 'pending_confirmation';
-    } else {
-      updates.status = 'confirmed';
+    if (String(nextStatus) === 'pending_confirmation' && (clientParty ? needServiceSignOff : pendingByClientTimeChoice)) {
+      (updates as any).confirmationRequiredFrom = 'organization';
     }
+    updates.status = nextStatus;
     if (Object.keys(updates).length > 0) {
       const mergedPc = await this.mergeFirstBillingConfirmation(order, status, updates);
       await this.orderRepo.update(orderId, mergedPc);
+      const nextStPc = String((mergedPc as any).status ?? nextStatus);
+      await this.afterOrderPersistedInventoryHook(orderId, status, nextStPc);
     }
-    // Уведомить СТО в чате о подтверждении/переносе времени.
-    if (newDateTime) {
-      const chat = await this.chats.getChatByOrderId(orderId);
-      if (chat) {
+    // Уведомить СТО в чате: перечень услуг + время (если менялось / передано в запросе).
+    const chat = await this.chats.getChatByOrderId(orderId);
+    if (chat) {
+      const itemRows = await this.itemRepo.find({ where: { orderId } });
+      const names = itemRows
+        .map((i) => (i.name || '').trim())
+        .filter((n) => n.length > 0);
+      const listPart = names.length > 0 ? names.join(', ') : 'состав записи';
+      const on = this.orderNumberForChatLine(order);
+      const orderNumClause = on ? ` (№${on})` : '';
+      const waitingOrg = String(nextStatus) === 'pending_confirmation' && (updates as any).confirmationRequiredFrom === 'organization';
+      let text: string;
+      if (newDateTime) {
         const dt = new Date(newDateTime);
-        const dateStr = dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
-        const timeStr = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-        const text = acceptProposed !== false
-          ? `Клиент подтвердил запись на ${dateStr} в ${timeStr}.`
-          : `Клиент перенёс время на ${dateStr} в ${timeStr}.`;
+        const tz = await this.getOrganizationIanaTimeZone((order as { organizationId?: string }).organizationId);
+        const { dateStr, timeStr } = this.formatInstantRuInTimeZone(dt, tz);
+        if (waitingOrg && !clientParty && pendingByClientTimeChoice) {
+          text = `Клиент перенёс время${orderNumClause}. Новое время: ${dateStr} в ${timeStr} (ожидается подтверждение сервиса).`;
+        } else if (waitingOrg && clientParty && needServiceSignOff) {
+          text = `Клиент внёс изменения в заявку${orderNumClause}. Время: ${dateStr} в ${timeStr} (ожидается подтверждение сервиса).`;
+        } else {
+          text = `Клиент подтвердил: ${listPart}. Время записи: ${dateStr} в ${timeStr}.`;
+        }
+      } else if (waitingOrg && needServiceSignOff) {
+        text = `Клиент внёс изменения в заявку${orderNumClause} (ожидается подтверждение сервиса).`;
+      } else if (String((updates as { status?: string }).status) === 'confirmed') {
+        text = `Клиент подтвердил: ${listPart}. Предложенное время оставлено.`;
+      } else {
+        text = '';
+      }
+      if (text) {
         await this.chats.sendMessage(chat.id, { text, is_system: true }, false);
         await this.notifyOrgStaffClientBookingSystemLine(orderId, text);
       }
@@ -760,7 +1331,9 @@ export class OrdersService {
   async assignMaster(
     id: string,
     body: { master_id?: string | null; bay_id?: string | null },
+    organizationId: string | null | undefined,
   ) {
+    await this.assertStaffCanManageOrder(id, organizationId);
     const order = await this.orderRepo.findOne({ where: { id }, relations: ['items'] });
     if (!order) throw new NotFoundException('Заказ не найден');
 
@@ -843,7 +1416,9 @@ export class OrdersService {
       }
       filterHiddenForClientUserId = clientUserId ?? undefined;
     }
+    const prev = String((order as any).status);
     await this.orderRepo.update(id, { status: 'cancelled' });
+    await this.afterOrderPersistedInventoryHook(id, prev, 'cancelled');
     return this.findOne(id, filterHiddenForClientUserId);
   }
 
@@ -875,6 +1450,7 @@ export class OrdersService {
     if (approvedItemIds.length === 0) {
       const previousStatus = ((order as any).previousStatus as string) ?? 'in_progress';
       await this.orderRepo.update(orderId, { status: previousStatus as any, previousStatus: null });
+      await this.afterOrderPersistedInventoryHook(orderId, 'pending_approval', previousStatus);
       const chat = await this.chats.getChatByOrderId(orderId);
       if (chat) {
         await this.chats.sendMessage(chat.id, { text: 'Клиент отказался от дополнительных работ.', is_system: true }, false);
@@ -983,6 +1559,7 @@ export class OrdersService {
       const previousStatus = ((order as any).previousStatus as string) ?? 'confirmed';
       const nextStatus = previousStatus === 'in_progress' ? 'in_progress' : 'confirmed';
       await this.orderRepo.update(orderId, { status: nextStatus as any, previousStatus: null });
+      await this.afterOrderPersistedInventoryHook(orderId, 'pending_approval', nextStatus);
       const chat = await this.chats.getChatByOrderId(orderId);
       if (chat) {
         const names = this.buildClientApprovalAppliedDisplayNames(edited, newItems, approvedItemIds);
@@ -1018,10 +1595,11 @@ export class OrdersService {
     const newItemsFromMessage = addAllLegacy
       ? itemsWithId
       : itemsWithId.filter((item: { id: string }) => approvedSet.has(item.id));
-    await this.updateItems(orderId, [...currentItems, ...newItemsFromMessage]);
+    await this.updateItems(orderId, [...currentItems, ...newItemsFromMessage], (order as any).organizationId);
     const previousStatus = ((order as any).previousStatus as string) ?? 'confirmed';
     const nextStatus = previousStatus === 'in_progress' ? 'in_progress' : 'confirmed';
     await this.orderRepo.update(orderId, { status: nextStatus as any, previousStatus: null });
+    await this.afterOrderPersistedInventoryHook(orderId, 'pending_approval', nextStatus);
     const chat = await this.chats.getChatByOrderId(orderId);
     if (chat) {
       const approvedSource = addAllLegacy
@@ -1112,7 +1690,7 @@ export class OrdersService {
         is_completed: false,
         is_additional: true,
       }));
-      await this.updateItems(orderId, [...currentItems, ...itemsWithId]);
+      await this.updateItems(orderId, [...currentItems, ...itemsWithId], organizationId);
     }
 
     const previousStatus = ((order as any).previousStatus as string) ?? 'confirmed';
@@ -1127,6 +1705,7 @@ export class OrdersService {
       previousStatus: null,
       plannedEndTime,
     });
+    await this.afterOrderPersistedInventoryHook(orderId, 'pending_approval', nextStatus);
 
     const chat = await this.chats.getChatByOrderId(orderId);
     if (chat) {
@@ -1138,8 +1717,8 @@ export class OrdersService {
         ? addedNames.slice(0, 3).join(', ') + ` и ещё ${addedNames.length - 3}`
         : addedNames.join(', ');
       const text = namesText
-        ? `Изменения применены: сервис подтвердил по телефону: ${addedNames.map((n: string) => '+' + n).join(', ')}`
-        : 'Изменения применены: сервис подтвердил по телефону.';
+        ? `Сервис подтвердил изменения по заказу от вашего лица: ${namesText}.`
+        : 'Сервис подтвердил изменения по заказу от вашего лица (согласие зафиксировано).';
       await this.chats.sendMessage(chat.id, { text, is_system: true }, false);
     }
     await this.chats.markApprovalRequestsResolvedForOrder(orderId, 'accepted');
@@ -1151,7 +1730,11 @@ export class OrdersService {
    * требующем согласования клиента (не done/cancelled), прямое сохранение блокируется:
    * формируется черновик { edited_items, new_items }, отправляется в чат, статус → pending_approval.
    */
-  async updateItems(id: string, items: any[], organizationId?: string) {
+  async updateItems(id: string, items: any[], organizationId?: string | null) {
+    if (organizationId == null || String(organizationId).trim() === '') {
+      throw new ForbiddenException('Нет доступа к заказу');
+    }
+    await this.assertStaffCanManageOrder(id, organizationId);
     const order = await this.orderRepo.findOne({ where: { id }, relations: ['items'] });
     if (!order) return null;
     const status = (order as any).status as string;
@@ -1184,12 +1767,45 @@ export class OrdersService {
         }
         if (chat) {
           const chatId = chat.id;
+          const editedById = new Map<string, any>(edited.map((e: any) => [String(e.id), e]));
+          let totalMinAfter = 0;
+          let totalKopAfter = 0;
+          for (const cur of currentItems) {
+            const e = editedById.get(String(cur.id));
+            if (e) {
+              totalMinAfter += Number((e as any).estimated_minutes) || 0;
+              totalKopAfter += ((e as any).price_kopecks as number) ?? 0;
+            } else {
+              totalMinAfter += cur.estimatedMinutes || 0;
+              totalKopAfter += (cur.priceKopecks as number) ?? 0;
+            }
+          }
+          for (const n of newItems) {
+            totalMinAfter += Number((n as any).estimated_minutes) || 0;
+            totalKopAfter += ((n as any).price_kopecks as number) ?? 0;
+          }
           console.log('[updateItems] sending approval to chatId=', chatId, 'orderId=', id, 'edited=', edited.length, 'newItems=', newItems.length);
           await this.chats.sendMessage(chatId, {
             order_id: id,
-            approval_items: { edited_items: edited, new_items: newItems },
+            approval_items: {
+              edited_items: edited,
+              new_items: newItems,
+              totals_after: { estimated_minutes: totalMinAfter, price_kopecks: totalKopAfter },
+            },
           }, false);
           console.log('[updateItems] sendMessage completed for chatId=', chatId);
+          const forNotify = await this.orderRepo.findOne({ where: { id } });
+          if (forNotify && (forNotify as any).clientPhone) {
+            const { kind, name } = await this.serviceKindAndNameForClientCopy(forNotify);
+            const on = this.orderNumberForChatLine(forNotify);
+            await this.notifyClientOpenOrderChat(
+              forNotify,
+              'Изменения по заказу',
+              on
+                ? `«${name}» (${kind}) изменил(а) состав заказа №${on}. Откройте чат, чтобы согласовать.`
+                : `«${name}» (${kind}) изменил(а) состав заказа. Откройте чат, чтобы согласовать.`,
+            );
+          }
           return this.findOne(id);
         } else {
           console.log('[updateItems] chat still null after createForOrder, cannot send message');
@@ -1213,6 +1829,20 @@ export class OrdersService {
       });
     });
     await this.itemRepo.save(toInsert);
+    const reloaded = await this.itemRepo.find({ where: { orderId: id } });
+    const totalMin = Math.max(
+      1,
+      reloaded.reduce((s, i) => s + (i.estimatedMinutes || 0), 0),
+    );
+    const o = await this.orderRepo.findOne({ where: { id } });
+    if (o) {
+      const start = (o as any).plannedStartTime ?? (o as any).dateTime;
+      if (start) {
+        await this.orderRepo.update(id, {
+          plannedEndTime: new Date(new Date(start).getTime() + totalMin * 60 * 1000),
+        });
+      }
+    }
     return this.findOne(id);
   }
 
@@ -1247,9 +1877,8 @@ export class OrdersService {
     return { chat_id: chat.id };
   }
 
-  async getOrderPhotos(orderId: string) {
-    const order = await this.orderRepo.findOne({ where: { id: orderId } });
-    if (!order) return null;
+  async getOrderPhotos(orderId: string, access: OrderAccessParticipantContext) {
+    await this.assertParticipantCanAccessOrder(orderId, access);
     const baseUrl = process.env.API_BASE_URL || 'http://localhost:3000/api/v1';
     const modern = await this.mediaService.listOrderMediaForApi(orderId, baseUrl);
     const legacyPhotos = await this.photoRepo.find({ where: { orderId }, order: { createdAt: 'ASC' } });
@@ -1270,17 +1899,16 @@ export class OrdersService {
   async addOrderPhoto(
     orderId: string,
     file: Express.Multer.File,
-    opts?: { uploadedByUserId?: string | null },
+    opts: { uploadedByUserId?: string | null; access: OrderAccessParticipantContext },
   ) {
-    const order = await this.orderRepo.findOne({ where: { id: orderId } });
-    if (!order) return null;
+    const order = await this.assertParticipantCanAccessOrder(orderId, opts.access);
     const organizationId = (order as any).organizationId as string;
     await this.assertOrderMediaAttachmentLimit(orderId, organizationId);
     const row = await this.mediaService.attachOrderImage({
       orderId,
       organizationId,
       file,
-      uploadedByUserId: opts?.uploadedByUserId ?? null,
+      uploadedByUserId: opts.uploadedByUserId ?? null,
     });
     const baseUrl = process.env.API_BASE_URL || 'http://localhost:3000/api/v1';
     return {
@@ -1295,7 +1923,12 @@ export class OrdersService {
     };
   }
 
-  async getOrderPhotoFile(orderId: string, photoId: string) {
+  async getOrderPhotoFile(
+    orderId: string,
+    photoId: string,
+    access: OrderAccessParticipantContext,
+  ) {
+    await this.assertParticipantCanAccessOrder(orderId, access);
     const fromMedia = await this.mediaService.getLocalFilePathForOrderPhoto(orderId, photoId);
     if (fromMedia && fs.existsSync(fromMedia)) return fromMedia;
     const photo = await this.photoRepo.findOne({ where: { id: photoId, orderId } });
@@ -1458,6 +2091,16 @@ export class OrdersService {
       orgBayCaches.set(o.organizationId, orgMap);
     }
     const json = this.toOrderJson(o, orgMap, clientAvatarByPhoneKey) as Record<string, unknown>;
+    const invLines = await this.inventoryOrderReservation.listLinesForOrder(o.id, o.organizationId);
+    json.inventory_lines = invLines.map((l) => ({
+      id: l.id,
+      inventory_item_id: l.inventoryItemId,
+      order_item_id: l.orderItemId,
+      quantity_planned: l.quantityPlanned,
+      quantity_reserved: l.quantityReserved,
+      unit: l.unit,
+      status: l.status,
+    }));
     const status = (o as any).status as string;
     if (status !== 'pending_approval') {
       return json;
@@ -1672,6 +2315,8 @@ export class OrdersService {
       client_avatar_url: clientAvatarUrl,
       car_photo_url: (o as any).carPhotoUrl ?? null,
       status: o.status,
+      confirmation_required_from: (o as any).confirmationRequiredFrom ?? 'organization',
+      org_confirmed_on_behalf_of_client: Boolean((o as any).orgConfirmedOnBehalfOfClient),
       previous_status: (o as any).previousStatus ?? null,
       first_confirmed_at: (o as any).firstConfirmedAt?.toISOString?.() ?? null,
       date_time: o.dateTime.toISOString(),

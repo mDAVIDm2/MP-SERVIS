@@ -91,11 +91,14 @@ class OrderApiService {
   }
 
   /// Подтвердить заказ клиентом. [acceptProposed] true — согласие с предложением (время/без), false — клиент указал своё время (сервис подтвердит снова).
+  /// [approvedItemIds]/[rejectedItemIds] — при записи от сервиса: снятие позиций в одном запросе с временем.
   Future<Result<void>> confirmOrder(
     String orderId, {
     DateTime? dateTime,
     bool acceptProposed = true,
     String? approvalMessageId,
+    List<String>? approvedItemIds,
+    List<String>? rejectedItemIds,
   }) async {
     try {
       final body = <String, dynamic>{};
@@ -103,6 +106,12 @@ class OrderApiService {
       body['accept_proposed'] = acceptProposed;
       if (approvalMessageId != null && approvalMessageId.isNotEmpty) {
         body['approval_message_id'] = approvalMessageId;
+      }
+      if (approvedItemIds != null && approvedItemIds.isNotEmpty) {
+        body['approved_item_ids'] = approvedItemIds;
+      }
+      if (rejectedItemIds != null && rejectedItemIds.isNotEmpty) {
+        body['rejected_item_ids'] = rejectedItemIds;
       }
       await _client.post(ApiEndpoints.orderConfirm(orderId), data: body);
       return Result.success(null);

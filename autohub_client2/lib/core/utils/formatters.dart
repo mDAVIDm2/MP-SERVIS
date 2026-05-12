@@ -13,6 +13,12 @@ class Formatters {
     return '${formatter.format(rubles)} ₽';
   }
 
+  /// Только рубли с группировкой, без значка валюты (для бейджа с иконкой).
+  static String moneyRublesPlain(int kopecks) {
+    final rubles = kopecks ~/ 100;
+    return NumberFormat('#,###', 'ru_RU').format(rubles);
+  }
+
   /// 62850 → "62 850 км"
   static String mileage(int km) {
     final formatter = NumberFormat('#,###', 'ru_RU');
@@ -191,5 +197,37 @@ class Formatters {
     if (diff.inDays == 0) return time(dateTime);
     if (diff.inDays == 1) return 'вчера';
     return dateShortRu(dateTime);
+  }
+
+  /// Для карточки поиска: «13.04 12:00» в локальном времени устройства.
+  static String searchNearestSlotDayTime(String? isoUtc) {
+    if (isoUtc == null || isoUtc.isEmpty) return '';
+    final dt = DateTime.tryParse(isoUtc);
+    if (dt == null) return '';
+    final l = _local(dt);
+    final d =
+        '${l.day.toString().padLeft(2, '0')}.${l.month.toString().padLeft(2, '0')}';
+    return '$d ${time(l)}';
+  }
+
+  /// Дата ближайшего слота: «05.05.2026» (локальное время).
+  static String searchNearestSlotDateFull(String? isoUtc) {
+    if (isoUtc == null || isoUtc.isEmpty) return '';
+    final dt = DateTime.tryParse(isoUtc);
+    if (dt == null) return '';
+    final l = _local(dt);
+    return '${l.day.toString().padLeft(2, '0')}.'
+        '${l.month.toString().padLeft(2, '0')}.'
+        '${l.year}';
+  }
+
+  /// Интервал слота: «12:30–14:30» от начала [isoUtc] + [durationMinutes] (локальное время).
+  static String searchNearestSlotTimeRange(String? isoUtc, int durationMinutes) {
+    if (isoUtc == null || isoUtc.isEmpty) return '';
+    final dt = DateTime.tryParse(isoUtc);
+    if (dt == null) return '';
+    final start = _local(dt);
+    final end = start.add(Duration(minutes: durationMinutes < 0 ? 0 : durationMinutes));
+    return '${time(start)}–${time(end)}';
   }
 }

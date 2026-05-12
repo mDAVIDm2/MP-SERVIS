@@ -73,13 +73,6 @@ export class ReferenceController {
     return undefined;
   }
 
-  /** Список заявок на подтверждение марки/модели/поколения (для разработчиков). */
-  @Get('pending-car')
-  @UseGuards(AuthGuard('jwt'))
-  async listPending() {
-    return this.reference.listPending();
-  }
-
   /**
    * Единый справочник услуг MP-Servis (для настроек организации).
    * - `organization_id` (или организация из JWT) — фильтр по `business_kind` этой организации.

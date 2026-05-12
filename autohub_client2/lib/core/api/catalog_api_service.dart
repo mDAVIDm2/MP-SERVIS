@@ -81,27 +81,57 @@ class CatalogApiService {
   }
 
   /// Доступные слоты для записи (умное расписание: мастера, навыки, занятость).
-  /// Требует авторизации. [date] — день в локальной зоне, [serviceIds] — ID выбранных услуг.
+  /// Требует авторизации. [date] — день в локальной зоне.
+  /// Либо [serviceIds] (длительность из прайса), либо [items] с фактическими `estimated_minutes` (как в заказе).
   Future<Result<Map<String, dynamic>>> getAvailableSlots({
     required String organizationId,
     required DateTime date,
-    required List<String> serviceIds,
+    List<String> serviceIds = const [],
+    List<Map<String, dynamic>>? items,
   }) async {
     try {
       final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+      final data = <String, dynamic>{
+        'organization_id': organizationId,
+        'date': dateStr,
+      };
+      if (items != null && items.isNotEmpty) {
+        data['items'] = items;
+      } else {
+        data['service_ids'] = serviceIds;
+      }
       final res = await _client.post(
         ApiEndpoints.bookingAvailableSlots,
+        data: data,
+      );
+      final map = res.data;
+      if (map is! Map<String, dynamic>) {
+        return Result.failure(const ApiException(code: ApiErrorCode.internal, message: 'Неверный формат ответа'));
+      }
+      return Result.success(map);
+    } on DioException catch (e) {
+      return Result.failure(ApiException.fromDioError(e));
+    }
+  }
+
+  /// Ближайшие слоты для списка организаций при фильтре по услугам (батч).
+  Future<Result<Map<String, dynamic>>> nearestSlotsBatch({
+    required List<String> organizationIds,
+    required List<String> serviceIds,
+  }) async {
+    try {
+      final res = await _client.post(
+        ApiEndpoints.bookingNearestSlotsBatch,
         data: {
-          'organization_id': organizationId,
-          'date': dateStr,
+          'organization_ids': organizationIds,
           'service_ids': serviceIds,
         },
       );
-      final data = res.data;
-      if (data is! Map<String, dynamic>) {
+      final map = res.data;
+      if (map is! Map<String, dynamic>) {
         return Result.failure(const ApiException(code: ApiErrorCode.internal, message: 'Неверный формат ответа'));
       }
-      return Result.success(data);
+      return Result.success(map);
     } on DioException catch (e) {
       return Result.failure(ApiException.fromDioError(e));
     }

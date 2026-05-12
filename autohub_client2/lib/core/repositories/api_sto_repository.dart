@@ -1,4 +1,5 @@
 import '../../shared/models/sto_model.dart';
+import '../../shared/sto_amenity_catalog.dart';
 import '../api/api_exceptions.dart';
 import '../api/catalog_api_service.dart';
 import '../config/app_config.dart';
@@ -8,6 +9,31 @@ import 'sto_repository.dart';
 class ApiSTORepository implements STORepository {
   ApiSTORepository(this._catalog);
   final CatalogApiService _catalog;
+
+  static List<StoDaySchedule>? _parseWorkingHoursWeek(dynamic raw) {
+    if (raw is! List || raw.length != 7) return null;
+    final out = <StoDaySchedule>[];
+    for (final e in raw) {
+      if (e is! Map) return null;
+      final m = Map<String, dynamic>.from(e);
+      var closed = m['closed'] == true;
+      final open = m['open'] as String? ?? '09:00';
+      final close = m['close'] as String? ?? '19:00';
+      if (!closed && open == '00:00' && close == '00:00') {
+        closed = true;
+      }
+      out.add(StoDaySchedule(open: open, close: close, closed: closed));
+    }
+    return out;
+  }
+
+  static List<String> _parseAmenityIds(dynamic raw) {
+    if (raw is! List) return const [];
+    return raw
+        .map((e) => e.toString())
+        .where((id) => StoAmenityCatalog.byId.containsKey(id))
+        .toList();
+  }
 
   static String? _catalogItemIdFromJson(Map<String, dynamic> m) {
     final a = m['catalog_item_id']?.toString().trim();
@@ -74,6 +100,9 @@ class ApiSTORepository implements STORepository {
     final bk = o['business_kind']?.toString() ?? 'sto';
     final bkl = o['business_kind_label']?.toString() ?? 'Автосервис';
     final sm = o['scheduling_mode']?.toString() ?? 'staff_based';
+    final hoursLive = StoHoursLive.tryParse(o['hours_live']);
+    final isOpenComputed = hoursLive?.isPositiveNow ??
+        true; // старый API без hours_live — как раньше по умолчанию «открыто»
     return STO(
       id: o['id'] as String? ?? '',
       name: o['name'] as String? ?? 'Сервис',
@@ -81,8 +110,17 @@ class ApiSTORepository implements STORepository {
       phone: o['phone'] as String?,
       rating: 0,
       reviewCount: 0,
-      isOpen: true,
+      isOpen: isOpenComputed,
       workingHours: o['working_hours'] as String?,
+      workingHoursWeek: _parseWorkingHoursWeek(o['working_hours_week']),
+      timezone: o['timezone']?.toString().trim().isNotEmpty == true
+          ? o['timezone'].toString().trim()
+          : 'Europe/Moscow',
+      workingHoursExceptions:
+          StoWorkingHoursException.tryParseList(o['working_hours_exceptions']),
+      hoursLive: hoursLive,
+      amenityIds: _parseAmenityIds(o['amenity_ids']),
+      publicDescription: o['public_description'] as String?,
       businessKindCode: bk,
       businessKindLabel: bkl,
       schedulingMode: sm == 'bay_based' ? 'bay_based' : 'staff_based',
@@ -251,12 +289,24 @@ class ApiSTORepository implements STORepository {
   Future<Result<AvailableSlotsResult>> getAvailableSlots(
     String stoId,
     DateTime date,
-    List<String> serviceIds,
-  ) async {
+    List<String> serviceIds, {
+    List<SlotAvailabilityItem>? items,
+  }) async {
+    final itemPayload = items
+        ?.map((e) {
+          final m = <String, dynamic>{'estimated_minutes': e.estimatedMinutes};
+          final sid = e.serviceId?.trim();
+          if (sid != null && sid.isNotEmpty) m['service_id'] = sid;
+          final sk = e.requiredSkill?.trim();
+          if (sk != null && sk.isNotEmpty) m['required_skill'] = sk;
+          return m;
+        })
+        .toList();
     final result = await _catalog.getAvailableSlots(
       organizationId: stoId,
       date: date,
       serviceIds: serviceIds,
+      items: itemPayload,
     );
     final data = result.dataOrNull;
     if (data == null) return Result.failure(result.errorOrNull!);

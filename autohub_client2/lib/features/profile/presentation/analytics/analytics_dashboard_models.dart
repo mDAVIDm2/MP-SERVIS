@@ -2,11 +2,23 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Тип визуализации (совпадает с порядком в [AnalyticsScreen]).
-enum AnalyticsChartDisplay { bar, pie, table }
+/// Тип визуализации (новые значения только в конце — совместимость с сохранёнными индексами).
+enum AnalyticsChartDisplay {
+  bar,
+  pie,
+  table,
+  /// Строки категорий и суммы (как список).
+  spendingList,
+  /// График расхода л/100 км между заправками.
+  fuelConsumptionLine,
+  /// Стоимость пути на 1 / 10 / 100 / 1000 км по медиане интервалов заправок.
+  tripCostScales,
+  /// Текущий и предыдущий календарный месяц: траты по категориям (заказы + ТО + ручные).
+  monthCompareCategories,
+}
 
 /// Группировка данных.
-enum AnalyticsGroupBy { month, orgKind, serviceCategory }
+enum AnalyticsGroupBy { month, orgKind, serviceCategory, expenseClass }
 
 /// Метрика в ячейке.
 enum AnalyticsValueMetric {
@@ -25,6 +37,7 @@ class AnalyticsBlockConfig {
     this.display = AnalyticsChartDisplay.bar,
     this.metric = AnalyticsValueMetric.totalSpend,
     this.orgKindFilterCode,
+    this.showLifetimeFuelAverageLine = true,
   });
 
   final String id;
@@ -33,6 +46,8 @@ class AnalyticsBlockConfig {
   AnalyticsChartDisplay display;
   AnalyticsValueMetric metric;
   String? orgKindFilterCode;
+  /// Горизонтальная линия среднего расхода за всё время на графике «л/100 км между заправками».
+  bool showLifetimeFuelAverageLine;
 
   AnalyticsBlockConfig copyWith({
     int? periodMonths,
@@ -41,6 +56,7 @@ class AnalyticsBlockConfig {
     AnalyticsValueMetric? metric,
     String? orgKindFilterCode,
     bool clearOrgFilter = false,
+    bool? showLifetimeFuelAverageLine,
   }) {
     return AnalyticsBlockConfig(
       id: id,
@@ -49,6 +65,20 @@ class AnalyticsBlockConfig {
       display: display ?? this.display,
       metric: metric ?? this.metric,
       orgKindFilterCode: clearOrgFilter ? null : (orgKindFilterCode ?? this.orgKindFilterCode),
+      showLifetimeFuelAverageLine: showLifetimeFuelAverageLine ?? this.showLifetimeFuelAverageLine,
+    );
+  }
+
+  /// Независимая копия для экрана настроек (поля mutable).
+  AnalyticsBlockConfig duplicate() {
+    return AnalyticsBlockConfig(
+      id: id,
+      periodMonths: periodMonths,
+      groupBy: groupBy,
+      display: display,
+      metric: metric,
+      orgKindFilterCode: orgKindFilterCode,
+      showLifetimeFuelAverageLine: showLifetimeFuelAverageLine,
     );
   }
 
@@ -59,6 +89,7 @@ class AnalyticsBlockConfig {
         'display': display.index,
         'metric': metric.index,
         'orgKind': orgKindFilterCode,
+        'fuelAvgAll': showLifetimeFuelAverageLine,
       };
 
   static AnalyticsBlockConfig fromJson(Map<String, dynamic> m) {
@@ -69,6 +100,7 @@ class AnalyticsBlockConfig {
       display: AnalyticsChartDisplay.values[((m['display'] as num?)?.toInt() ?? 0).clamp(0, AnalyticsChartDisplay.values.length - 1)],
       metric: AnalyticsValueMetric.values[((m['metric'] as num?)?.toInt() ?? 0).clamp(0, AnalyticsValueMetric.values.length - 1)],
       orgKindFilterCode: m['orgKind'] as String?,
+      showLifetimeFuelAverageLine: m['fuelAvgAll'] as bool? ?? true,
     );
   }
 }

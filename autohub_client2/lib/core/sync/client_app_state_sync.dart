@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/api_endpoints.dart';
 import '../auth/auth_provider.dart';
 import '../providers/app_providers.dart' show profileNotesProvider;
+import '../settings/favorite_sto_ids_provider.dart';
+import '../settings/maintenance_reminders_provider.dart';
 import '../settings/theme_mode_provider.dart';
 import 'client_app_state_schema.dart';
 
@@ -56,6 +58,28 @@ class ClientAppStateSyncService {
       merged[ClientAppStateSchema.serverKeyProfileNotes] = notesRaw;
     }
 
+    final maintCfg = prefs.getString(ClientAppStateSchema.prefsMaintenanceConfigKey(uid));
+    if (maintCfg != null && maintCfg.isNotEmpty) {
+      merged[ClientAppStateSchema.serverKeyMaintenanceConfigsJson] = maintCfg;
+    }
+    final maintRec = prefs.getString(ClientAppStateSchema.prefsMaintenanceRecordsKey(uid));
+    if (maintRec != null && maintRec.isNotEmpty) {
+      merged[ClientAppStateSchema.serverKeyMaintenanceRecordsJson] = maintRec;
+    }
+    final maintSync = prefs.getString(ClientAppStateSchema.prefsMaintenanceSyncedOrderIdsKey(uid));
+    if (maintSync != null && maintSync.isNotEmpty) {
+      merged[ClientAppStateSchema.serverKeyMaintenanceSyncedOrderIdsJson] = maintSync;
+    }
+
+    final favG = prefs.getStringList('favorite_sto_ids_$uid') ?? <String>[];
+    merged[ClientAppStateSchema.serverKeyFavoriteStoGlobalJson] = jsonEncode(favG);
+    final favPc = prefs.getString('per_car_favorite_sto_ids_$uid');
+    if (favPc != null && favPc.isNotEmpty) {
+      merged[ClientAppStateSchema.serverKeyFavoriteStoPerCarJson] = favPc;
+    } else {
+      merged[ClientAppStateSchema.serverKeyFavoriteStoPerCarJson] = '{}';
+    }
+
     try {
       await client.put<Map<String, dynamic>>(
         ApiEndpoints.profileClientAppState,
@@ -88,11 +112,74 @@ class ClientAppStateSyncService {
       if (notes is String && notes.isNotEmpty) {
         try {
           jsonDecode(notes);
+          await prefs.setString(ClientAppStateSchema.profileNotesPrefix + uid, notes);
+          _ref.invalidate(profileNotesProvider);
         } catch (_) {
-          return;
+          /* битые заметки не блокируют остальной pull */
         }
-        await prefs.setString(ClientAppStateSchema.profileNotesPrefix + uid, notes);
-        _ref.invalidate(profileNotesProvider);
+      }
+
+      Future<bool> pullMaintenanceSlice(String serverKey, String Function(String uid) prefsKey) async {
+        final v = m[serverKey];
+        if (v is! String || v.isEmpty) return false;
+        try {
+          jsonDecode(v);
+        } catch (_) {
+          return false;
+        }
+        await prefs.setString(prefsKey(uid), v);
+        return true;
+      }
+
+      var maintTouched = false;
+      if (await pullMaintenanceSlice(
+            ClientAppStateSchema.serverKeyMaintenanceConfigsJson,
+            ClientAppStateSchema.prefsMaintenanceConfigKey,
+          )) {
+        maintTouched = true;
+      }
+      if (await pullMaintenanceSlice(
+            ClientAppStateSchema.serverKeyMaintenanceRecordsJson,
+            ClientAppStateSchema.prefsMaintenanceRecordsKey,
+          )) {
+        maintTouched = true;
+      }
+      if (await pullMaintenanceSlice(
+            ClientAppStateSchema.serverKeyMaintenanceSyncedOrderIdsJson,
+            ClientAppStateSchema.prefsMaintenanceSyncedOrderIdsKey,
+          )) {
+        maintTouched = true;
+      }
+      if (maintTouched) {
+        _ref.invalidate(maintenanceRemindersProvider);
+      }
+
+      var favTouched = false;
+      final fJson = m[ClientAppStateSchema.serverKeyFavoriteStoGlobalJson];
+      if (fJson is String && fJson.isNotEmpty) {
+        try {
+          final list = jsonDecode(fJson);
+          if (list is List) {
+            await prefs.setStringList(
+              'favorite_sto_ids_$uid',
+              list.map((e) => e.toString()).toList(),
+            );
+            favTouched = true;
+          }
+        } catch (_) {}
+      }
+      final pcJson = m[ClientAppStateSchema.serverKeyFavoriteStoPerCarJson];
+      if (pcJson is String && pcJson.isNotEmpty) {
+        try {
+          final dec = jsonDecode(pcJson);
+          if (dec is Map) {
+            await prefs.setString('per_car_favorite_sto_ids_$uid', pcJson);
+            favTouched = true;
+          }
+        } catch (_) {}
+      }
+      if (favTouched) {
+        _ref.invalidate(favoriteStoStateProvider);
       }
     } catch (_) {}
   }

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../shared/models/organization_model.dart';
 import '../../shared/models/organization_business_kind.dart';
+import '../../shared/models/organization_working_hours_week.dart';
 import '../api/api_exceptions.dart';
 import '../api/services/api_services_providers.dart';
 import '../api/services/organization_api_service.dart';
@@ -14,6 +15,7 @@ const _kOrgNamePrefix = 'org_name_';
 const _kOrgAddressPrefix = 'org_address_';
 const _kOrgPhonePrefix = 'org_phone_';
 const _kOrgHoursPrefix = 'org_hours_';
+const _kOrgWeekPrefix = 'org_week_';
 const _kOrgKindPrefix = 'org_business_kind_';
 const _kOrgSchedulingModePrefix = 'org_scheduling_mode_';
 
@@ -44,6 +46,9 @@ class OrganizationRepository extends StateNotifier<AsyncValue<OrganizationInfo>>
       address: _prefs.getString(_kOrgAddressPrefix + orgId) ?? '',
       phone: _prefs.getString(_kOrgPhonePrefix + orgId) ?? '',
       workingHours: _prefs.getString(_kOrgHoursPrefix + orgId) ?? 'Пн–Пт 9:00–19:00, Сб 10:00–16:00',
+      workingHoursWeek: OrganizationWorkingHoursWeek.weekFromPrefsJson(
+        _prefs.getString(_kOrgWeekPrefix + orgId),
+      ),
       businessKind: OrganizationBusinessKindCodes.normalize(_prefs.getString(_kOrgKindPrefix + orgId)),
       schedulingMode: _prefs.getString(_kOrgSchedulingModePrefix + orgId) ?? 'staff_based',
     );
@@ -56,6 +61,12 @@ class OrganizationRepository extends StateNotifier<AsyncValue<OrganizationInfo>>
     await _prefs.setString(_kOrgAddressPrefix + orgId, org.address);
     await _prefs.setString(_kOrgPhonePrefix + orgId, org.phone);
     await _prefs.setString(_kOrgHoursPrefix + orgId, org.workingHours);
+    final wj = OrganizationWorkingHoursWeek.weekToPrefsJson(org.workingHoursWeek);
+    if (wj != null) {
+      await _prefs.setString(_kOrgWeekPrefix + orgId, wj);
+    } else {
+      await _prefs.remove(_kOrgWeekPrefix + orgId);
+    }
     await _prefs.setString(_kOrgKindPrefix + orgId, org.businessKind);
     await _prefs.setString(_kOrgSchedulingModePrefix + orgId, org.schedulingMode);
   }
@@ -132,6 +143,7 @@ class OrganizationRepository extends StateNotifier<AsyncValue<OrganizationInfo>>
         final merged = updated.copyWith(
           photoUrls: prev?.photoUrls ?? updated.photoUrls,
           subscriptionUsage: updated.subscriptionUsage ?? prev?.subscriptionUsage,
+          workingHoursWeek: updated.workingHoursWeek ?? prev?.workingHoursWeek,
         );
         state = AsyncValue.data(merged);
         await _saveToPrefs(merged);
@@ -166,6 +178,12 @@ Future<void> saveOrganization(SharedPreferences prefs, OrganizationInfo org, {St
   await prefs.setString(_kOrgAddressPrefix + prefix, org.address);
   await prefs.setString(_kOrgPhonePrefix + prefix, org.phone);
   await prefs.setString(_kOrgHoursPrefix + prefix, org.workingHours);
+  final wj = OrganizationWorkingHoursWeek.weekToPrefsJson(org.workingHoursWeek);
+  if (wj != null) {
+    await prefs.setString(_kOrgWeekPrefix + prefix, wj);
+  } else {
+    await prefs.remove(_kOrgWeekPrefix + prefix);
+  }
   await prefs.setString(_kOrgKindPrefix + prefix, org.businessKind);
   await prefs.setString(_kOrgSchedulingModePrefix + prefix, org.schedulingMode);
 }

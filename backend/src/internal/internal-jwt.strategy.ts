@@ -19,7 +19,13 @@ export class InternalJwtStrategy extends PassportStrategy(Strategy, 'internal-jw
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: config.get<string>('JWT_SECRET') || 'dev-secret',
+      secretOrKey: (() => {
+        const secret = config.get<string>('INTERNAL_JWT_SECRET')?.trim();
+        if (process.env.NODE_ENV === 'production' && !secret) {
+          throw new Error('INTERNAL_JWT_SECRET is required when NODE_ENV=production');
+        }
+        return secret || 'dev-internal-secret';
+      })(),
     });
   }
 

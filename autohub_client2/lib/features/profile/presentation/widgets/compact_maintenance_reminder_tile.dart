@@ -146,20 +146,25 @@ class CompactMaintenanceReminderTile extends ConsumerWidget {
     if (!config.remindEnabled) return l.reminderDisabled;
     if (snap.lastRecord == null) return l.addReplacementDate;
 
+    final sep = NumberFormat.decimalPattern(l.intlLocale);
     final parts = <String>[];
     if (config.useKmInterval && snap.kmRemaining != null) {
       if (snap.overdueByKm) {
-        parts.add(l.mileageOverdue);
+        parts.add(l.maintShortKmOverdue(sep.format(snap.kmRemaining!)));
       } else {
-        final sep = NumberFormat.decimalPattern(l.intlLocale);
-        parts.add('≈ ${sep.format(snap.kmRemaining)} ${l.kmUnit}');
+        parts.add(l.maintShortKmLeft(sep.format(snap.kmRemaining!)));
       }
     }
     if (config.useMonthsInterval && snap.daysRemaining != null) {
       if (snap.overdueByDate) {
-        parts.add(l.dateOverdue);
+        final d = snap.daysRemaining!;
+        if (d < 0) {
+          parts.add(l.maintShortDaysOverdue(sep.format(d)));
+        } else {
+          parts.add(l.maintUrgentDateOverdueLine);
+        }
       } else {
-        parts.add(l.approxDays(snap.daysRemaining!));
+        parts.add(l.maintShortDaysLeft(snap.daysRemaining!));
       }
     }
     if (parts.isEmpty) return l.openCard;

@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors_desktop.dart';
 import '../../../../core/theme/desktop_design_system.dart';
 import '../../../../shared/models/order_model.dart';
+import '../../../../shared/models/car_aggregate.dart';
+import '../../../../core/repositories/order_repository.dart';
 import '../../../../shared/models/organization_business_kind.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../shared/widgets/authenticated_api_image.dart';
@@ -552,6 +554,8 @@ class OrderListCardCompact extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final allOrders = ref.watch(orderRepositoryProvider);
+    final carPhotoResolved = CarView.resolveCarPhotoUrlForOrder(order, allOrders);
     final accentBg = _cardAccentBg(order.status);
     final leftBorder = _cardLeftBorder(order.status);
     final start = order.plannedStartTime ?? order.dateTime;
@@ -670,10 +674,10 @@ class OrderListCardCompact extends ConsumerWidget {
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        if (order.carPhotoUrl != null && order.carPhotoUrl!.trim().isNotEmpty) ...[
+                        if (carPhotoResolved != null && carPhotoResolved.isNotEmpty) ...[
                           SizedBox(width: compactDensity ? 6 : 8),
                           AuthenticatedApiImage(
-                            imageUrl: order.carPhotoUrl,
+                            imageUrl: carPhotoResolved,
                             width: compactDensity ? 40 : 48,
                             height: compactDensity ? 40 : 48,
                             borderRadius: 8,

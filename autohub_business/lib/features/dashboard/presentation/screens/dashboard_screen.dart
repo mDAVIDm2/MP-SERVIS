@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../core/config/platform_utils.dart';
+import '../../../../core/navigation/business_desktop_nav.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_colors_desktop.dart';
 import '../../../../core/theme/desktop_design_system.dart';
@@ -262,7 +263,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               Row(
                 children: [
                   FilledButton(
-                    onPressed: () { Navigator.pop(ctx); context.go('/app?tab=6'); },
+                    onPressed: () { Navigator.pop(ctx); context.go('/app?tab=${BusinessDesktopOwnerNav.finance}'); },
                     style: FilledButton.styleFrom(backgroundColor: AppColorsDesktop.primary),
                     child: const Text('Финансы'),
                   ),
@@ -355,7 +356,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               ],
               const SizedBox(height: 16),
               OutlinedButton(
-                onPressed: () { Navigator.pop(ctx); context.go('/app?tab=6'); },
+                onPressed: () { Navigator.pop(ctx); context.go('/app?tab=${BusinessDesktopOwnerNav.finance}'); },
                 child: const Text('Финансы'),
               ),
             ],
@@ -669,7 +670,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                     rangeOrders: rangeOrders,
                     onOpenSchedule: () => context.go('/app?tab=1'),
                     onOpenOrders: () => context.go('/app?tab=2'),
-                    onOpenStaff: () => context.go('/app?tab=5'),
+                    onOpenStaff: () => context.go('/app?tab=${BusinessDesktopOwnerNav.settings}'),
                   ),
                   const SizedBox(height: DesktopDesignSystem.blockSpacing * 1.5),
                   // Заказы на сегодня (или за период)
@@ -2983,9 +2984,10 @@ class _QuickLinksGrid extends StatelessWidget {
     (icon: Icons.receipt_long_rounded, label: 'Активные заказы', tab: 2),
     (icon: Icons.person_off_rounded, label: 'Заказы без мастера', tab: 2),
     (icon: Icons.handshake_rounded, label: 'На согласовании', tab: 2),
-    (icon: Icons.chat_bubble_rounded, label: 'Чаты с клиентами', tab: 4),
-    (icon: Icons.badge_rounded, label: 'Персонал', tab: 5),
-    (icon: Icons.account_balance_wallet_rounded, label: 'Финансы', tab: 6),
+    (icon: Icons.chat_bubble_rounded, label: 'Чаты с клиентами', tab: 6),
+    (icon: Icons.warehouse_rounded, label: 'Склад', tab: 4),
+    (icon: Icons.badge_rounded, label: 'Персонал', tab: 8),
+    (icon: Icons.account_balance_wallet_rounded, label: 'Финансы', tab: 7),
   ];
 
   @override
@@ -3213,7 +3215,7 @@ class _OrderListTile extends StatelessWidget {
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(
-                order.status.label,
+                order.stoDisplayStatusLabel,
                 style: TextStyle(
                   fontSize: 12,
                   color: _statusColor(order.status),

@@ -340,8 +340,7 @@ class _ServicesSettingsDesktopScreenState
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsRepositoryProvider);
     final repo = ref.read(settingsRepositoryProvider.notifier);
-    final categories = List<ServiceCategory>.from(settings.categories)
-      ..sort((a, b) => a.order.compareTo(b.order));
+    final categories = sortedServiceCategoriesForDisplay(settings.categories);
     final catalogAsync = ref.watch(serviceCatalogDataProvider);
 
     if (_selectedCategoryIndex >= categories.length) {
@@ -417,7 +416,7 @@ class _ServicesSettingsDesktopScreenState
                 children: [
                   SizedBox(
                     width: 268,
-                    child: _CategorySidebar(
+                    child:                     _CategorySidebar(
                       categories: categories,
                       selectedIndex: categories.isEmpty
                           ? 0
@@ -428,6 +427,19 @@ class _ServicesSettingsDesktopScreenState
                       onSelect: (i) =>
                           setState(() => _selectedCategoryIndex = i),
                       onAddCategory: () => _promptNewCategory(context, repo),
+                      onReorder: (oldI, newI) {
+                        final orderBefore = categories.map((c) => c.id).toList();
+                        final selId = orderBefore.isEmpty
+                            ? null
+                            : orderBefore[_selectedCategoryIndex.clamp(0, orderBefore.length - 1)];
+                        repo.reorderCategories(oldI, newI);
+                        final next = ref.read(settingsRepositoryProvider);
+                        final nextCats = sortedServiceCategoriesForDisplay(next.categories);
+                        final ni = selId == null ? _selectedCategoryIndex : nextCats.indexWhere((c) => c.id == selId);
+                        setState(() {
+                          _selectedCategoryIndex = (ni >= 0 ? ni : 0).clamp(0, nextCats.isEmpty ? 0 : nextCats.length - 1);
+                        });
+                      },
                     ),
                   ),
                   const SizedBox(width: 16),
@@ -631,12 +643,14 @@ class _CategorySidebar extends StatelessWidget {
     required this.selectedIndex,
     required this.onSelect,
     required this.onAddCategory,
+    required this.onReorder,
   });
 
   final List<ServiceCategory> categories;
   final int selectedIndex;
   final ValueChanged<int> onSelect;
   final VoidCallback onAddCategory;
+  final void Function(int oldIndex, int newIndex) onReorder;
 
   @override
   Widget build(BuildContext context) {
@@ -657,42 +671,69 @@ class _CategorySidebar extends StatelessWidget {
               style: DesktopDesignSystem.sectionTitle.copyWith(fontSize: 14),
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Text(
+              'Перетащите за ⋮⋮',
+              style: TextStyle(fontSize: 11, color: AppColorsDesktop.textTertiary),
+            ),
+          ),
           Expanded(
-            child: ListView.builder(
+            child: ReorderableListView.builder(
+              buildDefaultDragHandles: false,
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               itemCount: categories.length,
-              itemBuilder: (_, i) {
+              onReorder: onReorder,
+              itemBuilder: (context, i) {
                 final c = categories[i];
                 final sel = i == selectedIndex;
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 4),
-                  child: Material(
-                    color: sel
-                        ? AppColorsDesktop.primary.withValues(alpha: 0.12)
-                        : Colors.transparent,
-                    borderRadius: BorderRadius.circular(
-                      DesktopDesignSystem.radiusButton,
-                    ),
-                    child: InkWell(
+                return ReorderableDragStartListener(
+                  key: ValueKey(c.id),
+                  index: i,
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Material(
+                      color: sel
+                          ? AppColorsDesktop.primary.withValues(alpha: 0.12)
+                          : Colors.transparent,
                       borderRadius: BorderRadius.circular(
                         DesktopDesignSystem.radiusButton,
                       ),
-                      onTap: () => onSelect(i),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 12,
-                        ),
-                        child: Text(
-                          c.name,
-                          style: TextStyle(
-                            fontWeight: sel ? FontWeight.w700 : FontWeight.w500,
-                            fontSize: 14,
-                            color: sel
-                                ? AppColorsDesktop.primary
-                                : AppColorsDesktop.textPrimary,
+                      child: Row(
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.only(left: 4, right: 0),
+                            child: Icon(
+                              Icons.drag_handle_rounded,
+                              size: 22,
+                              color: AppColorsDesktop.textTertiary,
+                            ),
                           ),
-                        ),
+                          Expanded(
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(
+                                DesktopDesignSystem.radiusButton,
+                              ),
+                              onTap: () => onSelect(i),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 12,
+                                ),
+                                child: Text(
+                                  displayServiceCategoryTitle(c.name),
+                                  style: TextStyle(
+                                    fontWeight: sel ? FontWeight.w700 : FontWeight.w500,
+                                    fontSize: 14,
+                                    color: sel
+                                        ? AppColorsDesktop.primary
+                                        : AppColorsDesktop.textPrimary,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -813,7 +854,7 @@ class _ServicesPanel extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    category!.name,
+                    displayServiceCategoryTitle(category!.name),
                     style: DesktopDesignSystem.pageTitle.copyWith(fontSize: 18),
                   ),
                 ),

@@ -161,12 +161,16 @@ class ApiOrderRepository implements OrderRepository {
     DateTime? dateTime,
     bool acceptProposed = true,
     String? approvalMessageId,
+    List<String>? approvedItemIds,
+    List<String>? rejectedItemIds,
   }) async {
     final result = await _api.confirmOrder(
       orderId,
       dateTime: dateTime,
       acceptProposed: acceptProposed,
       approvalMessageId: approvalMessageId,
+      approvedItemIds: approvedItemIds,
+      rejectedItemIds: rejectedItemIds,
     );
     return result.errorOrNull == null
         ? Result.success(null)

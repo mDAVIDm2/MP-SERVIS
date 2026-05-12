@@ -1,23 +1,27 @@
-/// Конфигурация приложения. URL бэкенда:
-/// - прод: `--dart-define=MP_SERVIS_API_BASE_URL=https://api.example.ru/api/v1` (HTTPS, без :3000);
-/// - LAN/dev: `--dart-define=MP_SERVIS_API_HOST=...` (порт 3000 по умолчанию).
+/// Конфигурация приложения. URL бэкенда MP-Servis.
 ///
-/// **Android 9+** блокирует HTTP без HTTPS, если не включён cleartext в манифесте (`usesCleartextTraffic`).
-/// На **реальном телефоне** `localhost` — не ваш ПК; нужен **LAN IP**. Эмулятор Android: часто `10.0.2.2`.
+/// **По умолчанию (в т.ч. `flutter build apk` без флагов)** — продакшен `https://api.mp-servis.ru/api/v1`.
 ///
-/// Пример: `flutter run --dart-define=MP_SERVIS_API_HOST=192.168.1.187`
+/// Локальная разработка:
+/// - полный URL: `--dart-define=MP_SERVIS_API_BASE_URL=http://127.0.0.1:3000/api/v1`
+/// - или только хост LAN: `--dart-define=MP_SERVIS_API_HOST=192.168.x.x` (порт 3000)
+///
+/// **Android 9+**: HTTP без HTTPS только при `usesCleartextTraffic` в манифесте.
+/// На телефоне `localhost` — это сам телефон; для ПК в сети укажите LAN IP через `dart-define`.
 class AppConfig {
   AppConfig._();
 
+  static const String _kDefaultProdApiBase = 'https://api.mp-servis.ru/api/v1';
+
   static const String apiHost = String.fromEnvironment(
     'MP_SERVIS_API_HOST',
-    defaultValue: '192.168.1.187',
+    defaultValue: '',
   );
   static const int apiPort = 3000;
   static const String apiPath = '/api/v1';
   static const String wsPath = '/ws';
 
-  /// Полный базовый URL API (прод). Если задан — [apiHost]/[apiPort] не используются.
+  /// Явный базовый URL (прод или локальный Nest). Пусто в коде → см. [baseUrl].
   static const String _apiBaseUrlFromEnv = String.fromEnvironment(
     'MP_SERVIS_API_BASE_URL',
     defaultValue: '',
@@ -31,21 +35,26 @@ class AppConfig {
 
   static String get baseUrl {
     final raw = _apiBaseUrlFromEnv.trim();
-    if (raw.isEmpty) {
-      return 'http://$apiHost:$apiPort$apiPath';
+    if (raw.isNotEmpty) {
+      var u = raw;
+      while (u.endsWith('/')) {
+        u = u.substring(0, u.length - 1);
+      }
+      if (!u.endsWith('/api/v1')) {
+        u = '$u/api/v1';
+      }
+      return u;
     }
-    var u = raw;
-    while (u.endsWith('/')) {
-      u = u.substring(0, u.length - 1);
+    final h = apiHost.trim();
+    if (h.isNotEmpty) {
+      return 'http://$h:$apiPort$apiPath';
     }
-    if (!u.endsWith('/api/v1')) {
-      u = '$u/api/v1';
-    }
-    return u;
+    return _kDefaultProdApiBase;
   }
 
   static String get wsUrl {
-    if (_apiBaseUrlFromEnv.trim().isEmpty) {
+    final raw = _apiBaseUrlFromEnv.trim();
+    if (raw.isEmpty && apiHost.trim().isNotEmpty) {
       return 'ws://$apiHost:$apiPort$wsPath';
     }
     final b = Uri.parse(baseUrl);

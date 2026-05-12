@@ -10,9 +10,14 @@ import '../../../../core/auth/auth_provider.dart';
 import '../../../../core/repositories/organization_repository.dart';
 import 'package:latlong2/latlong.dart';
 import '../../../../shared/models/organization_model.dart';
+import '../../../../shared/models/organization_hours_exception.dart';
 import '../../../../shared/models/organization_business_kind.dart';
+import '../../../../shared/models/organization_working_hours_week.dart';
 import 'map_picker_screen.dart';
 import '../widgets/create_organization_flow.dart';
+import '../../../../core/repositories/settings_repository.dart';
+import '../../../../shared/models/settings_models.dart';
+import '../../../../shared/models/sto_amenity_catalog.dart';
 
 class OrganizationSettingsScreen extends ConsumerStatefulWidget {
   const OrganizationSettingsScreen({
@@ -35,8 +40,12 @@ class _OrganizationSettingsScreenState extends ConsumerState<OrganizationSetting
   late TextEditingController _nameController;
   late TextEditingController _addressController;
   late TextEditingController _phoneController;
-  late TextEditingController _hoursController;
   late final PageController _photoPageController;
+  /// Пн…вс, длина 7.
+  List<OrganizationDayHours> _week =
+      List.from(OrganizationWorkingHoursWeek.defaultTemplate().days);
+  /// Разовые выходные / сокращённые дни.
+  List<OrganizationHoursException> _exceptions = [];
   bool _initialized = false;
   bool _uploadingPhoto = false;
   bool _deletingPhoto = false;
@@ -44,6 +53,9 @@ class _OrganizationSettingsScreenState extends ConsumerState<OrganizationSetting
   double? _latitude;
   double? _longitude;
   String _businessKindCode = OrganizationBusinessKindCodes.sto;
+  late final TextEditingController _publicDescriptionController;
+  /// Синхронизация «О сервисе» с [settingsRepositoryProvider] (без затирания ввода).
+  bool _publicDescSynced = false;
 
   @override
   void initState() {
@@ -51,7 +63,7 @@ class _OrganizationSettingsScreenState extends ConsumerState<OrganizationSetting
     _nameController = TextEditingController();
     _addressController = TextEditingController();
     _phoneController = TextEditingController();
-    _hoursController = TextEditingController();
+    _publicDescriptionController = TextEditingController();
     _photoPageController = PageController(viewportFraction: 0.88);
   }
 
@@ -61,8 +73,16 @@ class _OrganizationSettingsScreenState extends ConsumerState<OrganizationSetting
     _nameController.dispose();
     _addressController.dispose();
     _phoneController.dispose();
-    _hoursController.dispose();
+    _publicDescriptionController.dispose();
     super.dispose();
+  }
+
+  void _syncPublicDescriptionFromSettings(String text) {
+    if (_publicDescSynced && _publicDescriptionController.text == text) {
+      return;
+    }
+    _publicDescriptionController.text = text;
+    _publicDescSynced = true;
   }
 
   Future<void> _pickAndUploadPhoto(String? orgId) async {
@@ -97,6 +117,341 @@ class _OrganizationSettingsScreenState extends ConsumerState<OrganizationSetting
 
   String _displayPhotoUrl(String raw) => AppConfig.resolveApiMediaUrl(raw) ?? raw;
 
+  TimeOfDay _toTimeOfDay(String hm) {
+    final p = hm.split(':');
+    if (p.length != 2) return const TimeOfDay(hour: 9, minute: 0);
+    return TimeOfDay(
+      hour: int.tryParse(p[0]) ?? 9,
+      minute: int.tryParse(p[1]) ?? 0,
+    );
+  }
+
+  String _fromTimeOfDay(TimeOfDay t) =>
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+  String _formatHmForLabel(String hm) {
+    final p = hm.split(':');
+    if (p.length != 2) return hm;
+    final h = int.tryParse(p[0]) ?? 0;
+    return '$h:${p[1]}';
+  }
+
+  Future<void> _pickTime(BuildContext context, int dayIndex, bool isOpen) async {
+    final d = _week[dayIndex];
+    final initial = isOpen ? _toTimeOfDay(d.open) : _toTimeOfDay(d.close);
+    final t = await showTimePicker(
+      context: context,
+      initialTime: initial,
+      builder: (ctx, child) => MediaQuery(
+        data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: true),
+        child: child ?? const SizedBox.shrink(),
+      ),
+    );
+    if (t == null || !mounted) return;
+    final s = _fromTimeOfDay(t);
+    setState(() {
+      if (isOpen) {
+        _week[dayIndex] = d.copyWith(open: s);
+      } else {
+        _week[dayIndex] = d.copyWith(close: s);
+      }
+    });
+  }
+
+  Widget _timeChip(
+    BuildContext context, {
+    required String label,
+    required VoidCallback onTap,
+    required bool desktop,
+  }) {
+    return OutlinedButton(
+      onPressed: onTap,
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size(64, 36),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+        foregroundColor: desktop ? AppColorsDesktop.textPrimary : null,
+        side: BorderSide(
+          color: desktop ? AppColorsDesktop.border : AppColors.border,
+        ),
+      ),
+      child: Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+    );
+  }
+
+  Widget _buildWeekDayRow(
+    BuildContext context, {
+    required int i,
+    required bool canEdit,
+    required bool desktop,
+  }) {
+    final day = _week[i];
+    final label = OrganizationWorkingHoursWeek.dayLabels[i];
+    final textSec = desktop ? AppColorsDesktop.textSecondary : AppColors.textSecondary;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: desktop ? 118 : 108,
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: desktop ? 14 : 13,
+                color: desktop ? AppColorsDesktop.textPrimary : AppColors.textPrimary,
+              ),
+            ),
+          ),
+          if (canEdit) ...[
+            Transform.scale(
+              scale: 0.88,
+              child: Switch(
+                value: !day.closed,
+                onChanged: (v) {
+                  setState(() {
+                    if (v) {
+                      _week[i] = day.copyWith(
+                        closed: false,
+                        open: '09:00',
+                        close: '19:00',
+                      );
+                    } else {
+                      _week[i] = const OrganizationDayHours(
+                        open: '00:00',
+                        close: '00:00',
+                        closed: true,
+                      );
+                    }
+                  });
+                },
+              ),
+            ),
+            const SizedBox(width: 4),
+          ],
+          if (!day.closed) ...[
+            if (canEdit)
+              _timeChip(
+                context,
+                label: _formatHmForLabel(day.open),
+                onTap: () => _pickTime(context, i, true),
+                desktop: desktop,
+              )
+            else
+              Text(
+                _formatHmForLabel(day.open),
+                style: TextStyle(fontSize: 14, color: textSec),
+              ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              child: Text('—', style: TextStyle(color: textSec, fontSize: 14)),
+            ),
+            if (canEdit)
+              _timeChip(
+                context,
+                label: _formatHmForLabel(day.close),
+                onTap: () => _pickTime(context, i, false),
+                desktop: desktop,
+              )
+            else
+              Text(
+                _formatHmForLabel(day.close),
+                style: TextStyle(fontSize: 14, color: textSec),
+              ),
+          ] else
+            Text(
+              'Выходной',
+              style: TextStyle(
+                fontSize: 14,
+                color: textSec,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWorkingHoursExceptionsSection(
+    BuildContext context,
+    bool canEdit,
+    bool desktop,
+    bool embed,
+  ) {
+    final subStyle = TextStyle(
+      fontSize: 12,
+      height: 1.35,
+      color: desktop ? AppColorsDesktop.textSecondary : AppColors.textSecondary,
+    );
+    return Column(
+      crossAxisAlignment:
+          desktop && !embed ? CrossAxisAlignment.center : CrossAxisAlignment.start,
+      children: [
+        SizedBox(height: desktop ? 20 : 16),
+        Text(
+          'Исключения из графика',
+          textAlign: desktop && !embed ? TextAlign.center : TextAlign.start,
+          style: desktop
+              ? DesktopDesignSystem.sectionTitle.copyWith(fontSize: embed ? 15 : 17)
+              : const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Разовый выходной или особые часы в выбранную дату (основной график не меняется)',
+          textAlign: desktop && !embed ? TextAlign.center : TextAlign.start,
+          style: subStyle,
+        ),
+        SizedBox(height: desktop ? 12 : 10),
+        if (_exceptions.isEmpty)
+          Text(
+            'Нет исключений',
+            style: subStyle,
+          ),
+        ..._exceptions.map((e) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Material(
+              color: desktop ? AppColorsDesktop.nestedBg : AppColors.cardBg,
+              borderRadius: BorderRadius.circular(10),
+              child: ListTile(
+                title: Text(e.date, style: const TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: Text(
+                  e.closed ? 'Выходной' : '${e.open ?? ''} – ${e.close ?? ''}',
+                ),
+                trailing: canEdit
+                    ? IconButton(
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: () {
+                          setState(() {
+                            _exceptions = _exceptions.where((x) => x.date != e.date).toList();
+                          });
+                        },
+                      )
+                    : null,
+              ),
+            ),
+          );
+        }),
+        if (canEdit)
+          Align(
+            alignment: desktop && !embed ? Alignment.center : Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () => _openAddWorkingHoursException(context),
+              icon: const Icon(Icons.event_busy_outlined),
+              label: const Text('Добавить исключение'),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _openAddWorkingHoursException(BuildContext context) async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: now,
+      firstDate: now.subtract(const Duration(days: 1)),
+      lastDate: now.add(const Duration(days: 365 * 2)),
+    );
+    if (picked == null || !mounted) return;
+    final ds =
+        '${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
+    if (_exceptions.any((e) => e.date == ds)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('На эту дату уже есть исключение')),
+      );
+      return;
+    }
+    var closed = false;
+    var openT = const TimeOfDay(hour: 9, minute: 0);
+    var closeT = const TimeOfDay(hour: 19, minute: 0);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) {
+          int hm(TimeOfDay t) => t.hour * 60 + t.minute;
+          return AlertDialog(
+            title: Text('Исключение $ds'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SwitchListTile(
+                    title: const Text('Выходной (не работаем)'),
+                    value: closed,
+                    onChanged: (v) => setSt(() => closed = v),
+                  ),
+                  if (!closed) ...[
+                    ListTile(
+                      title: const Text('Начало'),
+                      subtitle: Text(_fromTimeOfDay(openT)),
+                      onTap: () async {
+                        final t = await showTimePicker(
+                          context: ctx,
+                          initialTime: openT,
+                          builder: (c, child) => MediaQuery(
+                            data: MediaQuery.of(c).copyWith(alwaysUse24HourFormat: true),
+                            child: child ?? const SizedBox.shrink(),
+                          ),
+                        );
+                        if (t != null) setSt(() => openT = t);
+                      },
+                    ),
+                    ListTile(
+                      title: const Text('Окончание'),
+                      subtitle: Text(_fromTimeOfDay(closeT)),
+                      onTap: () async {
+                        final t = await showTimePicker(
+                          context: ctx,
+                          initialTime: closeT,
+                          builder: (c, child) => MediaQuery(
+                            data: MediaQuery.of(c).copyWith(alwaysUse24HourFormat: true),
+                            child: child ?? const SizedBox.shrink(),
+                          ),
+                        );
+                        if (t != null) setSt(() => closeT = t);
+                      },
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+              FilledButton(
+                onPressed: () {
+                  if (!closed && hm(closeT) <= hm(openT)) {
+                    ScaffoldMessenger.of(ctx).showSnackBar(
+                      const SnackBar(content: Text('Время «до» должно быть позже «с»')),
+                    );
+                    return;
+                  }
+                  Navigator.pop(ctx, true);
+                },
+                child: const Text('Добавить'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() {
+      final next = closed
+          ? OrganizationHoursException(date: ds, closed: true)
+          : OrganizationHoursException(
+              date: ds,
+              open: _fromTimeOfDay(openT),
+              close: _fromTimeOfDay(closeT),
+            );
+      _exceptions = [..._exceptions, next]..sort((a, b) => a.date.compareTo(b.date));
+    });
+  }
+
   Future<void> _saveOrganizationData(BuildContext context) async {
     final d = widget.desktopChrome;
     final messenger = ScaffoldMessenger.of(context);
@@ -110,11 +465,13 @@ class _OrganizationSettingsScreenState extends ConsumerState<OrganizationSetting
         orgIdForSave.isEmpty) {
       return;
     }
+    ref.read(settingsRepositoryProvider.notifier).setPublicDescription(_publicDescriptionController.text);
     final org = currentOrg.copyWith(
       name: _nameController.text.trim(),
       address: _addressController.text.trim(),
       phone: _phoneController.text.trim(),
-      workingHours: _hoursController.text.trim(),
+      workingHoursWeek: OrganizationWorkingHoursWeek(List.from(_week)),
+      workingHoursExceptions: List.from(_exceptions),
       businessKind: _businessKindCode,
       latitude: _latitude,
       longitude: _longitude,
@@ -461,6 +818,179 @@ class _OrganizationSettingsScreenState extends ConsumerState<OrganizationSetting
     return d ? themeDesktopLight(child: scaffold) : scaffold;
   }
 
+  Widget _clientFacingCardSection({
+    required WidgetRef ref,
+    required bool d,
+    required bool embed,
+    required bool canEdit,
+    required SettingsState settings,
+  }) {
+    _syncPublicDescriptionFromSettings(settings.publicDescription);
+    final titleStyle = d
+        ? DesktopDesignSystem.sectionTitle.copyWith(fontSize: embed ? 15 : 17)
+        : const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textPrimary,
+          );
+    final subStyle = TextStyle(
+      fontSize: 12,
+      height: 1.35,
+      color: d ? AppColorsDesktop.textSecondary : AppColors.textSecondary,
+    );
+    final boxBg = d ? AppColorsDesktop.nestedBg : AppColors.nestedBg;
+    final boxBorder = d ? AppColorsDesktop.border : AppColors.border;
+    final switchTileBg = d ? AppColorsDesktop.surface : AppColors.surface;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(height: d ? 28 : 24),
+        Text(
+          'Как вас видят в приложении клиента',
+          textAlign: d && !embed ? TextAlign.center : TextAlign.start,
+          style: titleStyle,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Удобства на сервере сохраняются сразу. Текст «О сервисе» — вместе с кнопкой «Сохранить».',
+          textAlign: d && !embed ? TextAlign.center : TextAlign.start,
+          style: subStyle,
+        ),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: boxBg,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: boxBorder),
+            boxShadow: d
+                ? null
+                : [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.04),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.local_cafe_outlined,
+                    size: 20,
+                    color: d ? AppColorsDesktop.primary : AppColors.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Удобства',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: d ? AppColorsDesktop.textPrimary : AppColors.textPrimary,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Что отмечено — увидят клиенты в карточке сервиса (иконки и подписи).',
+                style: subStyle,
+              ),
+              const SizedBox(height: 8),
+              ...StoAmenityCatalog.all.map((a) {
+                final selected = settings.amenityIds.contains(a.id);
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 3),
+                  child: Material(
+                    color: switchTileBg,
+                    borderRadius: BorderRadius.circular(10),
+                    child: SwitchListTile.adaptive(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
+                      dense: true,
+                      value: selected,
+                      onChanged: canEdit
+                          ? (v) {
+                              ref.read(settingsRepositoryProvider.notifier).toggleAmenity(a.id);
+                            }
+                          : null,
+                      title: Text(
+                        a.label,
+                        style: TextStyle(
+                          fontSize: 15,
+                          color: d ? AppColorsDesktop.textPrimary : AppColors.textPrimary,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Icon(
+                    Icons.chat_bubble_outline_rounded,
+                    size: 20,
+                    color: d ? AppColorsDesktop.primary : AppColors.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'О сервисе',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: d ? AppColorsDesktop.textPrimary : AppColors.textPrimary,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Короткое описание: у клиентов сначала видны первые строки, полный текст — по кнопке «ещё».',
+                style: subStyle,
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _publicDescriptionController,
+                readOnly: !canEdit,
+                minLines: 4,
+                maxLines: 10,
+                style: TextStyle(
+                  fontSize: 15,
+                  height: 1.4,
+                  color: d ? AppColorsDesktop.textPrimary : AppColors.textPrimary,
+                ),
+                decoration: InputDecoration(
+                  hintText: 'Опыт, оборудование, гарантия — что важно клиентам',
+                  alignLabelWithHint: true,
+                  filled: true,
+                  fillColor: d ? AppColorsDesktop.surface : AppColors.cardBg,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: BorderSide(color: boxBorder),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: BorderSide(
+                      color: d ? AppColorsDesktop.primary : AppColors.primary,
+                      width: 1.4,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final authUser = ref.watch(authProvider).user;
@@ -485,7 +1015,10 @@ class _OrganizationSettingsScreenState extends ConsumerState<OrganizationSetting
             _nameController.text = org.name;
             _addressController.text = org.address;
             _phoneController.text = org.phone;
-            _hoursController.text = org.workingHours;
+            _week = List.from(
+              (org.workingHoursWeek ?? OrganizationWorkingHoursWeek.defaultTemplate()).days,
+            );
+            _exceptions = List.from(org.workingHoursExceptions ?? const []);
             _latitude = org.latitude;
             _longitude = org.longitude;
             _businessKindCode = org.businessKind;
@@ -734,13 +1267,49 @@ class _OrganizationSettingsScreenState extends ConsumerState<OrganizationSetting
                   ],
                 ),
               const SizedBox(height: 16),
-              TextField(
-                controller: _hoursController,
-                readOnly: !canEditOrg,
-                decoration: const InputDecoration(
-                  labelText: 'Часы работы',
-                  hintText: 'Пн–Пт 9:00–19:00',
+              Text(
+                'График работы',
+                textAlign: d && !embed ? TextAlign.center : TextAlign.start,
+                style: d
+                    ? DesktopDesignSystem.sectionTitle.copyWith(fontSize: embed ? 15 : 17)
+                    : const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Время с и до по каждому дню; у клиентов показывается сегодня и полный график',
+                textAlign: d && !embed ? TextAlign.center : TextAlign.start,
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.35,
+                  color: d ? AppColorsDesktop.textSecondary : AppColors.textSecondary,
                 ),
+              ),
+              SizedBox(height: d ? 12 : 10),
+              ...List.generate(
+                7,
+                (i) => _buildWeekDayRow(
+                  context,
+                  i: i,
+                  canEdit: canEditOrg,
+                  desktop: d,
+                ),
+              ),
+              _buildWorkingHoursExceptionsSection(context, canEditOrg, d, embed),
+              Consumer(
+                builder: (context, ref, _) {
+                  final st = ref.watch(settingsRepositoryProvider);
+                  return _clientFacingCardSection(
+                    ref: ref,
+                    d: d,
+                    embed: embed,
+                    canEdit: canEditOrg,
+                    settings: st,
+                  );
+                },
               ),
               Consumer(
                 builder: (context, ref, _) {

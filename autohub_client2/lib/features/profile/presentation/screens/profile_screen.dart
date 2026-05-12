@@ -33,7 +33,7 @@ import 'faq_screen.dart';
 import 'about_screen.dart';
 import 'map_settings_screen.dart';
 import 'maintenance_reminders_screen.dart';
-import 'osago_order_screen.dart';
+import 'osago_pampadu_screen.dart';
 import '../../../chats/presentation/screens/chat_detail_screen.dart';
 
 /// По строке срока («до 15 марта 2026») возвращает статус и цвет для ОСАГО/техосмотра.
@@ -367,7 +367,7 @@ class ProfileScreen extends ConsumerWidget {
 
   void _onOsagoRegisterTap(BuildContext context) {
     Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(builder: (_) => const OsagoOrderScreen()),
+      MaterialPageRoute<void>(builder: (_) => const OsagoPampaduScreen()),
     );
   }
 

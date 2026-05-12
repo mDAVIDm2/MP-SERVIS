@@ -24,6 +24,7 @@ import '../../features/settings/presentation/screens/settings_screen.dart';
 import '../../features/settings/presentation/widgets/desktop_settings_workspace.dart';
 import '../../features/finance/presentation/screens/finance_screen.dart';
 import '../../features/cars/presentation/screens/cars_screen.dart';
+import '../../features/inventory/presentation/screens/inventory_desktop_screen.dart';
 import '../../features/clients/presentation/screens/clients_screen.dart';
 import '../../features/orders/presentation/screens/quick_create_order_screen.dart';
 import '../../core/theme/desktop_light_theme.dart';
@@ -237,6 +238,7 @@ class _MainShellState extends ConsumerState<MainShell> with SingleTickerProvider
         const _NavItem(icon: Icons.calendar_today_rounded, label: 'Расписание'),
         const _NavItem(icon: Icons.receipt_long_rounded, label: 'Заказы'),
         const _NavItem(icon: Icons.directions_car_rounded, label: 'Автомобили'),
+        const _NavItem(icon: Icons.warehouse_rounded, label: 'Склад'),
       ];
       if (role.canSeeClients) {
         items.add(const _NavItem(icon: Icons.people_outline_rounded, label: 'Клиенты'));
@@ -253,6 +255,7 @@ class _MainShellState extends ConsumerState<MainShell> with SingleTickerProvider
         const _NavItem(icon: Icons.calendar_today_rounded, label: 'Расписание'),
         const _NavItem(icon: Icons.receipt_long_rounded, label: 'Заказы'),
         const _NavItem(icon: Icons.directions_car_rounded, label: 'Автомобили'),
+        const _NavItem(icon: Icons.warehouse_rounded, label: 'Склад'),
       ];
       if (role.canSeeClients) {
         items.add(const _NavItem(icon: Icons.people_outline_rounded, label: 'Клиенты'));
@@ -268,6 +271,7 @@ class _MainShellState extends ConsumerState<MainShell> with SingleTickerProvider
         const _NavItem(icon: Icons.calendar_today_rounded, label: 'Расписание'),
         const _NavItem(icon: Icons.receipt_long_rounded, label: 'Заказы'),
         const _NavItem(icon: Icons.directions_car_rounded, label: 'Автомобили'),
+        const _NavItem(icon: Icons.warehouse_rounded, label: 'Склад'),
       ];
       if (role.canSeeClients) {
         items.add(const _NavItem(icon: Icons.people_outline_rounded, label: 'Клиенты'));
@@ -321,6 +325,7 @@ class _MainShellState extends ConsumerState<MainShell> with SingleTickerProvider
         const ScheduleScreen(),
         OrdersScreen(isTabSelected: isOrdersTabSelected),
         const CarsScreen(),
+        const InventoryDesktopScreen(),
       ];
       if (role.canSeeClients) {
         screens.add(const ClientsScreen());
@@ -337,6 +342,7 @@ class _MainShellState extends ConsumerState<MainShell> with SingleTickerProvider
         const ScheduleScreen(),
         OrdersScreen(isTabSelected: isOrdersTabSelected),
         const CarsScreen(),
+        const InventoryDesktopScreen(),
       ];
       if (role.canSeeClients) {
         screens.add(const ClientsScreen());
@@ -352,6 +358,7 @@ class _MainShellState extends ConsumerState<MainShell> with SingleTickerProvider
         const ScheduleScreen(),
         OrdersScreen(isTabSelected: isOrdersTabSelected),
         const CarsScreen(),
+        const InventoryDesktopScreen(),
       ];
       if (role.canSeeClients) {
         screens.add(const ClientsScreen());

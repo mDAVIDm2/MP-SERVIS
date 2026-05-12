@@ -15,6 +15,7 @@ import '../api/api_exceptions.dart';
 import '../api/order_api_service.dart';
 import '../api/chat_api_service.dart';
 import '../api/reference_api_service.dart';
+import '../api/car_transfer_api_service.dart';
 import '../auth/auth_provider.dart';
 import '../../shared/models/notification_model.dart';
 import '../../shared/models/car_model.dart' show Car, CarReminder;
@@ -27,6 +28,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import '../settings/mileage_prompt_storage.dart';
 import '../settings/maintenance_reminders_provider.dart';
+import '../settings/car_manual_expenses_provider.dart';
 import '../sync/client_app_state_schema.dart';
 import '../sync/client_app_state_push_bridge.dart' show scheduleClientAppStatePush;
 
@@ -79,6 +81,28 @@ final notificationApiServiceProvider = Provider<NotificationApiService>(
 final notificationRepositoryProvider = Provider<NotificationRepository>(
   (ref) => ApiNotificationRepository(ref.watch(notificationApiServiceProvider)),
 );
+
+final carTransferApiServiceProvider = Provider<CarTransferApiService>(
+  (ref) => CarTransferApiService(ref.watch(apiClientProvider)),
+);
+
+/// Входящие запросы на передачу авто (для баннера в гараже).
+final incomingCarTransfersProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
+  final user = ref.watch(authProvider).user;
+  if (user == null) return [];
+  final api = ref.watch(carTransferApiServiceProvider);
+  final r = await api.listIncoming();
+  return r.dataOrNull ?? [];
+});
+
+/// Исходящие передачи (история + активные pending — фильтр в UI).
+final outgoingCarTransfersProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
+  final user = ref.watch(authProvider).user;
+  if (user == null) return [];
+  final api = ref.watch(carTransferApiServiceProvider);
+  final r = await api.listOutgoing();
+  return r.dataOrNull ?? [];
+});
 
 // ═══════════════════════════════════════
 // GARAGE (Авто)
@@ -173,6 +197,8 @@ class CarsNotifier extends StateNotifier<AsyncValue<List<Car>>> {
             photoUrl: updated.photoUrl,
             reminders: old.reminders,
             mergedFromOrders: updated.mergedFromOrders,
+            ownershipMode: updated.ownershipMode,
+            serverTransferId: updated.serverTransferId,
           );
     final next = List<Car>.from(list);
     next[i] = merged;
@@ -369,6 +395,7 @@ class CarsNotifier extends StateNotifier<AsyncValue<List<Car>>> {
     if (id.isEmpty) return false;
     await _rememberGarageHiddenCarId(id);
     _ref.read(maintenanceRemindersProvider.notifier).removeAllDataForCar(id);
+    _ref.read(carManualExpensesProvider.notifier).removeAllDataForCar(id);
     _ref.read(carDocumentsProvider.notifier).removeAllDocumentsForCar(id);
     final result = await _repo.deleteCar(id);
     await loadCars();
@@ -451,6 +478,22 @@ class CarsNotifier extends StateNotifier<AsyncValue<List<Car>>> {
     }
     return car;
   }
+
+  Future<bool> forgetFormerCar(String carId) async {
+    final api = _ref.read(carTransferApiServiceProvider);
+    final result = await api.forgetFormer(carId);
+    if (result.errorOrNull == null) {
+      await loadCars(silent: true);
+      return true;
+    }
+    return false;
+  }
+
+  Future<bool> createCarTransfer(String carId, String toPhone, {Map<String, dynamic>? options}) async {
+    final api = _ref.read(carTransferApiServiceProvider);
+    final result = await api.create(carId: carId, toPhone: toPhone, options: options);
+    return result.errorOrNull == null;
+  }
 }
 
 // ═══════════════════════════════════════
@@ -507,12 +550,16 @@ class OrdersNotifier extends StateNotifier<AsyncValue<List<Order>>> {
     DateTime? dateTime,
     bool acceptProposed = true,
     String? approvalMessageId,
+    List<String>? approvedItemIds,
+    List<String>? rejectedItemIds,
   }) async {
     final result = await _repo.confirmOrder(
       orderId,
       dateTime: dateTime,
       acceptProposed: acceptProposed,
       approvalMessageId: approvalMessageId,
+      approvedItemIds: approvedItemIds,
+      rejectedItemIds: rejectedItemIds,
     );
     if (result.errorOrNull == null) {
       await loadOrders();

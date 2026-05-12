@@ -79,6 +79,25 @@ enum OrderStatus {
   }
 }
 
+/// Кто должен подтвердить бронь в [OrderStatus.pendingConfirmation] (поле `confirmation_required_from` в API).
+enum OrderConfirmationRequiredFrom {
+  /// Подтверждает клиент (запись создала организация).
+  client,
+  /// Подтверждает сервис (заявку создал клиент).
+  organization;
+
+  static OrderConfirmationRequiredFrom? fromApi(String? v) {
+    switch (v?.toLowerCase().trim()) {
+      case 'client':
+        return OrderConfirmationRequiredFrom.client;
+      case 'organization':
+        return OrderConfirmationRequiredFrom.organization;
+      default:
+        return null;
+    }
+  }
+}
+
 class OrderItem {
   final String id;
   final String name;
@@ -179,6 +198,10 @@ class Order {
   final String? organizationBusinessKind;
   /// `staff_based` | `bay_based` — как строилось расписание у организации.
   final String? organizationSchedulingMode;
+  /// См. [OrderConfirmationRequiredFrom] (`confirmation_required_from` в API).
+  final OrderConfirmationRequiredFrom? confirmationRequiredFrom;
+  /// `org_confirmed_on_behalf_of_client` — СТО сразу подтвердило бронь (согласие вне приложения).
+  final bool orgConfirmedOnBehalfOfClient;
 
   /// Только автосервис / шиномонтаж / сервис ЭС: и только при явном коде из API (без кода — не подтягиваем).
   bool get isEligibleForMaintenanceSync =>
@@ -187,6 +210,13 @@ class Order {
   /// Статус для отображения в карточке: при pending_approval показываем этап, на котором был заказ при отправке изменений (подтверждён/записан/в работе).
   OrderStatus get displayStatus =>
       (status == OrderStatus.pendingApproval && previousStatus != null) ? previousStatus! : status;
+
+  OrderConfirmationRequiredFrom get _resolvedConfirmationParty =>
+      confirmationRequiredFrom ?? OrderConfirmationRequiredFrom.organization;
+
+  /// Клиенту нужно нажать «подтвердить» (запись от сервиса).
+  bool get clientMustConfirmPendingBooking =>
+      status == OrderStatus.pendingConfirmation && _resolvedConfirmationParty == OrderConfirmationRequiredFrom.client;
 
   bool get hasApprovalPreview =>
       status == OrderStatus.pendingApproval &&
@@ -248,6 +278,8 @@ class Order {
     this.updatedAt,
     this.organizationBusinessKind,
     this.organizationSchedulingMode,
+    this.confirmationRequiredFrom,
+    this.orgConfirmedOnBehalfOfClient = false,
   });
 
   Order copyWith({
@@ -283,6 +315,8 @@ class Order {
     DateTime? updatedAt,
     String? organizationBusinessKind,
     String? organizationSchedulingMode,
+    OrderConfirmationRequiredFrom? confirmationRequiredFrom,
+    bool? orgConfirmedOnBehalfOfClient,
     bool clearApprovalPreview = false,
   }) {
     return Order(
@@ -320,6 +354,8 @@ class Order {
       updatedAt: updatedAt ?? this.updatedAt,
       organizationBusinessKind: organizationBusinessKind ?? this.organizationBusinessKind,
       organizationSchedulingMode: organizationSchedulingMode ?? this.organizationSchedulingMode,
+      confirmationRequiredFrom: confirmationRequiredFrom ?? this.confirmationRequiredFrom,
+      orgConfirmedOnBehalfOfClient: orgConfirmedOnBehalfOfClient ?? this.orgConfirmedOnBehalfOfClient,
     );
   }
 
@@ -422,6 +458,12 @@ class Order {
       organizationBusinessKind: OrgBusinessKind.normalizeCode(j['organization_business_kind']?.toString()),
       organizationSchedulingMode:
           OrgBusinessKind.normalizeSchedulingMode(j['organization_scheduling_mode']?.toString()),
+      confirmationRequiredFrom: OrderConfirmationRequiredFrom.fromApi(
+        j['confirmation_required_from']?.toString() ?? j['confirmationRequiredFrom']?.toString(),
+      ),
+      orgConfirmedOnBehalfOfClient: j['org_confirmed_on_behalf_of_client'] as bool? ??
+          j['orgConfirmedOnBehalfOfClient'] as bool? ??
+          false,
     );
   }
 

@@ -3,5 +3,13 @@
 Thumbs.db
 *.log
 
+# Артефакты сборки / выкладки (не коммитить)
+backend/dist/
+mp-backend-deploy.tgz
+*.apk
+
 # Локальные учётные данные Control Center (не коммитить)
 control_center.credentials.dat
+
+# Пакеты переноса с VPS (дампы, .env — не коммитить)
+migration_to_windows_*/

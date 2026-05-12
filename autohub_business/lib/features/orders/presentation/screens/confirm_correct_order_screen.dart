@@ -550,7 +550,7 @@ class _ConfirmCorrectOrderScreenState extends ConsumerState<ConfirmCorrectOrderS
           ),
           const SizedBox(height: 20),
           Text(
-            'Предложенное время (сетка как у клиента при записи или укажите вручную)',
+            'Предложенное время',
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: tSecondary),
           ),
           const SizedBox(height: 8),

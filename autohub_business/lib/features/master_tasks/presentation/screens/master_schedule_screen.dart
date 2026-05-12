@@ -204,7 +204,7 @@ class _MasterScheduleScreenState extends ConsumerState<MasterScheduleScreen> {
             color: order.status.color.withValues(alpha: 0.2),
             borderRadius: BorderRadius.circular(6),
           ),
-          child: Text(order.status.label, style: TextStyle(fontSize: 10, color: order.status.color)),
+          child: Text(order.stoDisplayStatusLabel, style: TextStyle(fontSize: 10, color: order.status.color)),
         ),
         onTap: () => Navigator.push(
           context,

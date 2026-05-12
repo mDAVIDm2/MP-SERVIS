@@ -13,6 +13,9 @@ enum ReminderType {
 
 enum ReminderStatus { overdue, upcoming, ok }
 
+/// Режим записи в гараже: владелец или бывший владелец (только просмотр).
+enum CarOwnershipMode { owner, former }
+
 class CarReminder {
   final String id;
   final ReminderType type;
@@ -86,6 +89,11 @@ class Car {
   /// Собрано из истории заказов при пустом локальном гараже (нет id справочника в данных заказа).
   final bool mergedFromOrders;
 
+  final CarOwnershipMode ownershipMode;
+
+  /// Заполнено для [CarOwnershipMode.former] — id передачи в БД.
+  final String? serverTransferId;
+
   const Car({
     required this.id,
     required this.brand,
@@ -107,7 +115,11 @@ class Car {
     this.photoUrl,
     this.reminders = const [],
     this.mergedFromOrders = false,
+    this.ownershipMode = CarOwnershipMode.owner,
+    this.serverTransferId,
   });
+
+  bool get isFormerOwnerReadonly => ownershipMode == CarOwnershipMode.former;
 
   /// Только подтверждённые (из БД) данные — для отправки при записи в сервис.
   String get confirmedCarInfo {
@@ -148,6 +160,11 @@ class Car {
     return AppConfig.resolveCarOrOrderPhotoUrl(raw.trim());
   }
 
+  static CarOwnershipMode _parseOwnershipMode(String? raw) {
+    if (raw == 'former') return CarOwnershipMode.former;
+    return CarOwnershipMode.owner;
+  }
+
   Map<String, dynamic> toJson() => {
     'id': id,
     'brand': brand,
@@ -168,6 +185,8 @@ class Car {
     'color': color,
     'photoUrl': photoUrl,
     'mergedFromOrders': mergedFromOrders,
+    'ownershipMode': ownershipMode.name,
+    'serverTransferId': serverTransferId,
   };
 
   static Car fromJson(Map<String, dynamic> m) => Car(
@@ -190,6 +209,8 @@ class Car {
     color: m['color'] as String?,
     photoUrl: _normalizePhotoUrl(m['photoUrl'] as String?),
     mergedFromOrders: m['mergedFromOrders'] == true,
+    ownershipMode: _parseOwnershipMode(m['ownershipMode'] as String?),
+    serverTransferId: m['serverTransferId'] as String?,
   );
 
   /// Ответ GET/POST/PATCH `/profile/cars` (snake_case).
@@ -213,5 +234,7 @@ class Car {
     color: m['color'] as String?,
     photoUrl: _normalizePhotoUrl(m['photo_url'] as String?),
     mergedFromOrders: m['merged_from_orders'] == true,
+    ownershipMode: _parseOwnershipMode(m['ownership_mode'] as String?),
+    serverTransferId: m['transfer_id'] as String?,
   );
 }

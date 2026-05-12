@@ -54,6 +54,12 @@ class OrderRepository extends StateNotifier<List<Order>> {
           );
         }
       }
+      if (order.inventoryLines.isEmpty) {
+        final prev = state.where((o) => o.id == order.id).firstOrNull;
+        if (prev != null && prev.inventoryLines.isNotEmpty) {
+          order = order.copyWith(inventoryLines: prev.inventoryLines);
+        }
+      }
       state = [...state.where((o) => o.id != order.id), order];
       state = state.where((o) => !o.isHiddenFromUser).toList();
     } catch (_) {}
@@ -94,15 +100,24 @@ class OrderRepository extends StateNotifier<List<Order>> {
         ordersLoadError = null;
         final incoming = result.dataOrNull!.where((o) => !o.isHiddenFromUser).toList();
         state = incoming.map((o) {
-          if (o.items.isNotEmpty) return o;
-          final prev = state.where((e) => e.id == o.id).firstOrNull;
-          return prev != null && prev.items.isNotEmpty
-              ? o.copyWith(
-                  items: prev.items,
-                  clientAvatarUrl: o.clientAvatarUrl ?? prev.clientAvatarUrl,
-                  carPhotoUrl: o.carPhotoUrl ?? prev.carPhotoUrl,
-                )
-              : o;
+          Order out = o;
+          if (o.items.isEmpty) {
+            final prev = state.where((e) => e.id == o.id).firstOrNull;
+            if (prev != null && prev.items.isNotEmpty) {
+              out = out.copyWith(
+                items: prev.items,
+                clientAvatarUrl: o.clientAvatarUrl ?? prev.clientAvatarUrl,
+                carPhotoUrl: o.carPhotoUrl ?? prev.carPhotoUrl,
+              );
+            }
+          }
+          if (out.inventoryLines.isEmpty) {
+            final prev = state.where((e) => e.id == o.id).firstOrNull;
+            if (prev != null && prev.inventoryLines.isNotEmpty) {
+              out = out.copyWith(inventoryLines: prev.inventoryLines);
+            }
+          }
+          return out;
         }).toList();
         if (kDebugMode) {
           debugPrint('[ChatOrderDebug] OrderRepository.loadFromApi | state updated | newCount=${state.length} orderIds=${state.take(3).map((o) => o.id).join(';')}');
@@ -139,8 +154,33 @@ class OrderRepository extends StateNotifier<List<Order>> {
           );
         }
       }
+      if (merged.inventoryLines.isEmpty) {
+        final prev = state.where((o) => o.id == orderId).firstOrNull;
+        if (prev != null && prev.inventoryLines.isNotEmpty) {
+          merged = merged.copyWith(inventoryLines: prev.inventoryLines);
+        }
+      }
       state = [...state.where((o) => o.id != orderId), merged];
     }
+  }
+
+  Future<Result<void>> addOrderInventoryLine(
+    String orderId, {
+    required String inventoryItemId,
+    required double quantity,
+    String? unit,
+    String? orderItemId,
+  }) async {
+    final result = await _api.addOrderInventoryLine(
+      orderId,
+      inventoryItemId: inventoryItemId,
+      quantity: quantity,
+      unit: unit,
+      orderItemId: orderItemId,
+    );
+    if (result.errorOrNull != null) return result;
+    await refreshOrder(orderId);
+    return Result.success(null);
   }
 
   @override
@@ -404,7 +444,8 @@ class OrderRepository extends StateNotifier<List<Order>> {
     return Result.success(null);
   }
 
-  /// Создать заказ: запрос к API, при успехе — добавить в state; при ошибке — добавить локально.
+  /// Создать заказ: запрос к API, при успехе — добавить в state. При ошибке — [ApiException], без «фиктивного» заказа
+  /// (иначе после [loadFromApi] запись пропадала, а у клиента заказ не появлялся).
   Future<Order> addOrderAsync(Order order) async {
     final result = await _api.createOrder(
       carId: order.carId,
@@ -421,19 +462,18 @@ class OrderRepository extends StateNotifier<List<Order>> {
       mileage: order.mileage,
       engineType: order.engineType,
       bayId: order.bayId,
+      confirmForClient: order.orgConfirmedOnBehalfOfClient,
     );
-    if (result.dataOrNull != null) {
-      state = [...state, result.dataOrNull!];
-      return result.dataOrNull!;
+    final created = result.dataOrNull;
+    if (created != null) {
+      state = [...state, created];
+      return created;
     }
-    final nextNum = state.isEmpty ? 1 : state.length + 1;
-    final orderNumber = '#2024-${nextNum.toString().padLeft(3, '0')}';
-    final newOrder = order.copyWith(
-      orderNumber: orderNumber,
-      id: order.id.isEmpty ? 'order_${DateTime.now().millisecondsSinceEpoch}' : order.id,
-    );
-    state = [...state, newOrder];
-    return newOrder;
+    throw result.errorOrNull ??
+        const ApiException(
+          code: ApiErrorCode.internal,
+          message: 'Не удалось создать заказ',
+        );
   }
 }
 

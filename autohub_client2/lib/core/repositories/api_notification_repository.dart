@@ -52,6 +52,9 @@ class ApiNotificationRepository implements NotificationRepository {
         case 'profile': return NotificationTarget.profile;
       }
     }
+    if (typeStr != null && typeStr.contains('car_transfer')) {
+      return NotificationTarget.garage;
+    }
     if (typeStr != null && (typeStr.contains('pending_car') || typeStr.contains('order') || typeStr.contains('chat'))) {
       if (typeStr.contains('order')) return NotificationTarget.order;
       if (typeStr.contains('chat')) return NotificationTarget.chat;

@@ -51,10 +51,24 @@ _ExternalMarkerPalette _paletteForCategory(_ExternalCategory c) {
 }
 
 /// Шаг сетки кластеризации (в градусах): при меньшем зуме ячейка крупнее — точки сливаются.
+/// Множитель меньше 1 — ячейка меньше: в кластер попадают только ближе стоящие точки.
 double _externalClusterStepDegrees(double zoom) {
   const zRef = 11.0;
   const base = 0.052;
-  return base / math.pow(2, (zoom - zRef).clamp(-1.0, 11.0));
+  /// Чуть крупнее ячейка — кластер собирается при чуть более «близком» приближении, чем раньше.
+  const tighter = 0.69;
+  return tighter * base / math.pow(2, (zoom - zRef).clamp(-1.0, 11.0));
+}
+
+/// Кластеры с цифрой только при **отдалении** (zoom строго ниже порога).
+/// При приближении сетка отключается — всегда отдельные пины (без «лишних» групп при сильном zoom-in).
+/// Порог чуть выше: отдельные пины только при более сильном zoom-in.
+const double _externalClusteringOnlyWhenZoomBelow = 13.12;
+
+/// Зум для сетки кластеров: шаг 0.25 — при плавном движении камеры границы ячеек
+/// не пересчитываются на каждом кадре, метки не «дрожат».
+double _zoomQuantizedForClustering(double z) {
+  return (z * 4).round() / 4.0;
 }
 
 /// Одна непартнёрская точка или кластер (несколько POI в ячейке **одной категории**).
@@ -117,6 +131,15 @@ List<_ClusteredExternalView> _clusterExternalEntries(
   required double centerLng,
 }) {
   if (entries.isEmpty) return [];
+  if (zoom >= _externalClusteringOnlyWhenZoomBelow) {
+    final out = entries.map((e) => _ClusteredExternalView.single(e.data as ExternalPOI)).toList();
+    out.sort((a, b) {
+      final da = _distanceKm(centerLat, centerLng, a.lat, a.lng);
+      final db = _distanceKm(centerLat, centerLng, b.lat, b.lng);
+      return da.compareTo(db);
+    });
+    return out;
+  }
   final step = _externalClusterStepDegrees(zoom);
   final bins = <String, List<_MapEntry>>{};
   final prefix = '${category.name}_';
@@ -131,6 +154,10 @@ List<_ClusteredExternalView> _clusterExternalEntries(
     final list = bin.value;
     if (list.length == 1) {
       out.add(_ClusteredExternalView.single(list.first.data as ExternalPOI));
+    } else if (list.length == 2) {
+      for (final e in list) {
+        out.add(_ClusteredExternalView.single(e.data as ExternalPOI));
+      }
     } else {
       var sl = 0.0;
       var sn = 0.0;
@@ -203,6 +230,8 @@ class STOOSMMap extends StatefulWidget {
   final LatLng initialCenter;
   final double initialZoom;
   final List<STO> partners;
+  /// id организаций в избранном (эффективный набор) — на карте не зелёный пин, а силуэт сердца.
+  final Set<String> favoriteStoIds;
   final List<ExternalPOI> externals;
   final LatLng? userLocation;
   final void Function(STO) onPartnerTap;
@@ -222,6 +251,7 @@ class STOOSMMap extends StatefulWidget {
     required this.initialCenter,
     this.initialZoom = 14,
     required this.partners,
+    this.favoriteStoIds = const <String>{},
     required this.externals,
     this.userLocation,
     required this.onPartnerTap,
@@ -239,19 +269,20 @@ class STOOSMMap extends StatefulWidget {
   State<STOOSMMap> createState() => _STOOSMMapState();
 }
 
-class _STOOSMMapState extends State<STOOSMMap> {
+class _STOOSMMapState extends State<STOOSMMap> with SingleTickerProviderStateMixin {
   final MapController _mapController = MapController();
-  /// Актуальная камера (для колбэков и загрузки POI по области).
-  double _liveZoom = 14;
-  LatLng _liveCenter = const LatLng(45.0355, 38.9753);
-  /// Задержанные центр/зум — только для отрисовки маркеров (после окончания жеста не «дёргаются»).
+  /// Плавное «раскрытие» кластера при тапе (анимация зума + покадровое обновление кластеров).
+  AnimationController? _clusterExpandController;
+  /// Центр/зум для кластеризации непартнёров (синхронно с камерой при движении карты).
   double _clusterZoom = 14;
   LatLng _clusterCenter = const LatLng(45.0355, 38.9753);
   bool _ready = false;
   Timer? _boundsDebounce;
-  Timer? _markerClusterDebounce;
-  static const Duration _boundsDebounceDuration = Duration(milliseconds: 900);
-  static const Duration _markerClusterDebounceDuration = Duration(milliseconds: 280);
+  static const Duration _boundsDebounceDuration = Duration(milliseconds: 100);
+  /// Синхронизация layout кластеров с камерой: не чаще [ _clusterSyncMinInterval ] (throttle, не debounce —
+  /// иначе при непрерывном зуме обновление было бы только после остановки).
+  DateTime? _lastClusterSyncTime;
+  static const Duration _clusterSyncMinInterval = Duration(milliseconds: 100);
   static const double _labelZoomThreshold = 15.0;
   static const int _maxLabels = 12;
   /// Партнёры и итоговые кластеры/точки (непартнёрские после кластеризации).
@@ -269,6 +300,12 @@ class _STOOSMMapState extends State<STOOSMMap> {
     return minF + (zoom - zLo) / (zHi - zLo) * (maxF - minF);
   }
 
+  /// Диаметр круглой «шапки» партнёрского маркера, см. [_PartnerMarkerWidget] `_basePin`.
+  static double _partnerPinScreenPx(double sizeFactor) {
+    const base = 40.0;
+    return (base * sizeFactor).clamp(10.0, base);
+  }
+
   List<Marker>? _cachedMarkers;
   int _cachedPartnersLength = -1;
   int _cachedExternalsLength = -1;
@@ -280,8 +317,6 @@ class _STOOSMMapState extends State<STOOSMMap> {
   @override
   void initState() {
     super.initState();
-    _liveCenter = widget.initialCenter;
-    _liveZoom = widget.initialZoom;
     _clusterCenter = widget.initialCenter;
     _clusterZoom = widget.initialZoom;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -295,30 +330,122 @@ class _STOOSMMapState extends State<STOOSMMap> {
 
   @override
   void dispose() {
+    _clusterExpandController?.dispose();
     _boundsDebounce?.cancel();
-    _markerClusterDebounce?.cancel();
     super.dispose();
+  }
+
+  void _cancelClusterExpandAnimation() {
+    final c = _clusterExpandController;
+    if (c == null) return;
+    c.dispose();
+    _clusterExpandController = null;
+  }
+
+  /// Тап по круглому кластеру: плавно и центр, и зум (без скачка в точку кластера).
+  void _animateClusterExpand(LatLng target) {
+    _cancelClusterExpandAnimation();
+
+    final startCenter = _mapController.camera.center;
+    final startZ = _mapController.camera.zoom;
+    var endZ = (startZ + 1.35).clamp(4.0, 18.0);
+    if ((endZ - startZ).abs() < 0.03) {
+      endZ = startZ;
+    }
+    const eps = 1.2e-6;
+    final hasPan = (startCenter.latitude - target.latitude).abs() > eps ||
+        (startCenter.longitude - target.longitude).abs() > eps;
+    final hasZoom = (endZ - startZ).abs() > 0.0005;
+    if (!hasPan && !hasZoom) return;
+
+    if (!mounted) return;
+    final mq = MediaQuery.maybeOf(context);
+    if (mq != null && (mq.disableAnimations || !TickerMode.of(context))) {
+      _mapController.move(target, hasZoom ? endZ : startZ);
+      setState(() {
+        _clusterCenter = target;
+        _clusterZoom = hasZoom ? endZ : startZ;
+      });
+      return;
+    }
+
+    final dKm = _distanceKm(
+      startCenter.latitude,
+      startCenter.longitude,
+      target.latitude,
+      target.longitude,
+    );
+    final extraMs = (dKm * 95).round().clamp(0, 480);
+    final controller = AnimationController(
+      vsync: this,
+      duration: Duration(milliseconds: 1050 + extraMs),
+    );
+    _clusterExpandController = controller;
+
+    void tick() {
+      if (!mounted) return;
+      final t = Curves.easeInOutCubic.transform(controller.value);
+      final lat = startCenter.latitude + (target.latitude - startCenter.latitude) * t;
+      final lng = startCenter.longitude + (target.longitude - startCenter.longitude) * t;
+      final z = startZ + (endZ - startZ) * t;
+      _mapController.move(LatLng(lat, lng), z);
+      // onPositionChanged при программном move не всегда идёт каждый кадр — подтягиваем кластер с троттлингом.
+      _throttledSyncClusterFromCamera();
+    }
+
+    void onStatus(AnimationStatus status) {
+      if (status != AnimationStatus.completed) return;
+      controller.removeListener(tick);
+      controller.removeStatusListener(onStatus);
+      _clusterExpandController = null;
+      controller.dispose();
+      if (!mounted) return;
+      try {
+        final cam = _mapController.camera;
+        setState(() {
+          _clusterCenter = cam.center;
+          _clusterZoom = cam.zoom;
+        });
+        _lastClusterSyncTime = DateTime.now();
+      } catch (_) {}
+    }
+
+    controller.addListener(tick);
+    controller.addStatusListener(onStatus);
+    controller.forward();
   }
 
   void _onPositionChanged(MapCamera position, bool hasGesture) {
     if (!mounted) return;
+    if (hasGesture) {
+      _cancelClusterExpandAnimation();
+    }
     final newCenter = position.center;
     final newZoom = position.zoom;
-    _liveCenter = newCenter;
-    _liveZoom = newZoom;
     widget.onCameraMove?.call(newZoom);
     widget.onCameraChanged?.call(newCenter, newZoom);
     _boundsDebounce?.cancel();
     _boundsDebounce = Timer(_boundsDebounceDuration, _notifyVisibleBounds);
 
-    _markerClusterDebounce?.cancel();
-    _markerClusterDebounce = Timer(_markerClusterDebounceDuration, () {
-      if (!mounted) return;
+    _throttledSyncClusterFromCamera();
+  }
+
+  void _throttledSyncClusterFromCamera() {
+    final now = DateTime.now();
+    if (_lastClusterSyncTime != null &&
+        now.difference(_lastClusterSyncTime!) < _clusterSyncMinInterval) {
+      return;
+    }
+    _lastClusterSyncTime = now;
+    if (!mounted) return;
+    try {
+      final cam = _mapController.camera;
+      if (cam.nonRotatedSize == MapCamera.kImpossibleSize) return;
       setState(() {
-        _clusterCenter = _liveCenter;
-        _clusterZoom = _liveZoom;
+        _clusterCenter = cam.center;
+        _clusterZoom = cam.zoom;
       });
-    });
+    } catch (_) {}
   }
 
   void _notifyVisibleBounds() {
@@ -326,17 +453,11 @@ class _STOOSMMapState extends State<STOOSMMap> {
     final cb = widget.onVisibleBoundsChanged;
     if (cb == null) return;
     try {
-      final zoom = _liveZoom;
-      final lat = _liveCenter.latitude;
-      final lng = _liveCenter.longitude;
-      final scale = 180 / (math.pow(2, zoom) * 256);
-      final dLat = 0.5 * scale * 256;
-      final dLng = scale * 256;
-      final minLat = lat - dLat;
-      final maxLat = lat + dLat;
-      final minLng = lng - dLng;
-      final maxLng = lng + dLng;
-      if (mounted) cb(minLat, minLng, maxLat, maxLng);
+      final cam = _mapController.camera;
+      // До первого layout размер (-1,-1) — visibleBounds даёт мусор и ломает bbox для Overpass.
+      if (cam.nonRotatedSize == MapCamera.kImpossibleSize) return;
+      final b = cam.visibleBounds;
+      if (mounted) cb(b.south, b.west, b.north, b.east);
     } catch (_) {}
   }
 
@@ -344,21 +465,33 @@ class _STOOSMMapState extends State<STOOSMMap> {
   int _partnersPriceSignature() {
     return widget.partners.fold<int>(
       0,
-      (s, p) => s ^ (p.id.hashCode + (p.totalSelectedPriceKopecks ?? 0)),
+      (s, p) =>
+          s ^
+          (p.id.hashCode +
+              (p.totalSelectedPriceKopecks ?? 0) +
+              (p.nearestSlotStartIso?.hashCode ?? 0)),
     );
   }
 
   int _cachedPriceSignature = 0;
+  int _cachedFavoritesSignature = 0;
+
+  int _favoritesSignature() {
+    if (widget.favoriteStoIds.isEmpty) return 0;
+    return widget.favoriteStoIds.fold<int>(0, (a, id) => a ^ id.hashCode) ^
+        (widget.favoriteStoIds.length * 100003);
+  }
 
   bool _shouldRebuildMarkers() {
     final pl = widget.partners.length;
     final el = widget.externals.length;
     final hasUser = widget.userLocation != null;
     final priceSig = _partnersPriceSignature();
+    final favSig = _favoritesSignature();
     if (pl != _cachedPartnersLength || el != _cachedExternalsLength ||
         _clusterCenter.latitude != _cachedCenterLat || _clusterCenter.longitude != _cachedCenterLng ||
         _clusterZoom != _cachedZoom || hasUser != _cachedHasUserLocation ||
-        priceSig != _cachedPriceSignature) {
+        priceSig != _cachedPriceSignature || favSig != _cachedFavoritesSignature) {
       _cachedPartnersLength = pl;
       _cachedExternalsLength = el;
       _cachedCenterLat = _clusterCenter.latitude;
@@ -366,6 +499,7 @@ class _STOOSMMapState extends State<STOOSMMap> {
       _cachedZoom = _clusterZoom;
       _cachedHasUserLocation = hasUser;
       _cachedPriceSignature = priceSig;
+      _cachedFavoritesSignature = favSig;
       return true;
     }
     return false;
@@ -398,9 +532,10 @@ class _STOOSMMapState extends State<STOOSMMap> {
       final partnerLimit = math.min(partnerEntries.length, _maxPartnerMarkers);
       final visiblePartners =
           partnerEntries.length > partnerLimit ? partnerEntries.sublist(0, partnerLimit) : partnerEntries;
+      final layoutZoom = _zoomQuantizedForClustering(_clusterZoom);
       var externalVisuals = _clusterAllExternalByCategory(
         externalEntries,
-        zoom: _clusterZoom,
+        zoom: layoutZoom,
         centerLat: centerLat,
         centerLng: centerLng,
       );
@@ -429,11 +564,7 @@ class _STOOSMMapState extends State<STOOSMMap> {
             height: ext.height,
             alignment: Alignment.bottomCenter,
             child: GestureDetector(
-              onTap: () {
-                final z = _mapController.camera.zoom;
-                final nextZoom = (z + 1.35).clamp(4.0, 18.0);
-                _mapController.move(LatLng(v.lat, v.lng), nextZoom);
-              },
+              onTap: () => _animateClusterExpand(LatLng(v.lat, v.lng)),
               child: _ExternalClusterBubble(
                 count: v.count,
                 sizeFactor: zf,
@@ -461,6 +592,10 @@ class _STOOSMMapState extends State<STOOSMMap> {
           final sto = entry.data as STO;
           final showLabel = withLabelIds.contains(sto.id);
           final showBadge = sto.totalSelectedPriceKopecks != null && sto.totalSelectedPriceKopecks! > 0;
+          final hasNearestSlot = sto.nearestSlotStartIso != null &&
+              sto.nearestSlotStartIso!.trim().isNotEmpty &&
+              showBadge;
+          final isFavorite = widget.favoriteStoIds.contains(sto.id);
           final imageUrl = (sto.logoUrl != null && sto.logoUrl!.isNotEmpty)
               ? sto.logoUrl
               : (sto.photoUrls.isNotEmpty ? sto.photoUrls.first : null);
@@ -481,8 +616,10 @@ class _STOOSMMapState extends State<STOOSMMap> {
                 imageUrl: imageUrl,
                 showLabel: showLabel,
                 name: sto.name,
+                isFavorite: isFavorite,
                 totalSelectedPriceKopecks: sto.totalSelectedPriceKopecks,
                 totalSelectedDurationMinutes: sto.totalSelectedDurationMinutes,
+                nearestSlotIsoUtc: hasNearestSlot ? sto.nearestSlotStartIso : null,
                 sizeFactor: zf,
               ),
             ),
@@ -537,6 +674,7 @@ class _STOOSMMapState extends State<STOOSMMap> {
           ),
           MarkerLayer(markers: _buildMarkers()),
           RichAttributionWidget(
+            alignment: AttributionAlignment.bottomLeft,
             animationConfig: const ScaleRAWA(),
             showFlutterMapAttribution: false,
             attributions: InAppMapTiles.attributions(),
@@ -598,14 +736,17 @@ class _ExternalClusterBubble extends StatelessWidget {
   });
 
   static _LayoutExtent layoutExtent({required int count, required double sizeFactor}) {
-    final bubble = (42 * sizeFactor).clamp(30.0, 46.0);
-    return _LayoutExtent(bubble, bubble);
+    final cap = _STOOSMMapState._partnerPinScreenPx(sizeFactor);
+    // Не больше партнёрского пина: раньше clamp(30,46) при мелком зуме давал 30px при пине ~10px.
+    final s = math.min(42 * sizeFactor, cap).clamp(12.0, cap);
+    return _LayoutExtent(s, s);
   }
 
   @override
   Widget build(BuildContext context) {
-    final s = (42 * sizeFactor).clamp(30.0, 46.0);
-    final font = (13 * sizeFactor).clamp(10.0, 15.0);
+    final cap = _STOOSMMapState._partnerPinScreenPx(sizeFactor);
+    final s = math.min(42 * sizeFactor, cap).clamp(12.0, cap);
+    final font = (13 * sizeFactor * (s / 42).clamp(0.65, 1.0)).clamp(8.0, 14.0);
     final txt = count > 99 ? '99+' : '$count';
     final borderW = math.max(1.8, 2.2 * sizeFactor);
     return SizedBox(
@@ -710,7 +851,7 @@ class _TeardropPinWidget extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: fontSize, color: context.palette.textPrimary, fontWeight: FontWeight.w600),
+            style: TextStyle(fontSize: fontSize, color: Colors.black, fontWeight: FontWeight.w600),
           ),
         ),
         SizedBox(height: gap),
@@ -782,20 +923,166 @@ class _BulbTaperPinPainter extends CustomPainter {
       oldDelegate.fill != fill || oldDelegate.border != border || oldDelegate.borderWidth != borderWidth;
 }
 
+/// Силуэт сердца для пина избранной организации; путь в координатах [size].
+ui.Path _mapPartnerHeartPath(Size size) {
+  final w = size.width;
+  final h = size.height;
+  final p = ui.Path();
+  p.moveTo(0.5 * w, 0.90 * h);
+  p.cubicTo(0.1 * w, 0.68 * h, 0, 0.45 * h, 0, 0.30 * h);
+  p.cubicTo(0, 0.10 * h, 0.20 * w, 0, 0.40 * w, 0.12 * h);
+  p.cubicTo(0.45 * w, 0.14 * h, 0.48 * w, 0.20 * h, 0.5 * w, 0.28 * h);
+  p.cubicTo(0.52 * w, 0.20 * h, 0.55 * w, 0.14 * h, 0.6 * w, 0.12 * h);
+  p.cubicTo(0.80 * w, 0, 1.0 * w, 0.10 * h, 1.0 * w, 0.30 * h);
+  p.cubicTo(1.0 * w, 0.45 * h, 0.9 * w, 0.68 * h, 0.5 * w, 0.90 * h);
+  p.close();
+  return p;
+}
+
+class _MapHeartShapeClipper extends CustomClipper<ui.Path> {
+  @override
+  ui.Path getClip(Size size) => _mapPartnerHeartPath(size);
+
+  @override
+  bool shouldReclip(covariant _MapHeartShapeClipper oldClipper) => false;
+}
+
+class _MapHeartDropShadowPainter extends CustomPainter {
+  const _MapHeartDropShadowPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = _mapPartnerHeartPath(size);
+    canvas.drawShadow(
+      path,
+      Colors.black.withValues(alpha: 0.38),
+      math.max(2.0, size.shortestSide * 0.07),
+      true,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _MapHeartDropShadowPainter oldDelegate) => false;
+}
+
+class _MapHeartEdgePainter extends CustomPainter {
+  _MapHeartEdgePainter({required this.borderW, required this.color});
+
+  final double borderW;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = _mapPartnerHeartPath(size);
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = borderW
+      ..isAntiAlias = true;
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _MapHeartEdgePainter o) => o.borderW != borderW || o.color != color;
+}
+
+class _PartnerSlotBadgeRow extends StatelessWidget {
+  const _PartnerSlotBadgeRow({
+    required this.sizeFactor,
+    required this.priceKopecks,
+    required this.durationMinutes,
+    this.nearestSlotIsoUtc,
+  });
+
+  final double sizeFactor;
+  final int priceKopecks;
+  final int durationMinutes;
+  final String? nearestSlotIsoUtc;
+
+  @override
+  Widget build(BuildContext context) {
+    final fs = (7.5 * sizeFactor).clamp(6.5, 8.5);
+    final dateStr = Formatters.searchNearestSlotDateFull(nearestSlotIsoUtc);
+    final rangeStr = Formatters.searchNearestSlotTimeRange(nearestSlotIsoUtc, durationMinutes);
+    final amount = Formatters.moneyRublesPlain(priceKopecks);
+    final fallback =
+        '${Formatters.durationMinutes(durationMinutes)} · ${Formatters.money(priceKopecks)}';
+
+    if (dateStr.isEmpty || rangeStr.isEmpty) {
+      return Text(
+        fallback,
+        textAlign: TextAlign.center,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(fontSize: fs, fontWeight: FontWeight.w600, color: Colors.white),
+      );
+    }
+
+    return Row(
+      children: [
+        Expanded(
+          flex: 34,
+          child: Text(
+            dateStr,
+            style: TextStyle(fontSize: fs, fontWeight: FontWeight.w600, color: Colors.white),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        Expanded(
+          flex: 42,
+          child: Text(
+            rangeStr,
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: fs, fontWeight: FontWeight.w600, color: Colors.white),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        Expanded(
+          flex: 34,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: Text(
+                  amount,
+                  style: TextStyle(fontSize: fs, fontWeight: FontWeight.w600, color: Colors.white),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
+                ),
+              ),
+              SizedBox(width: 2 * sizeFactor),
+              Icon(Icons.payments_rounded, size: (fs + 2).clamp(8.0, 11.0), color: Colors.white),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _PartnerMarkerWidget extends StatelessWidget {
   final String? imageUrl;
   final bool showLabel;
   final String name;
+  /// Избранная организация: красное «заполненное» сердце с фото, не зелёный круг.
+  final bool isFavorite;
   final int? totalSelectedPriceKopecks;
   final int? totalSelectedDurationMinutes;
+  final String? nearestSlotIsoUtc;
   final double sizeFactor;
 
   const _PartnerMarkerWidget({
     this.imageUrl,
     required this.showLabel,
     required this.name,
+    this.isFavorite = false,
     this.totalSelectedPriceKopecks,
     this.totalSelectedDurationMinutes,
+    this.nearestSlotIsoUtc,
     this.sizeFactor = 1.0,
   });
 
@@ -816,16 +1103,9 @@ class _PartnerMarkerWidget extends StatelessWidget {
     // Отступ под бейдж + вертикальные отступы контейнера + строка текста (~9–11 sp).
     final badgeH = badgeVisible ? (2 * sizeFactor + 4 * sizeFactor + 12 * sizeFactor) : 0.0;
     final h = pin + badgeH;
-    final w = badgeVisible ? math.max(rowW, 80 * sizeFactor) : rowW;
+    final w = badgeVisible ? math.max(rowW, 104 * sizeFactor) : rowW;
     return _LayoutExtent(w, h);
   }
-
-  static String _money(int kopecks) {
-    if (kopecks >= 100) return '${(kopecks / 100).toStringAsFixed(0)} ₽';
-    return '$kopecks ₽';
-  }
-
-  static String _duration(int minutes) => Formatters.durationMinutes(minutes);
 
   @override
   Widget build(BuildContext context) {
@@ -850,36 +1130,49 @@ class _PartnerMarkerWidget extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: pin,
-                height: pin,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: context.palette.success, width: borderW),
-                  boxShadow: [
-                    BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 4 * sizeFactor, offset: Offset(0, sizeFactor)),
-                  ],
-                ),
-                padding: EdgeInsets.all(innerPad),
-                child: ClipOval(
-                  child: loadImage
-                      ? CachedNetworkImage(
-                          imageUrl: imageUrl!,
-                          fit: BoxFit.cover,
-                          width: pin - 2 * innerPad,
-                          height: pin - 2 * innerPad,
-                          placeholder: (context, url) => Center(
-                            child: SizedBox(
-                              width: 18 * sizeFactor,
-                              height: 18 * sizeFactor,
-                              child: const CircularProgressIndicator(strokeWidth: 2),
-                            ),
+              isFavorite
+                  ? _FavoritePartnerHeartPin(
+                      imageUrl: imageUrl,
+                      loadImage: loadImage,
+                      pin: pin,
+                      borderW: borderW,
+                      iconSize: iconSize,
+                      sizeFactor: sizeFactor,
+                    )
+                  : Container(
+                      width: pin,
+                      height: pin,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: context.palette.success, width: borderW),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.2),
+                            blurRadius: 4 * sizeFactor,
+                            offset: Offset(0, sizeFactor),
                           ),
-                          errorWidget: (ctx, error, stackTrace) => _iconContent(ctx, iconSize),
-                        )
-                      : _iconContent(context, iconSize),
-                ),
-              ),
+                        ],
+                      ),
+                      padding: EdgeInsets.all(innerPad),
+                      child: ClipOval(
+                        child: loadImage
+                            ? CachedNetworkImage(
+                                imageUrl: imageUrl!,
+                                fit: BoxFit.cover,
+                                width: pin - 2 * innerPad,
+                                height: pin - 2 * innerPad,
+                                placeholder: (context, url) => Center(
+                                  child: SizedBox(
+                                    width: 18 * sizeFactor,
+                                    height: 18 * sizeFactor,
+                                    child: const CircularProgressIndicator(strokeWidth: 2),
+                                  ),
+                                ),
+                                errorWidget: (ctx, error, stackTrace) => _iconContent(ctx, iconSize),
+                              )
+                            : _iconContent(context, iconSize),
+                      ),
+                    ),
               if (showLabel && name.isNotEmpty) ...[
                 SizedBox(width: gap),
                 SizedBox(
@@ -898,8 +1191,8 @@ class _PartnerMarkerWidget extends StatelessWidget {
         if (badgeVisible) ...[
           SizedBox(height: 2 * sizeFactor),
           Container(
-            constraints: BoxConstraints(maxWidth: 80 * sizeFactor),
-            padding: EdgeInsets.symmetric(horizontal: 4 * sizeFactor, vertical: 2 * sizeFactor),
+            constraints: BoxConstraints(maxWidth: 112 * sizeFactor),
+            padding: EdgeInsets.symmetric(horizontal: 5 * sizeFactor, vertical: 3 * sizeFactor),
             decoration: BoxDecoration(
               color: const Color(0xFFE65100),
               borderRadius: BorderRadius.circular(10 * sizeFactor),
@@ -907,22 +1200,11 @@ class _PartnerMarkerWidget extends StatelessWidget {
                 BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 2, offset: Offset(0, sizeFactor)),
               ],
             ),
-            child: Wrap(
-              spacing: 2 * sizeFactor,
-              runSpacing: 0,
-              alignment: WrapAlignment.center,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                Text(
-                  _money(totalSelectedPriceKopecks!),
-                  style: TextStyle(fontSize: (9 * sizeFactor).clamp(7.0, 9.0), fontWeight: FontWeight.w600, color: Colors.white),
-                ),
-                Text('·', style: TextStyle(fontSize: (9 * sizeFactor).clamp(7.0, 9.0), fontWeight: FontWeight.w600, color: Colors.white)),
-                Text(
-                  _duration(totalSelectedDurationMinutes ?? 0),
-                  style: TextStyle(fontSize: (9 * sizeFactor).clamp(7.0, 9.0), fontWeight: FontWeight.w600, color: Colors.white),
-                ),
-              ],
+            child: _PartnerSlotBadgeRow(
+              sizeFactor: sizeFactor,
+              priceKopecks: totalSelectedPriceKopecks!,
+              durationMinutes: totalSelectedDurationMinutes ?? 0,
+              nearestSlotIsoUtc: nearestSlotIsoUtc,
             ),
           ),
         ],
@@ -936,6 +1218,104 @@ class _PartnerMarkerWidget extends StatelessWidget {
       color: p.surface,
       child: Center(
         child: Icon(Icons.key_rounded, size: iconSize, color: p.success),
+      ),
+    );
+  }
+}
+
+/// Пин избранного: фото/логотип в силуэте насыщенного красного сердца, лёгкая тень и светлая кайма.
+class _FavoritePartnerHeartPin extends StatelessWidget {
+  const _FavoritePartnerHeartPin({
+    required this.loadImage,
+    required this.pin,
+    required this.borderW,
+    required this.iconSize,
+    required this.sizeFactor,
+    this.imageUrl,
+  });
+
+  final String? imageUrl;
+  final bool loadImage;
+  final double pin;
+  final double borderW;
+  final double iconSize;
+  final double sizeFactor;
+
+  @override
+  Widget build(BuildContext _) {
+    return SizedBox(
+      width: pin,
+      height: pin,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
+        children: [
+          CustomPaint(
+            size: Size(pin, pin),
+            painter: const _MapHeartDropShadowPainter(),
+          ),
+          Positioned.fill(
+            child: ClipPath(
+              clipper: _MapHeartShapeClipper(),
+              child: loadImage
+                  ? CachedNetworkImage(
+                      imageUrl: imageUrl!,
+                      fit: BoxFit.cover,
+                      width: pin,
+                      height: pin,
+                      placeholder: (context, url) => Container(
+                        color: const Color(0xFFEF9A9A),
+                        child: Center(
+                          child: SizedBox(
+                            width: 18 * sizeFactor,
+                            height: 18 * sizeFactor,
+                            child: const CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ),
+                      errorWidget: (ctx, error, stackTrace) => _heartFallbackFill(),
+                    )
+                  : _heartFallbackFill(),
+            ),
+          ),
+          CustomPaint(
+            size: Size(pin, pin),
+            painter: _MapHeartEdgePainter(
+              borderW: math.max(1.0, borderW * 0.85),
+              color: Colors.white.withValues(alpha: 0.92),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _heartFallbackFill() {
+    return Container(
+      width: pin,
+      height: pin,
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFFFF8A80),
+            Color(0xFFE53935),
+            Color(0xFFC62828),
+            Color(0xFFB71C1C),
+          ],
+          stops: [0.0, 0.35, 0.7, 1.0],
+        ),
+      ),
+      child: Center(
+        child: Icon(
+          Icons.key_rounded,
+          size: iconSize,
+          color: Colors.white,
+        ),
       ),
     );
   }

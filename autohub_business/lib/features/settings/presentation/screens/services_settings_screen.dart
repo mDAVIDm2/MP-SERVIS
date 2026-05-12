@@ -21,8 +21,7 @@ class ServicesSettingsScreen extends ConsumerWidget {
     }
     final state = ref.watch(settingsRepositoryProvider);
     final repo = ref.read(settingsRepositoryProvider.notifier);
-    final categories = List<ServiceCategory>.from(state.categories)
-      ..sort((a, b) => a.order.compareTo(b.order));
+    final categories = sortedServiceCategoriesForDisplay(state.categories);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -39,19 +38,28 @@ class ServicesSettingsScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: ListView(
+      body: ReorderableListView.builder(
         padding: const EdgeInsets.all(16),
-        children: [
-          ...categories.map((cat) {
+        buildDefaultDragHandles: false,
+        itemCount: categories.length,
+        onReorder: (oldI, newI) =>
+            ref.read(settingsRepositoryProvider.notifier).reorderCategories(oldI, newI),
+        itemBuilder: (context, index) {
+          final cat = categories[index];
             final services = repo.servicesForCategory(cat.id);
             return Card(
+              key: ValueKey(cat.id),
               margin: const EdgeInsets.only(bottom: 12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   ListTile(
+                    leading: ReorderableDragStartListener(
+                      index: index,
+                      child: const Icon(Icons.drag_handle, color: AppColors.textTertiary),
+                    ),
                     title: Text(
-                      cat.name,
+                      displayServiceCategoryTitle(cat.name),
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                     subtitle: Text(
@@ -147,8 +155,7 @@ class ServicesSettingsScreen extends ConsumerWidget {
                 ],
               ),
             );
-          }),
-        ],
+        },
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _openAddCategory(context, ref),

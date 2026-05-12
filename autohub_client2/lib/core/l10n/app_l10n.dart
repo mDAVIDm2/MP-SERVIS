@@ -127,6 +127,7 @@ class AppL10n {
   String addedLabel(String name) => isEn ? 'Added: $name' : 'Добавлено: $name';
 
   String get maintSectionEngine => isEn ? 'Engine and fluids' : 'Двигатель и жидкости';
+  String get maintSectionFilters => isEn ? 'Filters' : 'Фильтры';
   String get maintSectionBrakes => isEn ? 'Brakes, tires, chassis' : 'Тормоза, шины, ходовая';
   String get maintSectionElectric => isEn ? 'Electrics, inspection, general' : 'Электрика, осмотр, общее';
 
@@ -155,6 +156,9 @@ class AppL10n {
   String get replacementHistory => isEn ? 'History' : 'История';
   String get maintHistoryEmpty =>
       isEn ? 'No entries yet. Add or wait for orders.' : 'Пока пусто. Добавьте сами или из заказов.';
+  String get maintHistoryAddBigButton => isEn ? 'Add' : 'Добавить';
+  String get maintHistoryAddBigButtonSubtitle =>
+      isEn ? 'After a service visit, entries may appear automatically.' : 'После записи в сервисе записи могут появиться автоматически.';
   String get removeReminderFromList => isEn ? 'Remove reminder' : 'Убрать напоминание';
   String get settingsSaved => isEn ? 'Settings saved' : 'Настройки сохранены';
   String get removeReminderTitle => isEn ? 'Remove reminder?' : 'Убрать напоминание?';
@@ -168,7 +172,14 @@ class AppL10n {
   String get lastReplacement => isEn ? 'Last' : 'Было';
   String get noDataAddRecord => isEn ? 'No data' : 'Нет данных';
   String get remaining => isEn ? 'Remaining' : 'Осталось';
-  String get nextReplacement => isEn ? 'Next' : 'Дальше';
+  String get nextReplacement => isEn ? 'Next' : 'Следующая';
+  String get overdueStatusLabel => isEn ? 'Overdue' : 'Просрочено';
+  String maintShortKmLeft(String km) => isEn ? 'Left $km km' : 'Осталось $km км';
+  String maintShortKmOverdue(String km) => isEn ? 'Overdue: $km km' : 'Просрочено на $km км';
+  String maintShortDaysLeft(int d) => isEn ? 'Left $d d' : 'Осталось $d дн.';
+  String maintShortDaysOverdue(String d) => isEn ? 'Overdue: $d d' : 'Просрочено на $d дн.';
+  String get maintRecordPriceOptional => isEn ? 'Price (optional), ₽' : 'Цена (необязательно), ₽';
+  String get maintRecordPriceHint => isEn ? 'e.g. 1500' : 'например 1500';
   String get onMileagePrefix => isEn ? 'at ' : 'на ';
   String get untilPrefix => isEn ? 'by ' : 'до ';
   String overdueDays(int d) => isEn ? 'overdue by $d d' : 'просрочено на $d дн.';
@@ -190,6 +201,11 @@ class AppL10n {
   String everyMonths(String m) => isEn ? 'Every $m mo' : 'Раз в $m мес.';
   String get kmBetween => isEn ? 'km' : 'км';
   String get monthsBetween => isEn ? 'mo' : 'мес';
+  String get maintIntervalKmHelper => isEn
+      ? 'Any value from 100 to 500 000 km. You can type with spaces — saved as entered (not forced to 1000 km).'
+      : 'От 100 до 500 000 км, вручную — как введёте (без привязки к шагу 1000). Пробелы в числе убираются при сохранении.';
+  String get maintIntervalMonthsHelper =>
+      isEn ? 'From 1 to 120 months. Slider: up to 24 — larger values, type in the field.' : '1–120 мес. Слайдер — до 24, больше введите в поле справа.';
   String get fromOrder => isEn ? 'From order' : 'Из заказа';
   String get deleteRecordTitle => isEn ? 'Delete entry?' : 'Удалить запись?';
   String get kmUnit => isEn ? 'km' : 'км';
@@ -239,20 +255,19 @@ class AppL10n {
   String maintUrgentKmOverdue(String km) =>
       isEn ? 'Mileage: overdue by $km km' : 'По пробегу: просрочено на $km км';
   String maintUrgentKmLeft(String km) =>
-      isEn ? 'Mileage: ≈ $km km left' : 'По пробегу: осталось ≈ $km км';
+      isEn ? 'Mileage: $km km left' : 'По пробегу: осталось $km км';
   String maintUrgentNextKm(String km) =>
       isEn ? 'Next service at ≈ $km km' : 'Замена потребуется на ≈ $km км';
   String get maintUrgentDateOverdueLine => isEn ? 'By date: overdue' : 'По сроку: просрочено';
-  String maintUrgentDateLeftLine(int d) =>
-      isEn ? 'By date: ≈ $d d left' : 'По сроку: осталось ≈ $d дн.';
+  String maintUrgentDateOverdueByDays(String d) => isEn ? 'By date: overdue by $d d' : 'По сроку: просрочено на $d дн.';
+  String maintUrgentDateLeftLine(int d) => isEn ? 'By date: $d d left' : 'По сроку: осталось $d дн.';
   String maintUrgentPlanUntil(String date) =>
       isEn ? 'Planned by: $date' : 'Плановая дата: до $date';
 
   // Карточка напоминания в гараже (модель CarReminder)
   String reminderOverdueMileage(String mileageStr) =>
-      isEn ? 'Overdue by $mileageStr' : 'Просрочено на $mileageStr';
-  String reminderLeftMileage(String mileageStr) =>
-      isEn ? '≈ $mileageStr left' : 'Осталось ~$mileageStr';
+      isEn ? 'Overdue: $mileageStr' : 'Просрочено на $mileageStr';
+  String reminderLeftMileage(String mileageStr) => isEn ? 'Left $mileageStr' : 'Осталось $mileageStr';
 
   // Аналитика (экран и экспорт)
   String get analyticsTitle => isEn ? 'Analytics' : 'Аналитика';
@@ -294,6 +309,39 @@ class AppL10n {
   String get analyticsChartTableShort => isEn ? 'Tbl' : 'Табл.';
   String get analyticsAddChartBlock => isEn ? 'Add chart' : 'Добавить диаграмму';
   String get analyticsRemoveChartBlock => isEn ? 'Remove chart' : 'Удалить диаграмму';
+  String get analyticsEditChartBlock => isEn ? 'Chart settings' : 'Настройка диаграммы';
+  String get analyticsTapChartToConfigure =>
+      isEn ? 'Tap the chart to change filters and format.' : 'Нажмите на диаграмму, чтобы изменить параметры.';
+  String get analyticsBlockEditorTitle => isEn ? 'Chart setup' : 'Настройка диаграммы';
+  String get analyticsBlockEditorPreview => isEn ? 'Preview' : 'Предпросмотр';
+  String get analyticsBlockEditorSave => isEn ? 'Save' : 'Сохранить';
+  String get analyticsChartSpendingList => isEn ? 'Spending list' : 'Список трат';
+  String get analyticsChartFuelLine => isEn ? 'Fuel use (L/100 km)' : 'Расход топлива (л/100 км)';
+  String get analyticsChartTripCost => isEn ? 'Trip cost (by distance)' : 'Стоимость пути по км';
+  String get analyticsChartMonthCompare =>
+      isEn ? 'This vs previous month (categories)' : 'Текущий и прошлый месяц (категории)';
+  String get analyticsAdvancedFuelChartsHint => isEn
+      ? 'Uses refuel entries with odometer and volume in the selected period.'
+      : 'По заправкам с пробегом и объёмом за выбранный период.';
+  String get analyticsMonthCompareHint => isEn
+      ? 'Calendar months: orders, paid maintenance and manual expenses.'
+      : 'Календарные месяцы: заказы, оплаченное ТО и ваши расходы.';
+  String get analyticsFuelChartTitle => isEn ? 'Consumption between refuels' : 'Расход между заправками';
+  String get analyticsFuelChartEmpty =>
+      isEn ? 'Not enough refuel data (need intervals with odometer and liters).' : 'Мало данных по заправкам (нужны интервалы с пробегом и литрами).';
+  String get analyticsFuelChartAxisHint =>
+      isEn ? 'Y: L/100 km per refuel interval · dashed: lifetime average.' : 'Ось Y: л/100 км на каждом интервале между заправками · пунктир: среднее за всё время.';
+  String get analyticsTripCostTitle => isEn ? 'Typical trip cost' : 'Ориентир стоимости пути';
+  String get analyticsTripCostSubtitle =>
+      isEn ? 'Median ₽/km from paid refuel intervals (see fuel block).' : 'Медиана ₽/км по оплаченным интервалам между заправками.';
+  String get analyticsTripCostEmpty =>
+      isEn ? 'Could not estimate ₽/km from refuel intervals.' : 'Не удалось оценить ₽/км по заправкам.';
+  String analyticsTripCostForKm(int km) =>
+      isEn ? 'For $km km' : 'На $km км';
+  String get analyticsMonthCompareTitle =>
+      isEn ? 'Spending by category' : 'Траты по категориям';
+  String get analyticsMonthCompareEmpty => isEn ? 'No spending' : 'Нет трат';
+  String get analyticsManualPricePerLiter => isEn ? 'Price per liter, ₽' : 'Цена за литр, ₽';
 
   String get analyticsMetricTotalSpend => isEn ? 'Total spend' : 'Сумма расходов';
   String get analyticsMetricOrderCount => isEn ? 'Order count' : 'Число заказов';
@@ -335,6 +383,115 @@ class AppL10n {
   String get analyticsPreviewAvgCheck => isEn ? 'Average check' : 'Средний чек';
   String get analyticsPreviewSeeMore => isEn ? 'Details →' : 'Подробнее →';
   String get carShortLabel => isEn ? 'Car' : 'Авто';
+
+  // Ручные расходы / заправки (аналитика)
+  String get analyticsManualDate => isEn ? 'Date' : 'Дата';
+  String get analyticsManualSectionTitle => isEn ? 'Fuel & your expenses' : 'Заправки и свои расходы';
+  String get analyticsManualAdd => isEn ? 'Add' : 'Добавить';
+  String get analyticsManualTabFuel => isEn ? 'Refuel' : 'Заправка';
+  String get analyticsManualTabOther => isEn ? 'Expense' : 'Расход';
+  String get analyticsManualPriceRub => isEn ? 'Amount, ₽' : 'Сумма, ₽';
+  String get analyticsManualOdometerKm => isEn ? 'Odometer, km' : 'Пробег, км';
+  String get analyticsManualLiters => isEn ? 'Volume, L' : 'Объём, л';
+  String get analyticsManualFuelType => isEn ? 'Fuel type' : 'Топливо';
+  String get analyticsManualNote => isEn ? 'Note' : 'Комментарий';
+  String get analyticsManualPreset => isEn ? 'Category' : 'Категория';
+  String get analyticsManualCustomTitle => isEn ? 'Title' : 'Название';
+  String get analyticsManualCustomHint => isEn ? 'E.g. winter wiper set' : 'Напр. зимние щётки';
+  String get analyticsManualPresetOther => isEn ? 'Custom…' : 'Другое…';
+  String get analyticsManualDelete => isEn ? 'Delete' : 'Удалить';
+  String get analyticsManualEmpty => isEn ? 'No entries for this car yet.' : 'Пока нет записей по этому авто.';
+  String analyticsManualMoreCount(int n) => isEn ? 'and $n more' : 'и ещё $n';
+  String get analyticsManualOrgKindGroup =>
+      isEn ? 'Personal (fuel & other)' : 'Личные (заправки и прочее)';
+  String get analyticsManualFuelStatsTitle => isEn ? 'Fuel stats' : 'Расход и цена пути';
+  String analyticsManualFuelAvgL100(double l100) => isEn
+      ? 'Avg consumption ≈ ${l100.toStringAsFixed(1)} L/100 km (between refuels with odometer + volume)'
+      : 'Ср. расход ≈ ${l100.toStringAsFixed(1)} л/100 км (между заправками с пробегом и объёмом)';
+  String analyticsManualFuelKpk(int kopecksPerKm) {
+    final rub = (kopecksPerKm / 100.0).toStringAsFixed(1);
+    return isEn
+        ? 'Typical: $rub ₽/km (by paid interval)'
+        : 'Ориентир: $rub ₽/км (по оплаченным интервалам)';
+  }
+
+  String get analyticsManualInvalidPrice => isEn ? 'Enter a valid amount' : 'Укажите сумму';
+  String get analyticsManualFillFuel => isEn ? 'Select fuel, liters and odometer for stats' : 'Укажите топливо, объём и пробег для расчёта';
+
+  /// Классы трат (аналитика / ручные записи).
+  String carExpenseClassGroupTitle(String id) {
+    if (isEn) {
+      return switch (id) {
+        'exp_acc' => 'Accessories & tuning',
+        'exp_unp' => 'Unplanned',
+        'exp_maint' => 'Main (service & TO)',
+        'exp_own' => 'Ownership (insurance, parking)',
+        'exp_fuel' => 'Fuel',
+        'exp_clean' => 'Cleanliness & comfort',
+        _ => id,
+      };
+    }
+    return switch (id) {
+      'exp_acc' => 'Аксессуары и тюнинг',
+      'exp_unp' => 'Незапланированные расходы',
+      'exp_maint' => 'Основные расходы (ТО и ремонт)',
+      'exp_own' => 'Содержание (ОСАГО, КАСКО, парковка)',
+      'exp_fuel' => 'Топливо',
+      'exp_clean' => 'Чистота и комфорт',
+      _ => id,
+    };
+  }
+
+  String? carExpenseClassSubTitle(String? subId) {
+    if (subId == null || subId.isEmpty) return null;
+    if (isEn) {
+      return switch (subId) {
+        'acc_rep' => 'Replacement',
+        'acc_ret' => 'Retrofit',
+        'acc_buy' => 'Purchase',
+        'unp_fine' => 'Fines',
+        'unp_tire' => 'Tire service',
+        'unp_other' => 'Other',
+        _ => subId,
+      };
+    }
+    return switch (subId) {
+      'acc_rep' => 'Замена',
+      'acc_ret' => 'Переделка',
+      'acc_buy' => 'Покупка',
+      'unp_fine' => 'Штрафы',
+      'unp_tire' => 'Шиномонтаж и шины',
+      'unp_other' => 'Прочее',
+      _ => subId,
+    };
+  }
+
+  String get analyticsGroupByExpenseClass =>
+      isEn ? 'By spending class' : 'По классам трат';
+  String get analyticsExpenseClassHistogramHint => isEn
+      ? 'Orders, paid maintenance, refuels and manual expenses grouped into six classes.'
+      : 'Заказы, оплаченное ТО, заправки и ваши записи — в шести классах трат.';
+  String get analyticsOptionFuelAvgLine => isEn ? 'Lifetime avg on fuel chart' : 'Линия среднего расхода за всё время';
+  String get analyticsOptionFuelAvgLineSubtitle => isEn
+      ? 'Horizontal line: mean L/100 km across all refuel intervals (with odometer).'
+      : 'Горизонтальная линия: среднее л/100 км по всем интервалам между заправками (с пробегом).';
+  String analyticsFuelLifetimeAvgLine(double l100) => isEn
+      ? 'Lifetime average: ${l100.toStringAsFixed(1)} L/100 km'
+      : 'Среднее за всё время: ${l100.toStringAsFixed(1)} л/100 км';
+  String analyticsFuelIntervalAvgLegend(double l100) => isEn
+      ? 'Period average: ${l100.toStringAsFixed(1)} L/100 km'
+      : 'Среднее за период: ${l100.toStringAsFixed(1)} л/100 км';
+  String get analyticsManualExpenseClass => isEn ? 'Spending class' : 'Класс трат';
+  String get analyticsManualExpenseSub => isEn ? 'Subtype' : 'Подтип';
+  String get analyticsManualMaterialRub => isEn ? 'Parts / materials, ₽' : 'Материалы / запчасти, ₽';
+  String get analyticsManualLaborRub => isEn ? 'Labor / install, ₽' : 'Работы / установка, ₽';
+  String get analyticsManualTotalMismatch => isEn
+      ? 'Total must equal materials + labor'
+      : 'Сумма должна совпадать с материалами + работами';
+  String get analyticsManualPickClass => isEn ? 'Choose a spending class' : 'Выберите класс трат';
+  String get analyticsFuelChartTouchHint => isEn
+      ? 'Tap a point for details.'
+      : 'Нажмите на точку для подробностей.';
 
   // Диалог обновления пробега (MainShell)
   String get mileagePromptTitle => isEn ? 'Update mileage' : 'Обновите пробег';
@@ -382,6 +539,9 @@ class AppL10n {
   String get orderStepInProgress => isEn ? 'In progress' : 'В работе';
   String get orderStepReady => isEn ? 'Ready' : 'Готов';
   String get orderStepDone => isEn ? 'Completed' : 'Завершён';
+  String get orderOrgConfirmedOnBehalfNote => isEn
+      ? 'The shop confirmed this booking on your behalf (e.g. you agreed by phone).'
+      : 'Сервис подтвердил эту запись за вас (согласие вне приложения, например по телефону).';
   String get orderApprovalExtraTitle =>
       isEn ? 'Additional work needs approval' : 'Требуется согласование доп.работ';
   String get orderApprovalExtraSubtitle =>
@@ -399,6 +559,17 @@ class AppL10n {
   String get orderGrandTotal => isEn ? 'Total' : 'Итого';
   String get orderWorkPhotos => isEn ? 'Work photos' : 'Фото работ';
   String get orderGoToApproval => isEn ? 'Go to approval' : 'Перейти к согласованию';
+  String get orderConfirmBookingButton => isEn ? 'Go to confirm' : 'Перейти к подтверждению';
+  String get orderBookingConfirmedToast => isEn ? 'Booking confirmed' : 'Запись подтверждена';
+  String get orderPendingYouMustConfirmTitle =>
+      isEn ? 'Confirm your booking' : 'Подтвердите запись';
+  String get orderPendingYouMustConfirmSubtitle => isEn
+      ? 'The shop created this appointment. Tap to confirm or change the time.'
+      : 'Сервис создал запись на вас. Подтвердите время или выберите другое.';
+  String get orderPendingWaitStoSubtitle => isEn
+      ? 'The shop will confirm your request soon.'
+      : 'Автосервис подтвердит заявку, как только будет готов.';
+  String get orderConfirmOtherTime => isEn ? 'Other time' : 'Другое время';
   String get orderLeaveReview => isEn ? 'Leave a review' : 'Оставить отзыв';
   String get orderRepeat => isEn ? 'Repeat order' : 'Повторить заказ';
   String get orderCancelBooking => isEn ? 'Cancel booking' : 'Отменить запись';
@@ -443,8 +614,15 @@ class AppL10n {
   String get searchShowNonPartners => isEn ? 'Show non-partner places' : 'Отобразить непартнёрские';
   String get searchWithCarBrandFilter => isEn ? 'With car brand filter' : 'С фильтром по марке';
   String get searchWithoutCarBrandFilter => isEn ? 'Without car brand filter' : 'Без фильтра по марке';
+  String get searchMapSegmentByBrand => isEn ? 'By brand' : 'По марке';
+  String get searchMapBrandFilterOffHint =>
+      isEn ? 'Turn on “Sort by car” in Profile and select a vehicle to filter by brand' : 'Включите «Сортировать по машине» в профиле и выберите авто, чтобы фильтровать по марке';
   String get searchExternalNotPartner =>
       isEn ? 'This business is not a partner of MP-Servis' : 'Данная организация не сотрудничает с MP-Servis';
+  /// Не партнёрский API — данные из OpenStreetMap (Overpass).
+  String get searchExternalOsmEmptyHint => isEn
+      ? 'No OSM points loaded. Check internet, try another zoom, or set category filter to «All».'
+      : 'Не удалось загрузить непартнёрские точки (OpenStreetMap). Проверьте интернет, масштаб или фильтр «Все».';
   String get searchClose => isEn ? 'Close' : 'Закрыть';
   String get searchNoPhone => isEn ? 'No phone number' : 'Нет номера для звонка';
   String get searchDialFailed => isEn ? 'Could not start the call' : 'Не удалось открыть набор номера';
@@ -460,6 +638,17 @@ class AppL10n {
   String get searchCategoryServicesFallback => isEn ? 'Services' : 'Услуги';
   String get searchOpen => isEn ? 'Open' : 'Открыто';
   String get searchClosed => isEn ? 'Closed' : 'Закрыто';
+  String searchOpenUntil(String timeHm) =>
+      isEn ? 'Open until $timeHm' : 'Открыто до $timeHm';
+  String searchClosedUntil(String timeHm) =>
+      isEn ? 'Closed until $timeHm' : 'Закрыто до $timeHm';
+  String searchClosedUntilWithDay(String dayMonth, String timeHm) => isEn
+      ? 'Closed until $dayMonth, $timeHm'
+      : 'Закрыто до $dayMonth, $timeHm';
+  String get searchDayOff => isEn ? 'Day off' : 'Выходной';
+  String get searchNotOperating =>
+      isEn ? 'Not operating (special day)' : 'Не работает';
+  String get searchWrite => isEn ? 'Message' : 'Написать';
   String get searchShare => isEn ? 'Share' : 'Поделиться';
   String get searchCall => isEn ? 'Call' : 'Позвонить';
   String get searchRoute => isEn ? 'Directions' : 'Маршрут';

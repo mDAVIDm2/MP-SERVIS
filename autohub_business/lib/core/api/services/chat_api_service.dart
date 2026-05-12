@@ -1,8 +1,10 @@
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode, kIsWeb;
+import 'package:http_parser/http_parser.dart';
 import '../api_client.dart';
 import '../api_endpoints.dart';
 import '../api_exceptions.dart';
+import '../../utils/chat_image_upload.dart';
 import '../../../shared/models/chat_model.dart';
 
 /// Извлекает список из ответа GET /chats/:id/messages. Поддержка: items, data, messages и обёртка { data: { items: [...] } }.
@@ -93,10 +95,22 @@ class ChatApiService {
       final form = FormData();
       final t = text.trim();
       if (t.isNotEmpty) form.fields.add(MapEntry('text', t));
-      for (final img in images) {
+      for (var i = 0; i < images.length; i++) {
+        final img = images[i];
+        final prepared = await prepareChatImageBytesForUpload(img.bytes);
+        final filename = kIsWeb
+            ? (img.filename.isNotEmpty ? img.filename : 'photo.jpg')
+            : 'photo_$i.jpg';
+        final contentType = kIsWeb
+            ? mediaTypeForChatImageFilename(filename)
+            : MediaType('image', 'jpeg');
         form.files.add(MapEntry(
           'files',
-          MultipartFile.fromBytes(img.bytes, filename: img.filename),
+          MultipartFile.fromBytes(
+            prepared,
+            filename: filename,
+            contentType: contentType,
+          ),
         ));
       }
       final res = await _client.upload<Map<String, dynamic>>(

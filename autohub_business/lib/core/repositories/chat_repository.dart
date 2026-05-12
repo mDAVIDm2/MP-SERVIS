@@ -164,19 +164,24 @@ class ChatRepository extends StateNotifier<ChatRepositoryState> {
   }
 
   /// Текст и/или фото (лимит по тарифу на бэкенде).
-  Future<bool> sendMessageWithMedia(
+  /// Возвращает `null` при успехе, иначе текст ошибки API (сеть, тариф, формат).
+  Future<String?> sendMessageWithMedia(
     String chatId, {
     String text = '',
     List<ChatOutgoingImage> images = const [],
   }) async {
     final trimmed = text.trim();
-    if (trimmed.isEmpty && images.isEmpty) return false;
+    if (trimmed.isEmpty && images.isEmpty) {
+      return 'Нужен текст или хотя бы одно фото';
+    }
     final result = await _api.sendMessageWithMedia(chatId, text: trimmed, images: images);
     final msg = result.dataOrNull;
-    if (msg == null) return false;
+    if (msg == null) {
+      return result.errorOrNull?.message ?? 'Не удалось отправить';
+    }
     _appendMessage(chatId, msg, previewText: trimmed.isNotEmpty ? trimmed : 'Фото');
     _updateChatPreview(chatId, trimmed.isNotEmpty ? trimmed : 'Фото', msg.at);
-    return true;
+    return null;
   }
 
   /// Отправляет запрос согласования: оптимистичное обновление.

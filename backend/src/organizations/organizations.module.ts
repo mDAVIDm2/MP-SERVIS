@@ -6,6 +6,7 @@ import { StaffMember } from './staff-member.entity';
 import { MasterSchedule } from './master-schedule.entity';
 import { OrganizationSettings } from './organization-settings.entity';
 import { OrganizationsController } from './organizations.controller';
+import { OrganizationClientCarInsightController } from './organization-client-car-insight.controller';
 import { OrganizationPublicPhotosController } from './organization-public-photos.controller';
 import { CatalogController } from './catalog.controller';
 import { OrganizationsService } from './organizations.service';
@@ -38,7 +39,12 @@ import { OrganizationInvitationsScheduler } from './organization-invitations.sch
     forwardRef(() => UsersModule),
     forwardRef(() => NotificationsModule),
   ],
-  controllers: [OrganizationsController, OrganizationPublicPhotosController, CatalogController],
+  controllers: [
+    OrganizationsController,
+    OrganizationClientCarInsightController,
+    OrganizationPublicPhotosController,
+    CatalogController,
+  ],
   providers: [OrganizationsService, OrganizationInvitationsScheduler, TransactionalMailService],
   exports: [OrganizationsService],
 })

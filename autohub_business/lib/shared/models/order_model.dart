@@ -3,6 +3,22 @@ import '../../core/theme/app_colors.dart';
 import '../../core/utils/formatters.dart';
 
 /// Статусы заказа — идентичны клиентскому приложению (один бэкенд).
+enum OrderConfirmationRequiredFrom {
+  client,
+  organization;
+
+  static OrderConfirmationRequiredFrom? fromApi(String? v) {
+    switch (v?.toLowerCase().trim()) {
+      case 'client':
+        return OrderConfirmationRequiredFrom.client;
+      case 'organization':
+        return OrderConfirmationRequiredFrom.organization;
+      default:
+        return null;
+    }
+  }
+}
+
 enum OrderStatus {
   pendingConfirmation,
   confirmed,
@@ -21,7 +37,7 @@ enum OrderStatus {
       case OrderStatus.inProgress:
         return 'В работе';
       case OrderStatus.pendingApproval:
-        return 'Требуется согласование';
+        return 'Запрос отправлен на согласование';
       case OrderStatus.completed:
         return 'Готово к выдаче';
       case OrderStatus.done:
@@ -128,6 +144,41 @@ class OrderItem {
   }
 }
 
+/// Строка материала склада, привязанная к заказу (`inventory_lines` в API).
+class OrderInventoryLine {
+  const OrderInventoryLine({
+    required this.id,
+    required this.inventoryItemId,
+    this.orderItemId,
+    required this.quantityPlanned,
+    required this.quantityReserved,
+    required this.unit,
+    required this.status,
+  });
+
+  final String id;
+  final String inventoryItemId;
+  final String? orderItemId;
+  final double quantityPlanned;
+  final double quantityReserved;
+  final String unit;
+  final String status;
+
+  static double _d(dynamic v) => (v is num) ? v.toDouble() : double.tryParse('$v') ?? 0;
+
+  factory OrderInventoryLine.fromJson(Map<String, dynamic> j) {
+    return OrderInventoryLine(
+      id: '${j['id'] ?? ''}',
+      inventoryItemId: '${j['inventory_item_id'] ?? ''}',
+      orderItemId: j['order_item_id']?.toString(),
+      quantityPlanned: _d(j['quantity_planned']),
+      quantityReserved: _d(j['quantity_reserved']),
+      unit: '${j['unit'] ?? 'pcs'}',
+      status: '${j['status'] ?? 'planned'}',
+    );
+  }
+}
+
 class Order {
   final String id;
   final String orderNumber;
@@ -152,6 +203,8 @@ class Order {
   final DateTime? plannedStartTime;
   final DateTime? plannedEndTime;
   final List<OrderItem> items;
+  /// Материалы склада по заказу (`inventory_lines` в API).
+  final List<OrderInventoryLine> inventoryLines;
   /// При pending_approval — предлагаемый состав из последнего запроса согласования (только отображение; items остаётся из БД).
   final List<OrderItem>? approvalPreviewItems;
   final int? approvalPreviewTotalKopecks;
@@ -171,6 +224,10 @@ class Order {
   final String? organizationSchedulingMode;
   final DateTime? createdAt;
   final DateTime? updatedAt;
+  /// `confirmation_required_from` в API; null — как [OrderConfirmationRequiredFrom.organization] (старые заказы).
+  final OrderConfirmationRequiredFrom? confirmationRequiredFrom;
+  /// СТО подтвердило бронь за клиента при создании (`org_confirmed_on_behalf_of_client` в API).
+  final bool orgConfirmedOnBehalfOfClient;
   /// Скрыт для пользователя (удалён из отображения, в БД хранится с пометкой).
   final bool isHiddenFromUser;
 
@@ -194,6 +251,7 @@ class Order {
     this.plannedStartTime,
     this.plannedEndTime,
     required this.items,
+    this.inventoryLines = const [],
     this.approvalPreviewItems,
     this.approvalPreviewTotalKopecks,
     this.approvalPreviewEstimatedMinutes,
@@ -209,6 +267,8 @@ class Order {
     this.organizationSchedulingMode,
     this.createdAt,
     this.updatedAt,
+    this.confirmationRequiredFrom,
+    this.orgConfirmedOnBehalfOfClient = false,
     this.isHiddenFromUser = false,
   });
 
@@ -232,6 +292,23 @@ class Order {
       return approvalPreviewEstimatedMinutes!;
     }
     return items.fold<int>(0, (s, i) => s + i.estimatedMinutes);
+  }
+
+  /// Запись создана в бизнесе — клиент должен подтвердить; СТО не нажимает «Подтвердить без изменений».
+  bool get clientMustConfirmPending =>
+      status == OrderStatus.pendingConfirmation &&
+      (confirmationRequiredFrom ?? OrderConfirmationRequiredFrom.organization) ==
+          OrderConfirmationRequiredFrom.client;
+
+  /// Статус в интерфейсе сотрудника (чат, карточка заказа, списки): нейтральные формулировки.
+  String get stoDisplayStatusLabel {
+    if (status == OrderStatus.pendingApproval) {
+      return 'На согласовании у клиента';
+    }
+    if (status == OrderStatus.pendingConfirmation && clientMustConfirmPending) {
+      return 'Ожидает подтверждения клиента';
+    }
+    return status.label;
   }
 
   /// Длительность записи: интервал планирования или сумма минут по услугам (как в сводке заказа).
@@ -304,6 +381,7 @@ class Order {
     DateTime? plannedStartTime,
     DateTime? plannedEndTime,
     List<OrderItem>? items,
+    List<OrderInventoryLine>? inventoryLines,
     List<OrderItem>? approvalPreviewItems,
     int? approvalPreviewTotalKopecks,
     int? approvalPreviewEstimatedMinutes,
@@ -319,6 +397,8 @@ class Order {
     String? organizationSchedulingMode,
     DateTime? createdAt,
     DateTime? updatedAt,
+    OrderConfirmationRequiredFrom? confirmationRequiredFrom,
+    bool? orgConfirmedOnBehalfOfClient,
     bool? isHiddenFromUser,
     bool clearMaster = false,
     bool clearBay = false,
@@ -344,6 +424,7 @@ class Order {
       plannedStartTime: plannedStartTime ?? this.plannedStartTime,
       plannedEndTime: plannedEndTime ?? this.plannedEndTime,
       items: items ?? this.items,
+      inventoryLines: inventoryLines ?? this.inventoryLines,
       approvalPreviewItems: clearApprovalPreview ? null : (approvalPreviewItems ?? this.approvalPreviewItems),
       approvalPreviewTotalKopecks:
           clearApprovalPreview ? null : (approvalPreviewTotalKopecks ?? this.approvalPreviewTotalKopecks),
@@ -361,6 +442,8 @@ class Order {
       organizationSchedulingMode: organizationSchedulingMode ?? this.organizationSchedulingMode,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      confirmationRequiredFrom: confirmationRequiredFrom ?? this.confirmationRequiredFrom,
+      orgConfirmedOnBehalfOfClient: orgConfirmedOnBehalfOfClient ?? this.orgConfirmedOnBehalfOfClient,
       isHiddenFromUser: isHiddenFromUser ?? this.isHiddenFromUser,
     );
   }
@@ -434,6 +517,16 @@ class Order {
       final em = apRaw['estimated_minutes'] ?? apRaw['estimatedMinutes'];
       if (em is num) previewMins = em.toInt();
     }
+    final invRaw = j['inventory_lines'] as List<dynamic>? ?? j['inventoryLines'] as List<dynamic>?;
+    final inventoryLines = <OrderInventoryLine>[];
+    if (invRaw != null) {
+      for (final e in invRaw) {
+        if (e is! Map<String, dynamic>) continue;
+        try {
+          inventoryLines.add(OrderInventoryLine.fromJson(e));
+        } catch (_) {}
+      }
+    }
     return Order(
       id: j['id'] as String? ?? '',
       orderNumber: j['order_number'] as String? ?? '',
@@ -460,6 +553,7 @@ class Order {
       plannedStartTime: plannedStart,
       plannedEndTime: plannedEnd,
       items: items,
+      inventoryLines: inventoryLines,
       approvalPreviewItems: previewItems,
       approvalPreviewTotalKopecks: previewTotalK,
       approvalPreviewEstimatedMinutes: previewMins,
@@ -475,6 +569,12 @@ class Order {
       organizationSchedulingMode: _schedulingModeFromApi(j['organization_scheduling_mode']),
       createdAt: createdAt,
       updatedAt: updatedAt,
+      confirmationRequiredFrom: OrderConfirmationRequiredFrom.fromApi(
+        j['confirmation_required_from']?.toString() ?? j['confirmationRequiredFrom']?.toString(),
+      ),
+      orgConfirmedOnBehalfOfClient: j['org_confirmed_on_behalf_of_client'] as bool? ??
+          j['orgConfirmedOnBehalfOfClient'] as bool? ??
+          false,
       isHiddenFromUser: hidden,
     );
   }

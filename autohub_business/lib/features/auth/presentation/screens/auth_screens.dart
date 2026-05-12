@@ -413,7 +413,7 @@ class _EmailInputScreenState extends ConsumerState<EmailInputScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Отправим одноразовый код на email (6 цифр). При AUTH_OTP_DELIVERY=console код смотрите в логах бэкенда.',
+                      'Отправим одноразовый код на email (6 цифр).',
                       style: TextStyle(
                         fontSize: desktop ? 14 : 13,
                         height: 1.4,

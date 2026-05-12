@@ -7,6 +7,8 @@ import '../../../../core/settings/filter_by_car_setting.dart';
 import '../../../../core/settings/maintenance_reminders_provider.dart';
 import '../../../../core/settings/maintenance_warn_threshold_provider.dart';
 import '../../../../shared/models/car_model.dart';
+import '../../../../core/onboarding/garage_first_car_tutorial_provider.dart';
+import '../../../../core/onboarding/garage_tutorial_target.dart';
 import '../widgets/car_maintenance_reminders_section.dart';
 import '../widgets/add_maintenance_record_sheet.dart';
 
@@ -22,6 +24,18 @@ class MaintenanceRemindersScreen extends ConsumerStatefulWidget {
 
 class _MaintenanceRemindersScreenState extends ConsumerState<MaintenanceRemindersScreen> {
   bool _showOtherCars = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final t = ref.read(garageFirstCarTutorialProvider);
+      if (t.active && t.step == GarageFirstCarTutorialStep.garageReminders) {
+        ref.read(garageFirstCarTutorialProvider.notifier).setStep(GarageFirstCarTutorialStep.maintenanceIntro);
+      }
+    });
+  }
 
   void _showWarnThresholdsDialog(BuildContext context, WidgetRef ref) {
     final l10n = L10nScope.of(context);
@@ -144,6 +158,125 @@ class _MaintenanceRemindersScreenState extends ConsumerState<MaintenanceReminder
           final primary = _resolvePrimaryCar(cars, selectedId);
           final otherCars = cars.where((c) => c.id != primary.id).toList();
           final types = ref.watch(availableMaintenanceTypesProvider);
+          final hasManualHistory = ref.watch(
+            maintenanceRemindersProvider.select(
+              (s) => s.records.any((r) => r.carId == primary.id),
+            ),
+          );
+
+          void openLogSheet() => showAddMaintenanceRecordSheet(
+                context,
+                ref,
+                cars: cars,
+                initialCar: primary,
+              );
+
+          final logCard = hasManualHistory
+              ? Material(
+                  color: context.palette.cardBg,
+                  borderRadius: BorderRadius.circular(14),
+                  child: InkWell(
+                    onTap: openLogSheet,
+                    borderRadius: BorderRadius.circular(14),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: context.palette.primary.withValues(alpha: 0.14),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Icon(Icons.post_add_rounded, color: context.palette.primary, size: 24),
+                          ),
+                          SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  l10n.maintLogDoneTitle,
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                    color: context.palette.textPrimary.withValues(alpha: 0.96),
+                                  ),
+                                ),
+                                SizedBox(height: 4),
+                                Text(
+                                  l10n.maintLogDoneSubtitle,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: context.palette.textSecondary.withValues(alpha: 0.92),
+                                    height: 1.3,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Icon(Icons.chevron_right_rounded, color: context.palette.textTertiary),
+                        ],
+                      ),
+                    ),
+                  ),
+                )
+              : Material(
+                  color: Colors.transparent,
+                  child: SizedBox(
+                    width: double.infinity,
+                    height: 96,
+                    child: FilledButton.tonal(
+                      onPressed: openLogSheet,
+                      style: FilledButton.styleFrom(
+                        alignment: Alignment.centerLeft,
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: context.palette.primary.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Icon(Icons.post_add_rounded, color: context.palette.primary, size: 26),
+                          ),
+                          SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  l10n.maintLogDoneTitle,
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                    color: context.palette.textPrimary,
+                                  ),
+                                ),
+                                SizedBox(height: 4),
+                                Text(
+                                  l10n.maintLogDoneSubtitle,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: context.palette.textSecondary,
+                                    height: 1.3,
+                                  ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                          Icon(Icons.chevron_right_rounded, color: context.palette.textTertiary),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
 
           return ListView(
             padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
@@ -181,59 +314,9 @@ class _MaintenanceRemindersScreenState extends ConsumerState<MaintenanceReminder
                 ),
               ],
               SizedBox(height: 14),
-              Material(
-                color: context.palette.cardBg,
-                borderRadius: BorderRadius.circular(14),
-                child: InkWell(
-                  onTap: () => showAddMaintenanceRecordSheet(
-                    context,
-                    ref,
-                    cars: cars,
-                    initialCar: primary,
-                  ),
-                  borderRadius: BorderRadius.circular(14),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: context.palette.primary.withValues(alpha: 0.14),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Icon(Icons.post_add_rounded, color: context.palette.primary, size: 24),
-                        ),
-                        SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                l10n.maintLogDoneTitle,
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w700,
-                                  color: context.palette.textPrimary.withValues(alpha: 0.96),
-                                ),
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                l10n.maintLogDoneSubtitle,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: context.palette.textSecondary.withValues(alpha: 0.92),
-                                  height: 1.3,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Icon(Icons.chevron_right_rounded, color: context.palette.textTertiary),
-                      ],
-                    ),
-                  ),
-                ),
+              GarageTutorialTarget(
+                highlightStep: GarageFirstCarTutorialStep.maintenanceHistory,
+                child: logCard,
               ),
               SizedBox(height: 20),
               Text(
@@ -245,9 +328,12 @@ class _MaintenanceRemindersScreenState extends ConsumerState<MaintenanceReminder
                 ),
               ),
               SizedBox(height: 10),
-              CarMaintenanceRemindersSection(
-                car: primary,
-                availableTypes: types,
+              GarageTutorialTarget(
+                highlightStep: GarageFirstCarTutorialStep.maintenanceIntro,
+                child: CarMaintenanceRemindersSection(
+                  car: primary,
+                  availableTypes: types,
+                ),
               ),
               if (otherCars.isNotEmpty) ...[
                 SizedBox(height: 12),

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../../../core/onboarding/garage_first_car_tutorial_provider.dart';
+import '../../../../core/onboarding/garage_tutorial_target.dart';
 import '../../../../core/theme/client_palette.dart';
 import '../../../../core/theme/app_text_styles.dart';
 import '../../../../core/providers/app_providers.dart';
@@ -10,6 +12,9 @@ import '../../../../core/settings/filter_by_car_setting.dart';
 import '../../../../core/navigation/app_routes.dart';
 import '../../../../core/navigation/shell_navigation_provider.dart';
 import '../../../../core/settings/favorite_sto_ids_provider.dart';
+import '../../../../core/settings/sto_reviews_provider.dart';
+import '../../../search/presentation/widgets/sto_list_leading_image.dart';
+import '../../../search/presentation/widgets/sto_search_list_brands_line.dart';
 import '../../../../shared/models/car_model.dart';
 import '../../../../shared/models/sto_model.dart';
 import '../../../../shared/models/order_model.dart';
@@ -40,20 +45,22 @@ class ServicesScreen extends ConsumerWidget {
     return Scaffold(
       backgroundColor: context.palette.background,
       body: SafeArea(
-        child: Column(
-          children: [
-            Padding(
-              padding: EdgeInsets.fromLTRB(20, 12, 20, 0),
-              child: SizedBox(
-                height: 56,
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text('Мои сервисы', style: AppTextStyles.screenTitle(context.palette)),
+        child: GarageTutorialTarget(
+          highlightStep: GarageFirstCarTutorialStep.servicesFavorites,
+          child: Column(
+            children: [
+              Padding(
+                padding: EdgeInsets.fromLTRB(20, 12, 20, 0),
+                child: SizedBox(
+                  height: 56,
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('Мои сервисы', style: AppTextStyles.screenTitle(context.palette)),
+                  ),
                 ),
               ),
-            ),
-            Expanded(
-              child: favoriteAsync.isLoading && stos.isEmpty
+              Expanded(
+                child: favoriteAsync.isLoading && stos.isEmpty
                   ? Center(child: CircularProgressIndicator(color: context.palette.primary))
                   : favoriteAsync.hasError && stos.isEmpty
                       ? Center(
@@ -79,8 +86,9 @@ class ServicesScreen extends ConsumerWidget {
                       separatorBuilder: (_, __) => SizedBox(height: 8),
                       itemBuilder: (_, i) => _STOCard(sto: stos[i], ref: ref),
                     ),
-            ),
-          ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -117,6 +125,15 @@ class _STOCardState extends ConsumerState<_STOCard> {
     final history = _ordersForSto(ref, widget.sto, carId: carIdFilter);
     final visibleHistory = _showAllHistory ? history : history.take(3).toList();
     final hasMore = history.length > 3;
+    final allReviews = ref.watch(stoReviewsProvider);
+    final userReviews = allReviews.where((r) => r.stoId == widget.sto.id).toList();
+    final displayRating = StoReviewsNotifier.computedRating(
+      widget.sto.rating,
+      widget.sto.reviewCount,
+      userReviews,
+    );
+    final displayReviewCount =
+        StoReviewsNotifier.computedReviewCount(widget.sto.reviewCount, userReviews);
 
     return GestureDetector(
       onTap: () => setState(() => _isExpanded = !_isExpanded),
@@ -124,35 +141,56 @@ class _STOCardState extends ConsumerState<_STOCard> {
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeOutCubic,
         decoration: BoxDecoration(
-          color: context.palette.cardBg,
-          borderRadius: BorderRadius.circular(12),
+          color: context.palette.cardBg.withValues(alpha: 0.95),
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(color: context.palette.border),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
         child: Column(
           children: [
             Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: 64,
-                    height: 64,
-                    decoration: BoxDecoration(
-                      color: context.palette.nestedBg,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Center(
-                      child: Text(
-                        widget.sto.name[0],
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.w700,
-                          color: context.palette.primary,
+                  SizedBox(
+                    width: 80,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        StoListLeadingImage(sto: widget.sto, size: 80, borderRadius: 12),
+                        const SizedBox(height: 4),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.star_rounded, size: 14, color: context.palette.primary),
+                            const SizedBox(width: 2),
+                            Flexible(
+                              child: Text(
+                                '${Formatters.rating(displayRating)} ($displayReviewCount)',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: context.palette.textSecondary,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
+                      ],
                     ),
                   ),
-                  SizedBox(width: 12),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -167,22 +205,7 @@ class _STOCardState extends ConsumerState<_STOCard> {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        SizedBox(height: 4),
-                        Row(
-                          children: [
-                            Icon(Icons.star_rounded, size: 14, color: context.palette.primary),
-                            SizedBox(width: 2),
-                            Text(
-                              Formatters.rating(widget.sto.rating),
-                              style: TextStyle(fontSize: 14, color: context.palette.textPrimary),
-                            ),
-                            Text(
-                              ' (${Formatters.reviewCount(widget.sto.reviewCount)})',
-                              style: TextStyle(fontSize: 14, color: context.palette.textSecondary),
-                            ),
-                          ],
-                        ),
-                        SizedBox(height: 4),
+                        const SizedBox(height: 4),
                         Row(
                           children: [
                             Expanded(
@@ -206,25 +229,7 @@ class _STOCardState extends ConsumerState<_STOCard> {
                               ),
                           ],
                         ),
-                        SizedBox(height: 6),
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 4,
-                          children: widget.sto.specializations
-                              .map((s) => Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                                    decoration: BoxDecoration(
-                                      color: context.palette.nestedBg,
-                                      borderRadius: BorderRadius.circular(20),
-                                    ),
-                                    child: Text(
-                                      s,
-                                      style: TextStyle(fontSize: 12, color: context.palette.textPrimary),
-                                    ),
-                                  ))
-                              .toList(),
-                        ),
-                        SizedBox(height: 6),
+                        const SizedBox(height: 6),
                         Row(
                           children: [
                             Container(
@@ -235,7 +240,7 @@ class _STOCardState extends ConsumerState<_STOCard> {
                                 shape: BoxShape.circle,
                               ),
                             ),
-                            SizedBox(width: 6),
+                            const SizedBox(width: 6),
                             Text(
                               widget.sto.isOpen ? 'Открыто' : 'Закрыто',
                               style: TextStyle(
@@ -245,6 +250,18 @@ class _STOCardState extends ConsumerState<_STOCard> {
                             ),
                           ],
                         ),
+                        const SizedBox(height: 6),
+                        StoSearchListBrandsLine(sto: widget.sto),
+                        if (widget.sto.minPrice != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            widget.sto.minPrice!,
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: context.palette.textSecondary,
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),

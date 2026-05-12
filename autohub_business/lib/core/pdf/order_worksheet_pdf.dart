@@ -186,7 +186,7 @@ Future<Uint8List> _buildPdfBytes(
             children: [
               pw.Text('СТАТУС И СРОКИ', style: pw.TextStyle(font: fontBold, fontSize: 9)),
               pw.SizedBox(height: 4),
-              pw.Text('Статус: ${order.status.label}', style: pw.TextStyle(font: font, fontSize: 9)),
+              pw.Text('Статус: ${order.stoDisplayStatusLabel}', style: pw.TextStyle(font: font, fontSize: 9)),
               if (start != null)
                 pw.Text(
                   'Приём: ${formatDateTime(start)}${end != null ? ' — $endStr' : ''}',

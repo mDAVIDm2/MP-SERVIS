@@ -16,6 +16,7 @@ import 'staff_desktop_screen.dart';
 import 'staff_screen.dart';
 import '../../../clients/presentation/screens/clients_screen.dart';
 import '../../../cars/presentation/screens/profile_cars_screen.dart';
+import '../../../inventory/presentation/screens/inventory_mobile_screen.dart';
 import '../widgets/create_organization_flow.dart';
 
 /// Настройка сервиса: прайс, слоты, уведомления и быстрые переходы (те же экраны модулей).
@@ -111,6 +112,7 @@ class OrganizationServiceHubScreen extends ConsumerWidget {
     }
 
     final canManageStaff = user?.role.canInviteStaff ?? false;
+    final canOpenWarehouse = user?.role != BusinessRole.master;
     final canClients = user?.role.canSeeClients ?? false;
     final canOrg = user?.effectiveCanManageOrgSettings ?? false;
     final iconC = d ? AppColorsDesktop.textSecondary : AppColors.textSecondary;
@@ -132,7 +134,7 @@ class OrganizationServiceHubScreen extends ConsumerWidget {
       title: const Text('Данные организации'),
       subtitle: Text(
         canOrg
-            ? 'Название, адрес, телефон, режим записи'
+            ? 'Название, адрес, телефон, график, удобства и «О сервисе» для клиентов'
             : 'Просмотр и правка недоступны для вашей роли',
       ),
       trailing: Icon(Icons.chevron_right_rounded, color: iconC),
@@ -168,6 +170,17 @@ class OrganizationServiceHubScreen extends ConsumerWidget {
           onTap: () => Navigator.push<void>(
             context,
             MaterialPageRoute<void>(builder: (_) => const ProfileCarsScreen()),
+          ),
+        ),
+      if (!d && canOpenWarehouse)
+        ListTile(
+          leading: Icon(Icons.warehouse_rounded, color: iconC),
+          title: const Text('Склад'),
+          subtitle: const Text('Остатки, движения, низкие остатки'),
+          trailing: Icon(Icons.chevron_right_rounded, color: iconC),
+          onTap: () => Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(builder: (_) => const InventoryMobileScreen()),
           ),
         ),
       if (!d && canManageStaff)

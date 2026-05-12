@@ -47,11 +47,23 @@ Future<void> _runApp() async {
   if (kDebugMode) {
     debugPrint('[MP-Servis Business] API baseUrl=${AppConfig.baseUrl}');
     if (!AppConfig.apiHostFromDartDefine) {
-      debugPrint(
-        '[MP-Servis Business] Хост из умолчания платформы. Свой IP/эмулятор: '
-        '--dart-define=MP_SERVIS_API_HOST=<IP> (Android эмулятор: часто 10.0.2.2; iOS Simulator на Mac: 127.0.0.1). '
-        'LAN по умолчанию для телефонов: --dart-define=MP_SERVIS_DEFAULT_LAN_HOST=<IP>.',
-      );
+      switch (defaultTargetPlatform) {
+        case TargetPlatform.android:
+        case TargetPlatform.iOS:
+          debugPrint(
+            '[MP-Servis Business] Локальный Nest на телефоне/эмуляторе: '
+            '--dart-define=MP_SERVIS_API_HOST=<IP> (эмулятор Android: часто 10.0.2.2). '
+            'LAN по умолчанию: --dart-define=MP_SERVIS_DEFAULT_LAN_HOST=<IP>.',
+          );
+          break;
+        default:
+          debugPrint(
+            '[MP-Servis Business] Локальный Nest на этом ПК: '
+            '--dart-define=MP_SERVIS_API_BASE_URL=http://127.0.0.1:3000/api/v1 '
+            'или MP_SERVIS_API_HOST=127.0.0.1',
+          );
+          break;
+      }
     }
   }
   await initializeDateFormatting('ru_RU', null);

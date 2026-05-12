@@ -8,6 +8,7 @@ import '../../../../shared/models/order_model.dart';
 import '../../../../shared/models/settings_models.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../core/utils/russian_plate_utils.dart';
+import '../../../../core/api/api_exceptions.dart';
 import '../../../../core/api/services/api_services_providers.dart';
 import '../../../orders/application/order_creation_drafts_notifier.dart';
 import '../../../orders/domain/order_creation_draft.dart';
@@ -77,11 +78,13 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
   final _commentController = TextEditingController();
   final _selectedServices = <ServiceItem>[];
   final _customItems = <OrderItem>[];
+  final Map<String, ({int priceKopecks, int estimatedMinutes})> _serviceLineEdits = {};
   bool _carFromList = true;
   _CarPick? _pickedCar;
   String? _selectedBayId;
   String? _linkedDraftId;
   bool _saveSucceeded = false;
+  bool _confirmForClient = false;
 
   @override
   void initState() {
@@ -112,7 +115,7 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
 
   void _applyCalendarDraftData(Map<String, dynamic> m) {
     final v = m['v'];
-    if (v is! num || v.toInt() != 1) return;
+    if (v is! num || (v.toInt() != 1 && v.toInt() != 2)) return;
     final settings = ref.read(settingsRepositoryProvider);
     final byId = {for (final s in settings.services) s.id: s};
     final ids = (m['selectedServiceIds'] as List?)?.map((e) => e.toString()).toList() ?? <String>[];
@@ -156,6 +159,21 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
       _commentController.text = m['comment'] as String? ?? '';
       _selectedServices.clear();
       _selectedServices.addAll(selected);
+      _serviceLineEdits.clear();
+      final seRaw = m['serviceLineEdits'];
+      if (seRaw is Map) {
+        for (final e in seRaw.entries) {
+          final id = e.key.toString();
+          final val = e.value;
+          if (val is! Map) continue;
+          final vm = Map<String, dynamic>.from(val);
+          final p = (vm['p'] as num?)?.toInt() ?? (vm['priceKopecks'] as num?)?.toInt();
+          final mins = (vm['m'] as num?)?.toInt() ?? (vm['estimatedMinutes'] as num?)?.toInt();
+          if (p != null && mins != null && mins >= 1) {
+            _serviceLineEdits[id] = (priceKopecks: p, estimatedMinutes: mins.clamp(1, 9999));
+          }
+        }
+      }
       _customItems.clear();
       _customItems.addAll(customs);
       _selectedBayId = m['bayId'] as String?;
@@ -176,7 +194,7 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
 
   Map<String, dynamic> _calendarDraftSnapshot() {
     return {
-      'v': 1,
+      'v': 2,
       'dateTime': _dateTime.toIso8601String(),
       'clientName': _clientNameController.text,
       'clientPhone': _clientPhoneController.text,
@@ -199,6 +217,10 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
               'licensePlate': _pickedCar!.licensePlate,
             },
       'selectedServiceIds': _selectedServices.map((s) => s.id).toList(),
+      'serviceLineEdits': {
+        for (final e in _serviceLineEdits.entries)
+          e.key: {'p': e.value.priceKopecks, 'm': e.value.estimatedMinutes},
+      },
       'customItems': _customItems
           .map((i) => {
                 'name': i.name,
@@ -347,9 +369,143 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
     setState(() {
       if (_selectedServices.any((e) => e.id == s.id)) {
         _selectedServices.removeWhere((e) => e.id == s.id);
+        _serviceLineEdits.remove(s.id);
       } else {
         _selectedServices.add(s);
       }
+    });
+  }
+
+  ServiceItem _serviceFromSettings(ServiceItem s) {
+    for (final x in ref.read(settingsRepositoryProvider).services) {
+      if (x.id == s.id) return x;
+    }
+    return s;
+  }
+
+  int _coPriceKopecks(ServiceItem s) {
+    final e = _serviceLineEdits[s.id];
+    if (e != null) return e.priceKopecks;
+    return _serviceFromSettings(s).priceKopecks;
+  }
+
+  int _coMinutes(ServiceItem s) {
+    final e = _serviceLineEdits[s.id];
+    if (e != null) return e.estimatedMinutes;
+    return _serviceFromSettings(s).durationMinutes;
+  }
+
+  bool _coHasEdit(ServiceItem s) => _serviceLineEdits.containsKey(s.id);
+
+  void _coEditServiceLine(ServiceItem s) {
+    final priceCtrl = TextEditingController(text: '${_coPriceKopecks(s) ~/ 100}');
+    final minCtrl = TextEditingController(text: '${_coMinutes(s)}');
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.cardBg,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: AppColors.textTertiary,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  Text(
+                    s.name,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Для этого заказа (в справочнике не меняется)',
+                    style: TextStyle(fontSize: 12, color: AppColors.textTertiary, height: 1.3),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: priceCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    style: const TextStyle(color: AppColors.textPrimary),
+                    decoration: const InputDecoration(
+                      labelText: 'Цена, ₽',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: minCtrl,
+                    keyboardType: TextInputType.number,
+                    style: const TextStyle(color: AppColors.textPrimary),
+                    decoration: const InputDecoration(
+                      labelText: 'Длительность, мин',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'В справочнике: ${formatMoney(s.priceKopecks)} · ${s.durationMinutes} мин',
+                    style: const TextStyle(fontSize: 11, color: AppColors.textTertiary),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      TextButton(
+                        onPressed: () {
+                          setState(() => _serviceLineEdits.remove(s.id));
+                          Navigator.pop(ctx);
+                        },
+                        child: const Text('Как в справочнике'),
+                      ),
+                      const Spacer(),
+                      FilledButton(
+                        onPressed: () {
+                          final rub = double.tryParse(priceCtrl.text.replaceAll(',', '.')) ?? 0;
+                          final k = (rub * 100).round().clamp(0, 999999999);
+                          final m = int.tryParse(minCtrl.text.trim()) ?? _coMinutes(s);
+                          if (m < 1) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Укажите длительность больше 0')),
+                            );
+                            return;
+                          }
+                          setState(() {
+                            _serviceLineEdits[s.id] = (priceKopecks: k, estimatedMinutes: m.clamp(1, 9999));
+                          });
+                          Navigator.pop(ctx);
+                        },
+                        child: const Text('Сохранить'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    ).whenComplete(() {
+      priceCtrl.dispose();
+      minCtrl.dispose();
     });
   }
 
@@ -444,8 +600,8 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
         (s) => OrderItem(
           id: s.id,
           name: s.name,
-          priceKopecks: s.priceKopecks,
-          estimatedMinutes: s.durationMinutes,
+          priceKopecks: _coPriceKopecks(s),
+          estimatedMinutes: _coMinutes(s),
           serviceId: s.id,
           catalogItemId: s.catalogItemId,
         ),
@@ -509,15 +665,33 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
       color: _colorController.text.trim().isEmpty ? null : _colorController.text.trim(),
       mileage: mileageVal,
       engineType: _engineTypeController.text.trim().isEmpty ? null : _engineTypeController.text.trim(),
-      status: OrderStatus.pendingConfirmation,
+      status: _confirmForClient ? OrderStatus.confirmed : OrderStatus.pendingConfirmation,
       dateTime: _dateTime,
       items: items,
       comment: _commentController.text.trim().isEmpty ? null : _commentController.text.trim(),
       bayId: _selectedBayId,
+      orgConfirmedOnBehalfOfClient: _confirmForClient,
     );
 
     final repo = ref.read(orderRepositoryProvider.notifier);
-    final addedOrder = await repo.addOrderAsync(order);
+    final Order addedOrder;
+    try {
+      addedOrder = await repo.addOrderAsync(order);
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message), backgroundColor: AppColors.error),
+        );
+      }
+      return;
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Не удалось создать заказ'), backgroundColor: AppColors.error),
+        );
+      }
+      return;
+    }
 
     if (mounted) {
       _saveSucceeded = true;
@@ -677,14 +851,6 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
           ),
           if (_carFromList) ...[
             const SizedBox(height: 8),
-            if (clientCars.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: Text(
-                  'Сначала авто этого клиента (по телефону), ниже — остальные.',
-                  style: TextStyle(fontSize: 12, color: AppColors.primary.withValues(alpha: 0.9)),
-                ),
-              ),
             TextField(
               controller: _carSearchController,
               decoration: const InputDecoration(
@@ -870,16 +1036,42 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
             final selected = _selectedServices.any((e) => e.id == s.id);
             return Card(
               margin: const EdgeInsets.only(bottom: 8),
-              child: CheckboxListTile(
-                value: selected,
-                onChanged: (_) => _toggleService(s),
-                title: Text(s.name),
-                subtitle: Text('${formatMoney(s.priceKopecks)} • ${s.durationMinutes} мин'),
-                secondary: Text(
-                  formatMoney(s.priceKopecks),
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.primary,
+              child: InkWell(
+                onTap: () => _toggleService(s),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Checkbox(
+                        value: selected,
+                        onChanged: (_) => _toggleService(s),
+                        activeColor: AppColors.primary,
+                      ),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              s.name,
+                              style: const TextStyle(color: AppColors.textPrimary, fontSize: 16),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '${formatMoney(_coPriceKopecks(s))} • ${_coMinutes(s)} мин'
+                              '${_coHasEdit(s) ? ' · изменено' : ''}',
+                              style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (selected)
+                        IconButton(
+                          tooltip: 'Цена и длительность',
+                          icon: const Icon(Icons.tune_rounded, color: AppColors.primary),
+                          onPressed: () => _coEditServiceLine(s),
+                        ),
+                    ],
                   ),
                 ),
               ),
@@ -918,7 +1110,30 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
             ),
             maxLines: 2,
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 20),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Checkbox(
+                value: _confirmForClient,
+                onChanged: (v) => setState(() => _confirmForClient = v ?? false),
+                activeColor: AppColors.primary,
+              ),
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => setState(() => _confirmForClient = !_confirmForClient),
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: Text(
+                      'Запись уже согласована с клиентом (например, по телефону). Клиент получит уведомление, что сервис подтвердил запись.',
+                      style: TextStyle(fontSize: 12, height: 1.35, color: AppColors.textSecondary),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
           ElevatedButton(
             onPressed: _save,
             child: const Text('Создать заказ'),

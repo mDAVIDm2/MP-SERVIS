@@ -11,6 +11,7 @@ import { OrdersModule } from './orders/orders.module';
 import { ChatsModule } from './chats/chats.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { BookingModule } from './booking/booking.module';
+import { InventoryModule } from './inventory/inventory.module';
 import { DatabaseModule } from './database/database.module';
 import { ReferenceModule } from './reference/reference.module';
 import { InternalModule } from './internal/internal.module';
@@ -42,6 +43,7 @@ import { getTypeOrmModuleOptions } from './database/typeorm.config';
     ChatsModule,
     NotificationsModule,
     BookingModule,
+    InventoryModule,
   ],
 })
 export class AppModule {}

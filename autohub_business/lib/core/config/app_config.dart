@@ -1,6 +1,10 @@
 import 'package:flutter/foundation.dart';
 
-/// Конфигурация приложения. URL бэкенда: `--dart-define=MP_SERVIS_API_HOST=...` или умолчание по платформе.
+/// Конфигурация приложения. URL бэкенда: `--dart-define=MP_SERVIS_API_HOST=...` / `MP_SERVIS_API_BASE_URL=...`.
+///
+/// **Desktop (Windows / macOS / Linux)** без dart-define ходит на прод `https://api.mp-servis.ru/api/v1`
+/// — как клиентское приложение и release-сборки на телефонах. Локальный Nest на этом ПК:
+/// `--dart-define=MP_SERVIS_API_BASE_URL=http://127.0.0.1:3000/api/v1` или `MP_SERVIS_API_HOST=127.0.0.1`.
 ///
 /// **Почему на телефоне «нет сети», а на ПК всё ок**
 /// - **Android 9+** и cleartext: в манифесте `android:usesCleartextTraffic="true"` (в проекте включено).
@@ -12,11 +16,10 @@ import 'package:flutter/foundation.dart';
 ///   `--dart-define=MP_SERVIS_API_HOST=127.0.0.1`
 /// - **Брандмауэр Windows**: входящий TCP на порт Nest (часто 3000).
 ///
-/// Пример: `flutter run --dart-define=MP_SERVIS_API_HOST=192.168.1.187`
+/// Пример LAN: `flutter run --dart-define=MP_SERVIS_API_HOST=192.168.0.10`
 ///
-/// **Релиз Android/iOS без `MP_SERVIS_API_BASE_URL` и без `MP_SERVIS_API_HOST`**
-/// по умолчанию идёт на прод `https://api.mp-servis.ru/api/v1`, чтобы APK из IDE
-/// не цеплялся к зашитому LAN `192.168.1.187`. Для LAN-релиза укажите хост явно.
+/// **Релиз Android/iOS** без `MP_SERVIS_API_BASE_URL` и без `MP_SERVIS_API_HOST` → прод (см. ниже).
+/// Для LAN-сборки на телефоне задайте хост явно.
 class AppConfig {
   AppConfig._();
 
@@ -33,7 +36,7 @@ class AppConfig {
   /// Переопределение: `--dart-define=MP_SERVIS_DEFAULT_LAN_HOST=…` или полный хост через `MP_SERVIS_API_HOST`.
   static const String _defaultMobileLanHost = String.fromEnvironment(
     'MP_SERVIS_DEFAULT_LAN_HOST',
-    defaultValue: '192.168.1.187',
+    defaultValue: '10.0.2.2',
   );
 
   /// Полный базовый URL API (прод). Если задан — LAN-хост и порт не используются.
@@ -51,6 +54,21 @@ class AppConfig {
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
       case TargetPlatform.iOS:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /// Desktop без dart-define → прод (удалённый VPS / домен), как у клиента MP-Servis.
+  static bool get _desktopUsesProdDefault {
+    if (kIsWeb) return false;
+    if (_apiBaseUrlFromEnv.trim().isNotEmpty) return false;
+    if (_apiHostFromEnv.isNotEmpty) return false;
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.windows:
+      case TargetPlatform.linux:
+      case TargetPlatform.macOS:
         return true;
       default:
         return false;
@@ -79,7 +97,7 @@ class AppConfig {
       case TargetPlatform.windows:
       case TargetPlatform.linux:
       case TargetPlatform.macOS:
-        // На desktop API и БД часто подняты на этом же ПК.
+        // Используется только если задан dart-define или при отключённом [_desktopUsesProdDefault].
         return '127.0.0.1';
       case TargetPlatform.android:
       case TargetPlatform.iOS:
@@ -105,6 +123,9 @@ class AppConfig {
       return _normalizeApiBaseUrl(raw);
     }
     if (_releaseMobileUsesProdDefault) {
+      return _kDefaultProdApiBase;
+    }
+    if (_desktopUsesProdDefault) {
       return _kDefaultProdApiBase;
     }
     return 'http://$apiHost:$apiPort$apiPath';

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../../../core/l10n/l10n_scope.dart';
 import '../../../../core/navigation/app_routes.dart';
 import '../../../../core/theme/client_palette.dart';
 import '../../../../core/theme/app_design_system.dart';
@@ -352,6 +354,19 @@ class OrderCard extends ConsumerWidget {
                           color: order.status.color,
                           isWarning: order.status == OrderStatus.pendingApproval,
                         ),
+                        if (order.clientMustConfirmPendingBooking) ...[
+                          SizedBox(height: 8),
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton.tonal(
+                              onPressed: () {
+                                HapticFeedback.lightImpact();
+                                OrderDetailScreen.openChatForOrder(context, ref, order);
+                              },
+                              child: Text(L10nScope.of(context).orderGoToChat),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),

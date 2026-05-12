@@ -1,13 +1,21 @@
-import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, forwardRef, Inject, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User, BusinessRole, AccountRealm } from '../users/user.entity';
 import { Organization } from '../organizations/organization.entity';
 import { UsersService } from '../users/users.service';
+import { CarTransferService } from '../users/car-transfer.service';
 import { AuthOtpService } from './auth-otp.service';
 import { AuthSessionService, JwtAudience, SessionDeviceMeta } from './auth-session.service';
 import { AuthSecurityEventService } from './auth-security-event.service';
 import type { OtpRecipientKind } from './auth-otp-challenge.entity';
+
+/** Тестовые роли по email/телефону — только dev/stage при ALLOW_TEST_AUTH. */
+function isTestAuthAllowed(): boolean {
+  if (process.env.NODE_ENV === 'production') return false;
+  const v = (process.env.ALLOW_TEST_AUTH || '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes';
+}
 
 const TEST_ORG_NAME = 'Тестовый автосервис';
 
@@ -55,6 +63,8 @@ export class AuthService {
     @InjectRepository(Organization)
     private orgRepo: Repository<Organization>,
     private usersService: UsersService,
+    @Inject(forwardRef(() => CarTransferService))
+    private readonly carTransfers: CarTransferService,
     private otp: AuthOtpService,
     private sessions: AuthSessionService,
     private securityEvents: AuthSecurityEventService,
@@ -176,7 +186,8 @@ export class AuthService {
 
     if (expectedKind === 'email') {
       user = await this.findUserByEmailNormalized(expectedRecipient, realm, true);
-      const testEntry = audience === 'business' ? TEST_EMAILS[expectedRecipient] : undefined;
+      const testEntry =
+        audience === 'business' && isTestAuthAllowed() ? TEST_EMAILS[expectedRecipient] : undefined;
 
       if (!user) {
         if (!testEntry) {
@@ -247,7 +258,7 @@ export class AuthService {
       }
     } else {
       const n = expectedRecipient;
-      const testEntry = audience === 'business' ? TEST_PHONES[n] : undefined;
+      const testEntry = audience === 'business' && isTestAuthAllowed() ? TEST_PHONES[n] : undefined;
       user = await this.findUserByPhoneDigits(n, realm, true);
 
       if (testEntry) {
@@ -288,6 +299,14 @@ export class AuthService {
           user.phoneVerifiedAt = new Date();
           await this.userRepo.save(user);
         }
+      }
+    }
+
+    if (user!.accountRealm === 'client' && user!.phone) {
+      try {
+        await this.carTransfers.linkPendingTransfersForNewUser(user!.id, user!.phone);
+      } catch {
+        /* не блокируем вход */
       }
     }
 

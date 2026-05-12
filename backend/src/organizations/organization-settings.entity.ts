@@ -19,7 +19,7 @@ export class OrganizationSettings {
   @JoinColumn({ name: 'organization_id' })
   organization: Organization;
 
-  /** JSON: categories[], services[], car_brands[], slots, notifications, message_templates */
+  /** JSON: categories[], services[], car_brands[], amenity_ids[], public_description, slots, notifications, message_templates */
   @Column({ type: 'jsonb', default: {} })
   data: Record<string, unknown>;
 }
