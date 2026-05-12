@@ -86,6 +86,23 @@ npm run migration:run:prod
 
 ---
 
+## Один скрипт: БД, git, сборка, миграции, запуск API
+
+В репозитории: **`backend/deploy/update_and_run_backend_windows_lan.ps1`**.
+
+На сервере (из папки `deploy` или с путём к скрипту):
+
+```powershell
+cd D:\обмен\ДА\MP\backend\deploy
+powershell -ExecutionPolicy Bypass -File .\update_and_run_backend_windows_lan.ps1
+```
+
+По шагам скрипт: **поднимает службу PostgreSQL** (имя `postgresql*` или задайте `-PostgresServiceName`), **останавливает Node**, **`git fetch` + `checkout` + `pull`** (или `-HardReset` вместо pull), **`npm ci` → `build` → `migration:run:prod` → `prune`**, **запускает** `node --env-file=.env dist/src/main.js` и проверяет HTTP.
+
+Параметры: см. комментарии в начале файла. Текст логов в скрипте на английском (кодировка PowerShell 5.1). Корень репо по умолчанию вычисляется от расположения скрипта; иначе **`MP_LAN_REPO_ROOT`** или **`-RepoRoot`**.
+
+---
+
 ## Обновление бэкенда после изменений в Git
 
 Выполняйте на **192.168.1.145** в PowerShell.
