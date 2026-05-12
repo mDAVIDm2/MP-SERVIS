@@ -16,7 +16,7 @@ if (-not (Test-Path -LiteralPath $ArchivePath)) { throw "ArchivePath not found: 
 
 function Read-BackendPort {
     param([string] $EnvPath)
-    $port = 3000
+    $port = 3001
     if (-not (Test-Path -LiteralPath $EnvPath)) { return $port }
     foreach ($line in Get-Content -LiteralPath $EnvPath -Encoding UTF8) {
         if ($line -match '^\s*PORT\s*=\s*(\d+)\s*$') {

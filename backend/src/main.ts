@@ -12,6 +12,8 @@ function buildCorsOptions(): CorsOptions {
   const devDefaults = [
     'http://localhost:3000',
     'http://127.0.0.1:3000',
+    'http://localhost:3001',
+    'http://127.0.0.1:3001',
     'http://localhost:8080',
     'http://127.0.0.1:8080',
     'http://localhost:5173',
@@ -46,7 +48,7 @@ async function bootstrap() {
   );
   app.enableCors(buildCorsOptions());
 
-  const port = process.env.PORT || 3000;
+  const port = process.env.PORT || 3001;
   /** За IIS/nginx прокси на этой же машине используйте LISTEN_HOST=127.0.0.1 (не публикуйте порт в интернет). */
   const listenHost = process.env.LISTEN_HOST?.trim() || '0.0.0.0';
   await app.listen(port, listenHost);

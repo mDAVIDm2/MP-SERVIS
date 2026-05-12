@@ -19,7 +19,7 @@ function readPortFromEnvFile() {
   return null;
 }
 
-const port = process.env.PORT || readPortFromEnvFile() || 3000;
+const port = process.env.PORT || readPortFromEnvFile() || 3001;
 
 function killPort(port) {
   try {
