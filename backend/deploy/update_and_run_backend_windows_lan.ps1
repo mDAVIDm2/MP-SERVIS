@@ -50,6 +50,48 @@ function Read-BackendPortFromEnv {
     return $port
 }
 
+function Read-DatabaseHostPortFromEnv {
+    param([string] $Path)
+    $dbUrl = $null
+    foreach ($line in Get-Content -LiteralPath $Path -Encoding UTF8) {
+        if ($line -match '^\s*DATABASE_URL\s*=\s*(.+)\s*$') {
+            $dbUrl = $Matches[1].Trim().Trim('"').Trim("'")
+            break
+        }
+    }
+    if (-not $dbUrl) { return $null }
+    # postgresql://user:pass@host:port/db  or  @host/db (default port 5432)
+    if ($dbUrl -notmatch '@([^:/]+)(?::(\d+))?/') { return $null }
+    $h = $Matches[1]
+    $p = if ($Matches[2]) { [int]$Matches[2] } else { 5432 }
+    return @{ Host = $h; Port = $p }
+}
+
+function Test-DatabaseTcp {
+    param(
+        [string] $EnvPath,
+        [string] $BackendDir
+    )
+    $info = Read-DatabaseHostPortFromEnv -Path $EnvPath
+    if (-not $info) {
+        Write-Warning "Could not parse DATABASE_URL from .env; skipping DB TCP check."
+        return
+    }
+    $h = $info.Host
+    $p = $info.Port
+    Write-Host "        DATABASE_URL -> TCP ${h}:$p (check)" -ForegroundColor DarkGray
+    $t = Test-NetConnection -ComputerName $h -Port $p -WarningAction SilentlyContinue
+    if (-not $t.TcpTestSucceeded) {
+        throw @"
+DATABASE_URL points to ${h}:$p but TCP connect failed (nothing listening or firewall).
+
+PostgreSQL 12 on Windows usually listens on port 5432, not 5433.
+Edit: $([System.IO.Path]::Combine($BackendDir, '.env'))
+Set DATABASE_URL host:port to match your server (example: ...@127.0.0.1:5432/mp_servis).
+"@
+    }
+}
+
 function Stop-MpServisApiListener {
     param([int[]] $Ports)
     foreach ($p in $Ports) {
@@ -135,6 +177,7 @@ else {
 
 if (-not $SkipNpm) {
     Write-Host "[4/5] npm ci / build / migrations / prune ..." -ForegroundColor Cyan
+    Test-DatabaseTcp -EnvPath $envFile -BackendDir $backend
     Push-Location -LiteralPath $backend
     try {
         npm ci
