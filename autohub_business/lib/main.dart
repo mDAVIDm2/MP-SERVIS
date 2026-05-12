@@ -59,8 +59,8 @@ Future<void> _runApp() async {
         default:
           debugPrint(
             '[MP-Servis Business] Локальный Nest на этом ПК: '
-            '--dart-define=MP_SERVIS_API_BASE_URL=http://127.0.0.1:3000/api/v1 '
-            'или MP_SERVIS_API_HOST=127.0.0.1',
+            '--dart-define=MP_SERVIS_API_BASE_URL=http://127.0.0.1:3001/api/v1 '
+            'или MP_SERVIS_API_HOST=127.0.0.1 (порт: MP_SERVIS_API_PORT, по умолчанию 3001)',
           );
           break;
       }

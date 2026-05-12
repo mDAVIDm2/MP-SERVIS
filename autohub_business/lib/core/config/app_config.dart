@@ -4,7 +4,8 @@ import 'package:flutter/foundation.dart';
 ///
 /// **Desktop (Windows / macOS / Linux)** без dart-define ходит на прод `https://api.mp-servis.ru/api/v1`
 /// — как клиентское приложение и release-сборки на телефонах. Локальный Nest на этом ПК:
-/// `--dart-define=MP_SERVIS_API_BASE_URL=http://127.0.0.1:3000/api/v1` или `MP_SERVIS_API_HOST=127.0.0.1`.
+/// `--dart-define=MP_SERVIS_API_BASE_URL=http://127.0.0.1:3001/api/v1` или `MP_SERVIS_API_HOST=127.0.0.1`
+/// (порт по умолчанию **3001**; свой: `--dart-define=MP_SERVIS_API_PORT=3000`).
 ///
 /// **Почему на телефоне «нет сети», а на ПК всё ок**
 /// - **Android 9+** и cleartext: в манифесте `android:usesCleartextTraffic="true"` (в проекте включено).
@@ -12,11 +13,11 @@ import 'package:flutter/foundation.dart';
 ///   `dart-define` используется LAN-хост ниже; иначе задайте IP ПК вручную.
 /// - **Эмулятор Android** к хосту часто удобнее `10.0.2.2`:  
 ///   `flutter run --dart-define=MP_SERVIS_API_HOST=10.0.2.2`
-/// - **USB + adb reverse**: `adb reverse tcp:3000 tcp:3000` и тогда можно  
+/// - **USB + adb reverse**: `adb reverse tcp:3001 tcp:3001` и тогда можно  
 ///   `--dart-define=MP_SERVIS_API_HOST=127.0.0.1`
-/// - **Брандмауэр Windows**: входящий TCP на порт Nest (часто 3000).
+/// - **Брандмауэр Windows**: входящий TCP на порт API (часто **3001**, см. `PORT` в `backend/.env`).
 ///
-/// Пример LAN: `flutter run --dart-define=MP_SERVIS_API_HOST=192.168.0.10`
+/// Пример LAN (офисный ПК с API): `flutter run --dart-define=MP_SERVIS_API_HOST=192.168.1.145`
 ///
 /// **Релиз Android/iOS** без `MP_SERVIS_API_BASE_URL` и без `MP_SERVIS_API_HOST` → прод (см. ниже).
 /// Для LAN-сборки на телефоне задайте хост явно.
@@ -107,7 +108,7 @@ class AppConfig {
     }
   }
 
-  static const int apiPort = 3000;
+  static const int apiPort = int.fromEnvironment('MP_SERVIS_API_PORT', defaultValue: 3001);
   static const String apiPath = '/api/v1';
   static const String wsPath = '/ws';
 

@@ -7,7 +7,7 @@ echo   MP-Servis Control Center (dev panel)
 echo ========================================
 echo.
 echo API: по умолчанию https://api.mp-servis.ru/api/v1 (зашито в приложении).
-echo       Локальный Nest: set MP_SERVIS_API_BASE=http://127.0.0.1:3000
+echo       Локальный Nest: set MP_SERVIS_API_BASE=http://127.0.0.1:3001
 echo.
 echo Учётные данные: опционально control_center.credentials.dat (шаблон: .example.dat)
 echo ВАЖНО: это логин из internal_operators на сервере, НЕ аккаунт клиентского приложения.

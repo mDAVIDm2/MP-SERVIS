@@ -34,11 +34,11 @@ flutter build windows --dart-define=MP_SERVIS_API_HOST=localhost
 Если бэкенд на другой машине в сети, укажите её IP:
 
 ```bash
-flutter run -d windows --dart-define=MP_SERVIS_API_HOST=192.168.1.187
+flutter run -d windows --dart-define=MP_SERVIS_API_HOST=192.168.1.145 --dart-define=MP_SERVIS_API_PORT=3001
 ```
 
-- **API:** `http://<apiHost>:3000/api/v1`
-- **WebSocket (опционально):** `ws://<apiHost>:3000/ws`  
+- **API:** `http://<apiHost>:<apiPort>/api/v1` (порт по умолчанию в коде **3001**, см. `MP_SERVIS_API_PORT`)
+- **WebSocket (опционально):** `ws://<apiHost>:<apiPort>/ws`  
   Включить: `--dart-define=MP_SERVIS_ENABLE_WS=true`
 
 ## Порядок запуска для проверки связки

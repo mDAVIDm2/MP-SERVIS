@@ -9,7 +9,7 @@
 Локальный Nest:
 
 ```bash
-flutter run -d windows --dart-define=MP_SERVIS_API_BASE_URL=http://127.0.0.1:3000
+flutter run -d windows --dart-define=MP_SERVIS_API_BASE_URL=http://127.0.0.1:3001/api/v1
 ```
 
 ## Запуск на Windows
@@ -28,7 +28,7 @@ run_control_center.bat
 Переопределение API без правки кода:
 
 ```bat
-set MP_SERVIS_API_BASE=http://127.0.0.1:3000
+set MP_SERVIS_API_BASE=http://127.0.0.1:3001
 run_control_center.bat
 ```
 

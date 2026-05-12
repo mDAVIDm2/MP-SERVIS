@@ -3,8 +3,9 @@
 /// **По умолчанию (в т.ч. `flutter build apk` без флагов)** — продакшен `https://api.mp-servis.ru/api/v1`.
 ///
 /// Локальная разработка:
-/// - полный URL: `--dart-define=MP_SERVIS_API_BASE_URL=http://127.0.0.1:3000/api/v1`
-/// - или только хост LAN: `--dart-define=MP_SERVIS_API_HOST=192.168.x.x` (порт 3000)
+/// - полный URL: `--dart-define=MP_SERVIS_API_BASE_URL=http://127.0.0.1:3001/api/v1`
+/// - или хост + порт: `--dart-define=MP_SERVIS_API_HOST=192.168.1.145` и при необходимости
+///   `--dart-define=MP_SERVIS_API_PORT=3001` (по умолчанию порт **3001**, как у Nest без своего `PORT`).
 ///
 /// **Android 9+**: HTTP без HTTPS только при `usesCleartextTraffic` в манифесте.
 /// На телефоне `localhost` — это сам телефон; для ПК в сети укажите LAN IP через `dart-define`.
@@ -17,7 +18,7 @@ class AppConfig {
     'MP_SERVIS_API_HOST',
     defaultValue: '',
   );
-  static const int apiPort = 3000;
+  static const int apiPort = int.fromEnvironment('MP_SERVIS_API_PORT', defaultValue: 3001);
   static const String apiPath = '/api/v1';
   static const String wsPath = '/ws';
 

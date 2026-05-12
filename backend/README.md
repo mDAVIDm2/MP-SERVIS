@@ -1,6 +1,6 @@
 # MP-Servis Backend (NestJS + PostgreSQL)
 
-API для приложений **MP-Servis Business** и клиента **MP-Servis**. Порт по умолчанию: 3000, префикс: `/api/v1`.
+API для приложений **MP-Servis Business** и клиента **MP-Servis**. Порт по умолчанию в коде и в `.env.example`: **3001** (если в `.env` не задан `PORT`); префикс: `/api/v1`.
 
 ## Требования
 
@@ -36,7 +36,7 @@ npm run build
 npm run start
 ```
 
-API: http://localhost:3000/api/v1
+API: `http://localhost:3001/api/v1` (или ваш `PORT` из `.env`).
 
 ## Эндпоинты (для Business-приложения)
 
@@ -47,19 +47,17 @@ API: http://localhost:3000/api/v1
 - **Chats:** `GET /chats`, `GET/POST /chats/:id/messages`
 - **Notifications:** `GET /notifications`, `POST /notifications/register-device`
 
-## Подключение Business-приложения
+## Подключение приложений Flutter
 
-В `autohub_business` в `lib/core/api/api_endpoints.dart` уже указано:
-
-- `baseUrl = 'http://localhost:3000/api/v1'`
-- `wsUrl = 'ws://localhost:3000/ws'` (WebSocket — при необходимости добавьте gateway)
-
-Запустите бэкенд и приложение Business — авторизация и данные пойдут в PostgreSQL.
+Базовый URL задаётся в **`AppConfig`** (`autohub_business` / `autohub_client2`): `--dart-define=MP_SERVIS_API_HOST=...` и при необходимости `--dart-define=MP_SERVIS_API_PORT=3001`, либо полный `--dart-define=MP_SERVIS_API_BASE_URL=http://.../api/v1`.
 
 ## Деплой на VPS (Ubuntu)
 
 Шаблоны **systemd**, **nginx**, пример `.env` для прода и пошаговая инструкция:
 
-- [`deploy/SETUP_SERVER_RU.md`](deploy/SETUP_SERVER_RU.md) — в том числе раздел **«Важно: каталог uploads/»**: при полной замене каталога API на сервере нужно **сохранить или слить** `uploads/` (фото пользователей и организаций не в БД, а на диске).
+- [`deploy/SETUP_SERVER_RU.md`](deploy/SETUP_SERVER_RU.md) — Ubuntu VPS.
+- [`deploy/SETUP_WINDOWS_LAN_SERVER_RU.md`](deploy/SETUP_WINDOWS_LAN_SERVER_RU.md) — **Windows в LAN** (обновление через Git, порт **3001**, IP **192.168.1.145**).
+
+В `SETUP_SERVER_RU.md` есть раздел **«Важно: каталог uploads/»**: при полной замене каталога API на сервере нужно **сохранить или слить** `uploads/` (фото пользователей и организаций не в БД, а на диске).
 
 Миграции на сервере без dev-зависимостей: `npm run build` затем `npm run migration:run:prod`.

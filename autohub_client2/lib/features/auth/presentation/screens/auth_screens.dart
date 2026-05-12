@@ -586,7 +586,7 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Нет связи с сервером. Проверьте Wi‑Fi и что бэкенд запущен (порт 3000).',
+              'Нет связи с сервером. Проверьте Wi‑Fi и что бэкенд запущен (порт в .env PORT, по умолчанию 3001).',
             ),
             backgroundColor: context.palette.error,
             duration: const Duration(seconds: 5),

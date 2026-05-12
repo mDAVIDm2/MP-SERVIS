@@ -1,5 +1,7 @@
 # Первый вывод API и PostgreSQL на VPS (Ubuntu 24.04)
 
+> **ПК в LAN под Windows (офисный API-сервер):** отдельная инструкция — **[`SETUP_WINDOWS_LAN_SERVER_RU.md`](./SETUP_WINDOWS_LAN_SERVER_RU.md)** (IP `192.168.1.145`, порт **3001**, обновление через Git, брандмауэр, Flutter `dart-define`).
+
 Пример сервера: **root@217.114.0.114** (замените IP при необходимости).  
 SSH с вашего ПК:
 

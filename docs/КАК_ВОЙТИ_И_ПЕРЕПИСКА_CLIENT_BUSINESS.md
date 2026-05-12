@@ -7,8 +7,8 @@
 ## 1. Что должно быть запущено
 
 - **PostgreSQL** с базой `mp_servis`
-- **Бэкенд**: из папки `backend` команда `npm run start:dev` (API на `http://0.0.0.0:3000` или вашем IP)
-- Телефон и ПК в одной Wi‑Fi сети; в обоих приложениях в `app_config.dart` указан **IP вашего компьютера** (не localhost), например `192.168.1.187`
+- **Бэкенд**: из папки `backend` команда `npm run start:dev` (API на `http://0.0.0.0:3001` или вашем `PORT` из `.env`)
+- Телефон и ПК в одной Wi‑Fi сети; в приложениях задайте **`--dart-define=MP_SERVIS_API_HOST=<IP>`** и **`--dart-define=MP_SERVIS_API_PORT=3001`** (или полный `MP_SERVIS_API_BASE_URL`). Офисный ПК с API: например **`192.168.1.145`** — см. `backend/deploy/SETUP_WINDOWS_LAN_SERVER_RU.md`.
 
 ---
 

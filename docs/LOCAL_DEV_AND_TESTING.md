@@ -2,6 +2,8 @@
 
 Один бэкенд (NestJS + PostgreSQL), два приложения: **MP-Servis Business** (СТО/мастера) и клиент **MP-Servis**. Оба подключаются к одному API и одной БД.
 
+**Офисный API на Windows в LAN** (IP `192.168.1.145`, порт **3001**, обновление через Git): см. **[`../backend/deploy/SETUP_WINDOWS_LAN_SERVER_RU.md`](../backend/deploy/SETUP_WINDOWS_LAN_SERVER_RU.md)**.
+
 ---
 
 ## 1. Требования
@@ -47,17 +49,29 @@ npm install
 npm run start:dev
 ```
 
-- API: **http://localhost:3000/api/v1**
+- API: **http://localhost:3001/api/v1** (порт из `PORT` в `backend/.env`, в примере по умолчанию **3001**).
 - При первом запуске TypeORM создаст таблицы (synchronize в dev).
-- В логах должно быть: `MP-Servis API: http://localhost:3000/api/v1`
+- В логах должно быть: `MP-Servis API: http://localhost:3001/api/v1`
 
 ---
 
 ## 4. Приложения Flutter
 
-Оба приложения по умолчанию обращаются к `http://localhost:3000/api/v1` (и `ws://localhost:3000/ws` для Business). Для эмулятора/телефона замените `localhost` на IP вашего компьютера в:
-- **Business:** `autohub_business/lib/core/api/api_endpoints.dart`
-- **Client:** `autohub_client2/lib/core/api/api_endpoints.dart`
+Базовый URL берётся из **`AppConfig`** (`autohub_*/lib/core/config/app_config.dart`): по умолчанию для режима «хост без полного URL» порт **3001** (`MP_SERVIS_API_PORT`), прод без `dart-define` — облако `api.mp-servis.ru`.
+
+Примеры для API на другой машине в LAN (**192.168.1.145**):
+
+```bash
+flutter run --dart-define=MP_SERVIS_API_HOST=192.168.1.145 --dart-define=MP_SERVIS_API_PORT=3001
+```
+
+Полный URL:
+
+```bash
+flutter run --dart-define=MP_SERVIS_API_BASE_URL=http://192.168.1.145:3001/api/v1
+```
+
+WebSocket (Business): `ws://<хост>:<порт>/ws` — тот же порт, что и у HTTP.
 
 ### MP-Servis Business (СТО)
 

@@ -13,9 +13,9 @@ npm run start:dev
 
 После обновления кода из репозитория снова выполни `npm run migration:run`, если появились новые файлы в `backend\src\database\migrations` — иначе при входе возможна ошибка вроде «отношение user_organization_memberships не существует».
 
-Бэкенд будет доступен по адресу `http://localhost:3000` (API: `http://localhost:3000/api/v1`).
+Бэкенд будет доступен по адресу `http://localhost:3001` (API: `http://localhost:3001/api/v1`), если в `.env` не задан другой `PORT`.
 
-**Важно:** если телефон и ПК в одной Wi‑Fi сети, в клиентских приложениях в `app_config.dart` должен быть LAN IP ПК с бэкендом; по умолчанию задано `192.168.1.187`. При другом адресе измени `defaultValue` или передай `--dart-define=MP_SERVIS_API_HOST=...` (узнать IP: `ipconfig` → IPv4).
+**Важно:** если телефон и ПК в одной Wi‑Fi сети, задайте IP машины с API через **`--dart-define=MP_SERVIS_API_HOST=...`** и при необходимости **`--dart-define=MP_SERVIS_API_PORT=3001`**. Офисный сервер в LAN описан в **`backend/deploy/SETUP_WINDOWS_LAN_SERVER_RU.md`** (пример IP **192.168.1.145**). Узнать IPv4: `ipconfig`.
 
 ---
 

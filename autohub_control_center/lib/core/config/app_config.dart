@@ -25,7 +25,7 @@ class AppConfig {
     }
   }
 
-  static const int apiPort = 3000;
+  static const int apiPort = int.fromEnvironment('MP_SERVIS_API_PORT', defaultValue: 3001);
   static const String apiPath = '/api/v1';
 
   static const String environment = String.fromEnvironment(
@@ -33,7 +33,7 @@ class AppConfig {
     defaultValue: 'dev',
   );
 
-  /// По умолчанию продакшен MP-Servis. Для локального Nest: `--dart-define=MP_SERVIS_API_BASE_URL=http://127.0.0.1:3000`
+  /// По умолчанию продакшен MP-Servis. Для локального Nest: `--dart-define=MP_SERVIS_API_BASE_URL=http://127.0.0.1:3001/api/v1`
   static const String _apiBaseUrlFromEnv = String.fromEnvironment(
     'MP_SERVIS_API_BASE_URL',
     defaultValue: 'https://api.mp-servis.ru',
