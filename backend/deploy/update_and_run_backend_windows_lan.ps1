@@ -10,7 +10,7 @@
 #   .\update_and_run_backend_windows_lan.ps1 -HardReset
 #   .\update_and_run_backend_windows_lan.ps1 -SkipPostgresStart -SkipGitPull
 #
-# Env: MP_LAN_REPO_ROOT = monorepo root if -RepoRoot omitted (else auto: parent of backend/deploy).
+# Only stops LISTEN on API port from backend/.env (PORT, default 3001). Port 3000 is never touched.
 
 param(
     [string] $RepoRoot = "",
@@ -50,9 +50,8 @@ function Read-BackendPortFromEnv {
     return $port
 }
 
-function Stop-MpServisNode {
+function Stop-MpServisApiListener {
     param([int[]] $Ports)
-    Get-Process -Name node -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     foreach ($p in $Ports) {
         Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue |
             ForEach-Object {
@@ -99,14 +98,14 @@ function Start-PostgresLan {
 }
 
 $apiPort = Read-BackendPortFromEnv -Path $envFile
-$portsToFree = @($apiPort, 3000, 3001) | Sort-Object -Unique
+$portsToFree = @($apiPort) | Sort-Object -Unique
 
-Write-Host "=== MP-Servis LAN: repo=$RepoRoot branch=$GitBranch apiPort=$apiPort ===" -ForegroundColor Cyan
+Write-Host "=== MP-Servis LAN: repo=$RepoRoot branch=$GitBranch apiPort=$apiPort (only this listen port is stopped; other ports unchanged) ===" -ForegroundColor Cyan
 
 Start-PostgresLan -ExplicitName $PostgresServiceName -Skip:$SkipPostgresStart
 
-Write-Host "[2/5] Stopping Node (ports: $($portsToFree -join ', '))..." -ForegroundColor Cyan
-Stop-MpServisNode -Ports $portsToFree
+Write-Host "[2/5] Stopping listener(s) on API port(s) only: $($portsToFree -join ', ') ..." -ForegroundColor Cyan
+Stop-MpServisApiListener -Ports $portsToFree
 
 if (-not $SkipGitPull) {
     Write-Host "[3/5] Git: fetch + $GitBranch ..." -ForegroundColor Cyan

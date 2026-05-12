@@ -97,7 +97,9 @@ cd D:\обмен\ДА\MP\backend\deploy
 powershell -ExecutionPolicy Bypass -File .\update_and_run_backend_windows_lan.ps1
 ```
 
-По шагам скрипт: **поднимает службу PostgreSQL** (имя `postgresql*` или задайте `-PostgresServiceName`), **останавливает Node**, **`git fetch` + `checkout` + `pull`** (или `-HardReset` вместо pull), **`npm ci` → `build` → `migration:run:prod` → `prune`**, **запускает** `node --env-file=.env dist/src/main.js` и проверяет HTTP.
+По шагам скрипт: **поднимает службу PostgreSQL**, **останавливает только процесс, слушающий порт API** из `backend\.env` (`PORT`, по умолчанию **3001**; **порт 3000 не трогает** — там может сидеть IIS и другое), затем **`git fetch` + `checkout` + `pull`** (или **`-HardReset`**), **`npm ci` → `build` → `migration:run:prod` → `prune`**, **запуск** `node --env-file=.env dist/src/main.js` и проверка HTTP.
+
+**Что сделать вам на сервере:** один раз убедиться, что в `backend\.env` задан **`PORT=3001`** (или другой свободный порт, не 3000, если 3000 занят). Дальше после каждого обновления кода: `git pull` в корне репо (или сразу запустить скрипт — он сам сделает `pull`). Запуск скрипта от **администратора**, если Windows не даёт стартовать службе PostgreSQL.
 
 Параметры: см. комментарии в начале файла. Текст логов в скрипте на английском (кодировка PowerShell 5.1). Корень репо по умолчанию вычисляется от расположения скрипта; иначе **`MP_LAN_REPO_ROOT`** или **`-RepoRoot`**.
 
@@ -107,12 +109,13 @@ powershell -ExecutionPolicy Bypass -File .\update_and_run_backend_windows_lan.ps
 
 Выполняйте на **192.168.1.145** в PowerShell.
 
-### 1. Остановить процесс Node (освободить порты и файлы `node_modules`, в т.ч. `sharp`)
+### 1. Остановить только процесс на порту API (из `backend\.env`, чаще всего **3001**)
+
+Порт **3000** не останавливаем (часто занят IIS). Не используйте `Get-Process node | Stop-Process`, если на машине есть другие Node-процессы.
 
 ```powershell
-Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force
-Get-NetTCPConnection -LocalPort 3001 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
-Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
+$port = 3001   # как в backend\.env в строке PORT=
+Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
 ```
 
 ### 2. Подтянуть код
