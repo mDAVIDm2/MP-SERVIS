@@ -69,6 +69,8 @@ ALLOWED_ORIGINS=http://localhost:8080,http://127.0.0.1:8080
 New-NetFirewallRule -DisplayName "MP-Servis API 3001" -Direction Inbound -LocalPort 3001 -Protocol TCP -Action Allow
 ```
 
+Полный сценарий **дамп с VPS → Docker на Windows → миграции → uploads → запуск API**: **[`RESTORE_DB_DUMP_VPS_TO_WINDOWS_RU.md`](./RESTORE_DB_DUMP_VPS_TO_WINDOWS_RU.md)**.
+
 ---
 
 ## Репозиторий

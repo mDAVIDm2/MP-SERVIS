@@ -56,7 +56,7 @@ API: `http://localhost:3001/api/v1` (или ваш `PORT` из `.env`).
 Шаблоны **systemd**, **nginx**, пример `.env` для прода и пошаговая инструкция:
 
 - [`deploy/SETUP_SERVER_RU.md`](deploy/SETUP_SERVER_RU.md) — Ubuntu VPS.
-- [`deploy/SETUP_WINDOWS_LAN_SERVER_RU.md`](deploy/SETUP_WINDOWS_LAN_SERVER_RU.md) — **Windows в LAN** (обновление через Git, порт **3001**, IP **192.168.1.145**). Скрипт «всё сразу»: [`deploy/update_and_run_backend_windows_lan.ps1`](deploy/update_and_run_backend_windows_lan.ps1).
+- [`deploy/RESTORE_DB_DUMP_VPS_TO_WINDOWS_RU.md`](deploy/RESTORE_DB_DUMP_VPS_TO_WINDOWS_RU.md) — дамп PostgreSQL с VPS, восстановление в Docker на Windows, `uploads`, миграции.
 
 В `SETUP_SERVER_RU.md` есть раздел **«Важно: каталог uploads/»**: при полной замене каталога API на сервере нужно **сохранить или слить** `uploads/` (фото пользователей и организаций не в БД, а на диске).
 
