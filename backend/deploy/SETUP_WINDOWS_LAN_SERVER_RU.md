@@ -11,6 +11,32 @@ PostgreSQL обычно на **этой же машине**, порт **`5432`**
 
 ---
 
+## Если `git pull` падает из-за `backend/dist`
+
+На старом клоне папка **`backend/dist`** могла быть **в Git**; локальные правки блокируют `pull`, и **новые файлы** (в т.ч. `update_and_run_backend_windows_lan.ps1`) **не появляются** — PowerShell тогда пишет, что `-File` не найден.
+
+Выполните **один раз** в корне репозитория (`.env` и `uploads` не удаляются — они не в отслеживаемых файлах или в `.gitignore`):
+
+```powershell
+cd D:\обмен\ДА\MP
+git fetch origin
+git reset --hard origin/master
+```
+
+Отдельный **`git pull`** после этого не нужен: рабочая копия уже совпадает с `origin/master`. Дальше проверьте:
+
+```powershell
+dir D:\обмен\ДА\MP\backend\deploy\update_and_run_backend_windows_lan.ps1
+```
+
+Запуск скрипта с **полным путём в кавычках** (надёжно при кириллице в пути):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "D:\обмен\ДА\MP\backend\deploy\update_and_run_backend_windows_lan.ps1"
+```
+
+---
+
 ## Порты (кратко)
 
 | Сервис | Порт | Куда смотрит |
@@ -94,7 +120,8 @@ npm run migration:run:prod
 
 ```powershell
 cd D:\обмен\ДА\MP\backend\deploy
-powershell -ExecutionPolicy Bypass -File .\update_and_run_backend_windows_lan.ps1
+dir .\update_and_run_backend_windows_lan.ps1
+powershell -ExecutionPolicy Bypass -File "D:\обмен\ДА\MP\backend\deploy\update_and_run_backend_windows_lan.ps1"
 ```
 
 По шагам скрипт: **поднимает службу PostgreSQL**, **останавливает только процесс, слушающий порт API** из `backend\.env` (`PORT`, по умолчанию **3001**; **порт 3000 не трогает** — там может сидеть IIS и другое), затем **`git fetch` + `checkout` + `pull`** (или **`-HardReset`**), **`npm ci` → `build` → `migration:run:prod` → `prune`**, **запуск** `node --env-file=.env dist/src/main.js` и проверка HTTP.
