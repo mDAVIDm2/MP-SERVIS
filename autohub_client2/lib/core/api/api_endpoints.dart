@@ -25,7 +25,8 @@ class ApiEndpoints {
   // PROFILE
   // ═══════════════════════════════════════
   static const String profile = '/profile';
-  static const String profileNotificationPreferences = '/profile/notification-preferences';
+  static const String profileNotificationPreferences =
+      '/profile/notification-preferences';
   static const String profileClientAppState = '/profile/client-app-state';
   static const String profileAvatar = '/profile/avatar';
   static const String profileDelete = '/profile/delete';
@@ -34,16 +35,24 @@ class ApiEndpoints {
   static const String profileCars = '/profile/cars';
   static String profileCar(String carId) => '/profile/cars/$carId';
   static String profileCarPhoto(String carId) => '/profile/cars/$carId/photo';
+  static String profileCarManualExpenses(String carId) =>
+      '/profile/cars/$carId/manual-expenses';
 
   /// Бывший владелец убирает авто из гаража (после передачи).
-  static String profileCarForgetFormer(String carId) => '/profile/cars/$carId/former';
+  static String profileCarForgetFormer(String carId) =>
+      '/profile/cars/$carId/former';
 
   static const String profileCarTransfers = '/profile/car-transfers';
-  static const String profileCarTransfersIncoming = '/profile/car-transfers/incoming';
-  static const String profileCarTransfersOutgoing = '/profile/car-transfers/outgoing';
-  static String profileCarTransferAccept(String id) => '/profile/car-transfers/$id/accept';
-  static String profileCarTransferReject(String id) => '/profile/car-transfers/$id/reject';
-  static String profileCarTransferCancel(String id) => '/profile/car-transfers/$id/cancel';
+  static const String profileCarTransfersIncoming =
+      '/profile/car-transfers/incoming';
+  static const String profileCarTransfersOutgoing =
+      '/profile/car-transfers/outgoing';
+  static String profileCarTransferAccept(String id) =>
+      '/profile/car-transfers/$id/accept';
+  static String profileCarTransferReject(String id) =>
+      '/profile/car-transfers/$id/reject';
+  static String profileCarTransferCancel(String id) =>
+      '/profile/car-transfers/$id/cancel';
 
   // ═══════════════════════════════════════
   // CARS
@@ -59,6 +68,7 @@ class ApiEndpoints {
   // ═══════════════════════════════════════
   static const String orders = '/orders';
   static String order(String id) => '/orders/$id';
+
   /// Чат по заказу (GET /orders/:orderId/chat → { chat_id }). Для открытия чата по orderId.
   static String orderChat(String orderId) => '/orders/$orderId/chat';
   static String orderConfirm(String id) => '/orders/$id/confirm';
@@ -75,9 +85,12 @@ class ApiEndpoints {
   static const String catalogServices = '/catalog/services';
   static const String catalogFavorites = '/catalog/favorites';
   static String catalogOrganization(String id) => '/catalog/organizations/$id';
-  static String catalogOrgServices(String id) => '/catalog/organizations/$id/services';
-  static String catalogOrgReviews(String id) => '/catalog/organizations/$id/reviews';
-  static String catalogOrgAvailability(String id) => '/catalog/organizations/$id/availability';
+  static String catalogOrgServices(String id) =>
+      '/catalog/organizations/$id/services';
+  static String catalogOrgReviews(String id) =>
+      '/catalog/organizations/$id/reviews';
+  static String catalogOrgAvailability(String id) =>
+      '/catalog/organizations/$id/availability';
 
   // ═══════════════════════════════════════
   // BOOKING
@@ -92,11 +105,13 @@ class ApiEndpoints {
   // ═══════════════════════════════════════
   static const String chats = '/chats';
   static const String chatsSupportOpen = '/chats/support/open';
+
   /// Создать/открыть общий чат клиента с СТО (только Client app + телефон в профиле).
   static const String chatsOpenOrganization = '/chats/open-organization';
   static String chat(String id) => '/chats/$id';
   static String chatMessages(String chatId) => '/chats/$chatId/messages';
-  static String chatMessagesWithMedia(String chatId) => '/chats/$chatId/messages/with-media';
+  static String chatMessagesWithMedia(String chatId) =>
+      '/chats/$chatId/messages/with-media';
   static String chatRead(String chatId) => '/chats/$chatId/read';
   static String chatMessageRead(String chatId, String msgId) =>
       '/chats/$chatId/messages/$msgId/read';
@@ -112,8 +127,10 @@ class ApiEndpoints {
   // СПРАВОЧНИКИ
   // ═══════════════════════════════════════
   static const String carBrands = '/reference/car-brands';
-  static String carModels(int brandId) => '/reference/car-brands/$brandId/models';
-  static String carGenerations(int modelId) => '/reference/car-models/$modelId/generations';
+  static String carModels(int brandId) =>
+      '/reference/car-brands/$brandId/models';
+  static String carGenerations(int modelId) =>
+      '/reference/car-models/$modelId/generations';
   static const String serviceCategories = '/reference/service-categories';
   static const String cities = '/reference/cities';
 }

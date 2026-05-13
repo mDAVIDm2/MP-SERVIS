@@ -1,390 +1,338 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../auth/auth_provider.dart' show authProvider, sharedPreferencesProvider;
-import '../l10n/app_l10n.dart';
-import 'car_expense_group_ids.dart';
+import '../api/api_exceptions.dart';
+import '../auth/auth_provider.dart'
+    show apiClientProvider, authProvider, sharedPreferencesProvider;
+import '../auth/device_id_service.dart';
+import 'car_manual_expense_models.dart';
+import 'car_manual_expenses_sync_service.dart';
+
+export 'car_manual_expense_models.dart';
 
 const _kCarManualExpensesPrefix = 'car_manual_expenses_';
+const _kMigratedV1Prefix = 'manual_expenses_sync_migrated_v1_';
 
-/// Вид топлива при ручной записи заправки.
-enum CarManualFuelType {
-  ai92,
-  ai95,
-  ai98,
-  diesel,
-  dieselPlus,
-  methane,
-  propane,
-  lpg,
-}
+String _lastPullKey(String userId, String carId) =>
+    'manual_expenses_last_pull_${userId}_$carId';
 
-extension CarManualFuelTypeL10n on CarManualFuelType {
-  String label(AppL10n l10n) {
-    if (l10n.isEn) {
-      return switch (this) {
-        CarManualFuelType.ai92 => 'AI-92',
-        CarManualFuelType.ai95 => 'AI-95',
-        CarManualFuelType.ai98 => 'AI-98',
-        CarManualFuelType.diesel => 'Diesel',
-        CarManualFuelType.dieselPlus => 'Diesel+',
-        CarManualFuelType.methane => 'CNG (methane)',
-        CarManualFuelType.propane => 'Propane (GLP)',
-        CarManualFuelType.lpg => 'LPG',
-      };
+List<CarManualExpenseRecord> _loadPrefsState(
+  SharedPreferences? prefs,
+  String? userId,
+) {
+  if (prefs == null || userId == null) return [];
+  try {
+    final raw = prefs.getString(_kCarManualExpensesPrefix + userId);
+    if (raw == null || raw.isEmpty) return [];
+    final list = jsonDecode(raw) as List<dynamic>?;
+    final out = <CarManualExpenseRecord>[];
+    for (final e in list ?? const []) {
+      if (e is! Map) continue;
+      final r = CarManualExpenseRecord.fromJson(Map<String, dynamic>.from(e));
+      if (r != null) out.add(r);
     }
-    return switch (this) {
-      CarManualFuelType.ai92 => 'АИ-92',
-      CarManualFuelType.ai95 => 'АИ-95',
-      CarManualFuelType.ai98 => 'АИ-98',
-      CarManualFuelType.diesel => 'ДТ',
-      CarManualFuelType.dieselPlus => 'ДТ+',
-      CarManualFuelType.methane => 'Метан (КПГ)',
-      CarManualFuelType.propane => 'Пропан',
-      CarManualFuelType.lpg => 'Газ (ГБО)',
-    };
+    return out;
+  } catch (_) {
+    return [];
   }
 }
 
-/// Пресет «мелкого» расхода (альтернатива свободному названию).
-class CarConsumablePreset {
-  const CarConsumablePreset({required this.id, required this.titleRu, required this.titleEn});
-  final String id;
-  final String titleRu;
-  final String titleEn;
-
-  String title(AppL10n l10n) => l10n.isEn ? titleEn : titleRu;
-}
-
-const kCarConsumablePresets = <CarConsumablePreset>[
-  CarConsumablePreset(
-    id: 'wiper',
-    titleRu: 'Щётки стеклоочистителя',
-    titleEn: 'Wiper blades',
-  ),
-  CarConsumablePreset(
-    id: 'lamps',
-    titleRu: 'Автолампы / освещение',
-    titleEn: 'Bulbs / lighting',
-  ),
-  CarConsumablePreset(
-    id: 'washer',
-    titleRu: 'Омыватель / незамерзайка',
-    titleEn: 'Washer fluid',
-  ),
-  CarConsumablePreset(
-    id: 'tires_repair',
-    titleRu: 'Ремонт / подкачка шин',
-    titleEn: 'Tire repair / inflation',
-  ),
-  CarConsumablePreset(
-    id: 'cosmetic',
-    titleRu: 'Автохимия, салон',
-    titleEn: 'Detailing / cabin care',
-  ),
-];
-
-/// Ручная запись: заправка или иной расход.
-enum CarManualExpenseKind { fuel, consumablePreset, custom }
-
-class CarManualExpenseRecord {
-  const CarManualExpenseRecord({
-    required this.id,
-    required this.carId,
-    required this.date,
-    required this.priceKopecks,
-    required this.kind,
-    this.fuelType,
-    this.liters,
-    this.pricePerLiterKopecks,
-    this.odometerKm,
-    this.presetId,
-    this.customTitle,
-    this.note,
-    this.expenseGroupId,
-    this.expenseSubId,
-    this.materialPriceKopecks,
-    this.laborPriceKopecks,
-  });
-
-  final String id;
-  final String carId;
-  final DateTime date;
-  final int priceKopecks;
-  final CarManualExpenseKind kind;
-  final CarManualFuelType? fuelType;
-  final double? liters;
-  /// Копейки за литр (удобно для отображения и обратной синхронизации в форме).
-  final int? pricePerLiterKopecks;
-  final int? odometerKm;
-  final String? presetId;
-  final String? customTitle;
-  final String? note;
-  /// [CarExpenseGroupIds] — для не-топлива; у старых записей null (выводится эвристика).
-  final String? expenseGroupId;
-  final String? expenseSubId;
-  final int? materialPriceKopecks;
-  final int? laborPriceKopecks;
-
-  bool get isFuel => kind == CarManualExpenseKind.fuel;
-
-  static String? _inferGroupIdLegacy(CarManualExpenseRecord r) {
-    if (r.isFuel) return CarExpenseGroupIds.fuel;
-    if (r.kind == CarManualExpenseKind.consumablePreset) {
-      switch (r.presetId) {
-        case 'wiper':
-        case 'washer':
-        case 'cosmetic':
-          return CarExpenseGroupIds.cleanComfort;
-        case 'lamps':
-          return CarExpenseGroupIds.accessories;
-        case 'tires_repair':
-          return CarExpenseGroupIds.unplanned;
-        default:
-          return CarExpenseGroupIds.unplanned;
-      }
-    }
-    return CarExpenseGroupIds.unplanned;
-  }
-
-  /// Для аналитики: класс трат с учётом эвристики для старых записей.
-  String get resolvedExpenseGroupId {
-    if (isFuel) return CarExpenseGroupIds.fuel;
-    final g = expenseGroupId?.trim();
-    if (g != null && g.isNotEmpty) return g;
-    return _inferGroupIdLegacy(this)!;
-  }
-
-  String _nonFuelDetailTitle(AppL10n l10n) {
-    if (kind == CarManualExpenseKind.consumablePreset) {
-      for (final p in kCarConsumablePresets) {
-        if (p.id == presetId) return p.title(l10n);
-      }
-    }
-    return (customTitle ?? '').trim();
-  }
-
-  String groupLabelAppL10n(AppL10n l10n) {
-    if (isFuel) {
-      final ft = fuelType;
-      if (ft == null) {
-        return l10n.isEn ? 'Refuel' : 'Заправка';
-      }
-      return l10n.isEn
-          ? 'Refuel · ${ft.label(l10n)}'
-          : 'Заправка · ${ft.label(l10n)}';
-    }
-    final gid = (expenseGroupId != null && expenseGroupId!.trim().isNotEmpty)
-        ? expenseGroupId!.trim()
-        : resolvedExpenseGroupId;
-    final g = l10n.carExpenseClassGroupTitle(gid);
-    final sub = l10n.carExpenseClassSubTitle(expenseSubId);
-    final detail = _nonFuelDetailTitle(l10n);
-    if (sub != null && detail.isNotEmpty) return '$g · $sub · $detail';
-    if (sub != null) return '$g · $sub';
-    if (detail.isNotEmpty) {
-      if (gid == CarExpenseGroupIds.unplanned && (expenseGroupId == null || expenseGroupId!.trim().isEmpty)) {
-        return l10n.isEn ? 'Other: $detail' : 'Прочее: $detail';
-      }
-      return '$g · $detail';
-    }
-    return g;
-  }
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'carId': carId,
-        'date': date.toIso8601String(),
-        'priceKopecks': priceKopecks,
-        'kind': kind.name,
-        if (fuelType != null) 'fuelType': fuelType!.name,
-        if (liters != null) 'liters': liters,
-        if (pricePerLiterKopecks != null) 'pricePerLiterKopecks': pricePerLiterKopecks,
-        if (odometerKm != null) 'odometerKm': odometerKm,
-        if (presetId != null) 'presetId': presetId,
-        if (customTitle != null) 'customTitle': customTitle,
-        if (note != null && note!.isNotEmpty) 'note': note,
-        if (expenseGroupId != null && expenseGroupId!.trim().isNotEmpty) 'expenseGroupId': expenseGroupId,
-        if (expenseSubId != null && expenseSubId!.trim().isNotEmpty) 'expenseSubId': expenseSubId,
-        if (materialPriceKopecks != null) 'materialPriceKopecks': materialPriceKopecks,
-        if (laborPriceKopecks != null) 'laborPriceKopecks': laborPriceKopecks,
-      };
-
-  static CarManualExpenseRecord? fromJson(Map<String, dynamic> m) {
-    try {
-      final id = m['id'] as String?;
-      final carId = m['carId'] as String?;
-      if (id == null || id.isEmpty || carId == null || carId.isEmpty) return null;
-      final dateStr = m['date'] as String?;
-      final d = dateStr == null ? null : DateTime.tryParse(dateStr);
-      if (d == null) return null;
-      CarManualExpenseKind? k;
-      final kn = m['kind'] as String?;
-      if (kn != null) {
-        for (final v in CarManualExpenseKind.values) {
-          if (v.name == kn) {
-            k = v;
-            break;
-          }
-        }
-      }
-      if (k == null) return null;
-      final price = m['priceKopecks'] as int? ?? 0;
-      if (price <= 0) return null;
-      CarManualFuelType? ft;
-      final ftn = m['fuelType'] as String?;
-      if (ftn != null) {
-        for (final t in CarManualFuelType.values) {
-          if (t.name == ftn) {
-            ft = t;
-            break;
-          }
-        }
-      }
-      return CarManualExpenseRecord(
-        id: id,
-        carId: carId,
-        date: d,
-        priceKopecks: price,
-        kind: k,
-        fuelType: ft,
-        liters: (m['liters'] as num?)?.toDouble(),
-        pricePerLiterKopecks: (m['pricePerLiterKopecks'] as num?)?.toInt(),
-        odometerKm: m['odometerKm'] as int?,
-        presetId: m['presetId'] as String?,
-        customTitle: m['customTitle'] as String?,
-        note: m['note'] as String?,
-        expenseGroupId: m['expenseGroupId'] as String?,
-        expenseSubId: m['expenseSubId'] as String?,
-        materialPriceKopecks: (m['materialPriceKopecks'] as num?)?.toInt(),
-        laborPriceKopecks: (m['laborPriceKopecks'] as num?)?.toInt(),
-      );
-    } catch (_) {
-      return null;
-    }
-  }
-}
-
-/// Сводка по заправкам: расход и цена пути по интервалам (между записями с одометром).
-class CarFuelRefuelStats {
-  CarFuelRefuelStats({required this.intervals, this.medianKopecksPerKm});
-
-  /// (от предыдущей к следующей) расход л/100км и коп/км, если оба одометра и литры > 0.
-  final List<({CarManualExpenseRecord a, CarManualExpenseRecord b, double? lPer100, int? kopecksPerKm})> intervals;
-  final int? medianKopecksPerKm;
-}
-
-List<CarManualExpenseRecord> _filterFuelByCar(
-  List<CarManualExpenseRecord> all,
-  String carId, {
-  DateTime? fromInclusive,
+List<CarManualExpenseRecord> _mergeCarServerItems({
+  required List<CarManualExpenseRecord> fullLocal,
+  required String carId,
+  required List<Map<String, dynamic>> serverItems,
 }) {
-  var out = all.where((e) => e.carId == carId && e.isFuel).toList();
-  if (fromInclusive != null) {
-    out = out.where((e) => !e.date.isBefore(fromInclusive)).toList();
+  final otherCars = fullLocal.where((e) => e.carId != carId).toList();
+  final forCar = fullLocal.where((e) => e.carId == carId).toList();
+  final byKey = <String, CarManualExpenseRecord>{
+    for (final l in forCar) l.effectiveClientRecordId: l,
+  };
+  for (final raw in serverItems) {
+    final p = CarManualExpenseRecord.fromServerItemMap(
+      raw,
+      fallbackCarId: carId,
+    );
+    if (p == null || p.carId != carId) continue;
+    final k = p.effectiveClientRecordId;
+    byKey[k] = p;
   }
-  out.sort((a, b) {
-    final ao = a.odometerKm;
-    final bo = b.odometerKm;
-    if (ao != null && bo != null && ao != bo) return ao.compareTo(bo);
-    return a.date.compareTo(b.date);
-  });
-  return out;
+  return [...otherCars, ...byKey.values];
 }
 
-/// Рассчитать эвристику расхода: между соседними записями с [odometer], км = b.odometer - a.odometer,
-/// условно объём b.liters как израсходовано за интервал.
-CarFuelRefuelStats? computeCarFuelRefuelStats(
-  List<CarManualExpenseRecord> all,
-  String carId, {
-  DateTime? fromInclusive,
-}) {
-  final list = _filterFuelByCar(all, carId, fromInclusive: fromInclusive);
-  if (list.length < 2) return null;
-  final intervals = <({CarManualExpenseRecord a, CarManualExpenseRecord b, double? lPer100, int? kopecksPerKm})>[];
-  for (var i = 0; i < list.length; i++) {
-    final a = i == 0 ? null : list[i - 1];
-    final b = list[i];
-    if (a == null) continue;
-    final oa = a.odometerKm;
-    final ob = b.odometerKm;
-    if (oa == null || ob == null || ob <= oa) continue;
-    final km = ob - oa;
-    if (km < 1) continue;
-    final l = b.liters;
-    if (l == null || l <= 0) continue;
-    final l100 = l / km * 100.0;
-    int? kpk;
-    final pay = b.priceKopecks;
-    if (pay > 0) {
-      kpk = (pay / km).round();
-    }
-    intervals.add((a: a, b: b, lPer100: l100, kopecksPerKm: kpk));
-  }
-  if (intervals.isEmpty) return null;
-  int? medKpk;
-  final kpkList = intervals.map((e) => e.kopecksPerKm).whereType<int>().toList()..sort();
-  if (kpkList.isNotEmpty) {
-    medKpk = kpkList[kpkList.length ~/ 2];
-  }
-  return CarFuelRefuelStats(intervals: intervals, medianKopecksPerKm: medKpk);
-}
+final carManualExpensesSyncServiceProvider =
+    Provider<CarManualExpensesSyncService>(
+      (ref) => CarManualExpensesSyncService(ref.watch(apiClientProvider)),
+    );
 
 final carManualExpensesProvider =
-    StateNotifierProvider<CarManualExpensesNotifier, List<CarManualExpenseRecord>>((ref) {
-  final prefs = ref.watch(sharedPreferencesProvider).valueOrNull;
-  final userId = ref.watch(authProvider).user?.id;
-  return CarManualExpensesNotifier(prefs, userId);
-});
+    StateNotifierProvider<
+      CarManualExpensesNotifier,
+      List<CarManualExpenseRecord>
+    >((ref) {
+      ref.watch(sharedPreferencesProvider);
+      ref.watch(authProvider);
+      return CarManualExpensesNotifier(ref);
+    });
 
-class CarManualExpensesNotifier extends StateNotifier<List<CarManualExpenseRecord>> {
-  CarManualExpensesNotifier(this._prefs, this._userId) : super(_load(_prefs, _userId));
+class CarManualExpensesNotifier
+    extends StateNotifier<List<CarManualExpenseRecord>> {
+  CarManualExpensesNotifier(this._ref)
+    : super(
+        _loadPrefsState(
+          _ref.read(sharedPreferencesProvider).valueOrNull,
+          _ref.read(authProvider).user?.id,
+        ),
+      ) {
+    Future.microtask(() async {
+      await _applyMigratedV1IfNeeded();
+      await syncAllUserCars();
+    });
+  }
 
-  final SharedPreferences? _prefs;
-  final String? _userId;
+  final Ref _ref;
 
-  String get _key => _kCarManualExpensesPrefix + (_userId ?? '');
+  SharedPreferences? get _prefs =>
+      _ref.read(sharedPreferencesProvider).valueOrNull;
+  String? get _userId => _ref.read(authProvider).user?.id;
 
-  static List<CarManualExpenseRecord> _load(SharedPreferences? prefs, String? userId) {
-    if (prefs == null || userId == null) return [];
-    try {
-      final raw = prefs.getString(_kCarManualExpensesPrefix + userId);
-      if (raw == null || raw.isEmpty) return [];
-      final list = jsonDecode(raw) as List<dynamic>?;
-      final out = <CarManualExpenseRecord>[];
-      for (final e in list ?? const []) {
-        if (e is! Map) continue;
-        final r = CarManualExpenseRecord.fromJson(Map<String, dynamic>.from(e));
-        if (r != null) out.add(r);
-      }
-      return out;
-    } catch (_) {
-      return [];
+  String get _storageKey => _kCarManualExpensesPrefix + (_userId ?? '');
+
+  final Map<String, DateTime> _lastSyncByCar = {};
+
+  void _reloadFromPrefs() {
+    final p = _prefs;
+    final uid = _userId;
+    state = _loadPrefsState(p, uid);
+  }
+
+  Future<void> _applyMigratedV1IfNeeded() async {
+    final p = _prefs;
+    final uid = _userId;
+    if (p == null || uid == null) return;
+    final flagKey = _kMigratedV1Prefix + uid;
+    if (p.getBool(flagKey) == true) return;
+    final next = <CarManualExpenseRecord>[
+      for (final r in state)
+        if (r.syncStatus == null && (r.serverId == null || r.serverId!.isEmpty))
+          r.copyWith(
+            clientRecordId: r.clientRecordId ?? r.id,
+            syncStatus: CarManualExpenseSyncStatus.pendingCreate,
+            localUpdatedAt: r.localUpdatedAt ?? r.date,
+            lastSyncError: null,
+          )
+        else
+          r,
+    ];
+    state = next;
+    await _save();
+    await p.setBool(flagKey, true);
+  }
+
+  CarManualExpenseRecord? _findByStableId(String id) {
+    for (final e in state) {
+      if (e.id == id) return e;
+      if (e.effectiveClientRecordId == id) return e;
     }
+    return null;
+  }
+
+  bool _sameManualRecord(CarManualExpenseRecord a, CarManualExpenseRecord b) {
+    if (a.id == b.id) return true;
+    return a.carId == b.carId &&
+        a.effectiveClientRecordId == b.effectiveClientRecordId;
   }
 
   Future<void> _save() async {
     final p = _prefs;
-    if (p == null || _userId == null) return;
-    await p.setString(_key, jsonEncode(state.map((e) => e.toJson()).toList()));
+    final uid = _userId;
+    if (p == null || uid == null) return;
+    await p.setString(
+      _storageKey,
+      jsonEncode(state.map((e) => e.toJson()).toList()),
+    );
+  }
+
+  Future<void> loadFromPrefs() async {
+    _reloadFromPrefs();
   }
 
   void add(CarManualExpenseRecord r) {
-    state = [...state, r];
-    _save();
+    final now = DateTime.now();
+    final withMeta = r.copyWith(
+      syncStatus: CarManualExpenseSyncStatus.pendingCreate,
+      localUpdatedAt: now,
+      lastSyncError: null,
+    );
+    state = [...state, withMeta];
+    unawaited(_save());
+    _scheduleSync();
   }
 
-  void remove(String id) {
-    state = state.where((e) => e.id != id).toList();
-    _save();
+  void update(CarManualExpenseRecord r) {
+    final prev = _findByStableId(r.id);
+    final now = DateTime.now();
+    final CarManualExpenseSyncStatus nextStatus;
+    if (prev?.syncStatus == CarManualExpenseSyncStatus.pendingCreate) {
+      nextStatus = CarManualExpenseSyncStatus.pendingCreate;
+    } else if (prev?.serverId == null || prev!.serverId!.isEmpty) {
+      nextStatus = CarManualExpenseSyncStatus.pendingCreate;
+    } else {
+      nextStatus = CarManualExpenseSyncStatus.pendingUpdate;
+    }
+    final merged = r.copyWith(
+      syncStatus: nextStatus,
+      localUpdatedAt: now,
+      lastSyncError: null,
+    );
+    state = [
+      for (final e in state)
+        if (_sameManualRecord(e, r)) merged else e,
+    ];
+    unawaited(_save());
+    _scheduleSync();
   }
+
+  void deleteRecord(String id) {
+    final prev = _findByStableId(id);
+    if (prev == null) return;
+    final hasNeverSynced = prev.serverId == null || prev.serverId!.isEmpty;
+    final isLocalOnly =
+        hasNeverSynced &&
+        (prev.syncStatus == CarManualExpenseSyncStatus.pendingCreate ||
+            prev.syncStatus == CarManualExpenseSyncStatus.failed);
+    if (isLocalOnly) {
+      state = state.where((e) => e.id != prev.id).toList();
+    } else {
+      final now = DateTime.now();
+      state = [
+        for (final e in state)
+          if (e.id == prev.id)
+            e.copyWith(
+              syncStatus: CarManualExpenseSyncStatus.pendingDelete,
+              deletedAt: now,
+              localUpdatedAt: now,
+              lastSyncError: null,
+            )
+          else
+            e,
+      ];
+    }
+    unawaited(_save());
+    _scheduleSync();
+  }
+
+  void remove(String id) => deleteRecord(id);
 
   void removeAllDataForCar(String carId) {
     if (carId.isEmpty) return;
     state = state.where((e) => e.carId != carId).toList();
-    _save();
+    unawaited(_save());
+  }
+
+  void _scheduleSync() {
+    unawaited(
+      Future(() async {
+        try {
+          await syncAllUserCars();
+        } catch (_) {}
+      }),
+    );
+  }
+
+  DateTime? _readLastPull(String carId) {
+    final p = _prefs;
+    final uid = _userId;
+    if (p == null || uid == null) return null;
+    final raw = p.getString(_lastPullKey(uid, carId));
+    if (raw == null || raw.isEmpty) return null;
+    return DateTime.tryParse(raw);
+  }
+
+  Future<void> _writeLastPull(String carId, DateTime t) async {
+    final p = _prefs;
+    final uid = _userId;
+    if (p == null || uid == null) return;
+    await p.setString(_lastPullKey(uid, carId), t.toUtc().toIso8601String());
+  }
+
+  Future<void> syncForCar(String carId, {bool bypassThrottle = false}) async {
+    final uid = _userId;
+    if (uid == null || uid.isEmpty || carId.isEmpty) return;
+    if (!_ref.read(authProvider).isAuthenticated) return;
+    final tick = DateTime.now();
+    if (!bypassThrottle) {
+      final prev = _lastSyncByCar[carId];
+      if (prev != null &&
+          tick.difference(prev) < const Duration(milliseconds: 800)) {
+        return;
+      }
+    }
+    _lastSyncByCar[carId] = tick;
+    try {
+      final svc = _ref.read(carManualExpensesSyncServiceProvider);
+      final p = _prefs;
+      final deviceId = p != null ? await getOrCreateDeviceId(p) : null;
+      final last = _readLastPull(carId);
+      final res = await svc.syncCar(
+        carId: carId,
+        localRecords: state.where((e) => e.carId == carId).toList(),
+        lastPulledAt: last,
+        deviceId: deviceId,
+      );
+      state = _mergeCarServerItems(
+        fullLocal: state,
+        carId: carId,
+        serverItems: res.items,
+      );
+      await _writeLastPull(carId, res.serverTime ?? DateTime.now());
+      await _save();
+    } on ApiException catch (e) {
+      _markCarFailed(carId, e.message);
+    } catch (_) {
+      _markCarFailed(carId, 'network');
+    }
+  }
+
+  void _markCarFailed(String carId, String message) {
+    state = [
+      for (final e in state)
+        if (e.carId == carId &&
+            e.isDirtyForSync &&
+            e.syncStatus != CarManualExpenseSyncStatus.pendingDelete)
+          e.copyWith(
+            syncStatus: CarManualExpenseSyncStatus.failed,
+            lastSyncError: message,
+          )
+        else
+          e,
+    ];
+    unawaited(_save());
+  }
+
+  Future<void> syncAllUserCars() async {
+    final uid = _userId;
+    if (uid == null || uid.isEmpty) return;
+    if (!_ref.read(authProvider).isAuthenticated) return;
+    final ids = <String>{for (final r in state) r.carId};
+    for (final id in ids) {
+      await syncForCar(id);
+    }
+  }
+
+  /// Синхронизация по всем авто из гаража (в т.ч. без локальных расходов) + уже известные записи.
+  Future<void> syncGarageAndManual(List<String> garageCarIds) async {
+    final uid = _userId;
+    if (uid == null || uid.isEmpty) return;
+    if (!_ref.read(authProvider).isAuthenticated) return;
+    final ids = <String>{
+      ...garageCarIds.where((id) => id.isNotEmpty),
+      for (final r in state) r.carId,
+    };
+    for (final id in ids) {
+      await syncForCar(id, bypassThrottle: true);
+    }
   }
 }
-
